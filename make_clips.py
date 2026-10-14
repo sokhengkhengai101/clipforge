@@ -17,6 +17,8 @@ from pipeline.boundaries import clip_text, snap_boundaries
 from pipeline.captions import CaptionError, build_all_captions, resolve_font
 from pipeline.highlights import HighlightsError, find_highlights, load_clips, save_clips
 from pipeline.llm import LLMError
+from pipeline.render import (RenderError, compute_crop, probe_dimensions,
+                             render_all, verify_clip)
 from pipeline.transcribe import TranscribeError, load_transcript, transcribe
 
 config.enable_utf8_output()  # ត្រូវហៅមុន Console() ដើម្បីឲ្យ rich ចាំ encoding ត្រឹមត្រូវ
@@ -85,20 +87,21 @@ def main(
                                       help="override Whisper model (tiny/base/small/medium/large-v3)"),
     force: bool = typer.Option(False, "--force", help="ធ្វើថ្មីទាំងអស់ (ដូច --redo all)"),
     redo: str = typer.Option("", "--redo",
-                             help="ជំហានដែលត្រូវធ្វើថ្មី: audio, transcribe, highlights, all"),
+                             help="ជំហានដែលត្រូវធ្វើថ្មី: audio, transcribe, highlights, render, all"),
 ) -> None:
     # --redo ដាច់ជំហាន ដើម្បីកុំឲ្យការកែ prompt បង្ខំ transcribe ៨ នាទីឡើងវិញ
     steps_to_redo = {name.strip().lower() for name in redo.split(",") if name.strip()}
     if force or "all" in steps_to_redo:
-        steps_to_redo = {"audio", "transcribe", "highlights"}
-    unknown = steps_to_redo - {"audio", "transcribe", "highlights"}
+        steps_to_redo = {"audio", "transcribe", "highlights", "render"}
+    unknown = steps_to_redo - {"audio", "transcribe", "highlights", "render"}
     if unknown:
         console.print(f"[red]--redo មិនស្គាល់: {', '.join(sorted(unknown))}[/red] "
-                      f"(ប្រើ audio, transcribe, highlights ឬ all)")
+                      f"(ប្រើ audio, transcribe, highlights, render ឬ all)")
         raise typer.Exit(code=2)
     redo_audio = "audio" in steps_to_redo
     redo_transcribe = "transcribe" in steps_to_redo
     redo_highlights = "highlights" in steps_to_redo
+    redo_render = "render" in steps_to_redo
 
     device, default_whisper, compute = config.detect_device()
     whisper_model = whisper_model or default_whisper
@@ -234,12 +237,40 @@ def main(
         console.print(f"[red]✘ 5/6 captions បរាជ័យ:[/red] {e}")
         raise typer.Exit(code=1)
 
-    # ---------- Step 6: មិនទាន់សរសេរ ----------
+    # ---------- Step 6: render ----------
     console.print("")
-    for i, (name, desc) in enumerate(STEPS[5:], start=6):
-        console.print(f"[dim]  {i}/6 {name:<11} {desc}[/dim]")
+    try:
+        source_size = probe_dimensions(video)
+        crop = compute_crop(*source_size)
+        console.print(f"[dim]  crop {source_size[0]}x{source_size[1]} -> "
+                      f"{crop[0]}x{crop[1]} (កណ្តាល) -> scale "
+                      f"{config.OUT_WIDTH}x{config.OUT_HEIGHT}[/dim]")
 
-    console.print("\n[yellow]ជំហានបន្ទាប់: pipeline/render.py[/yellow]\n")
+        rendered: list[Path] = []
+        with Progress(*progress_columns("6/6 render"), console=console) as progress:
+            task = progress.add_task("render", total=len(final))
+
+            def tick(index: int, total: int, clip) -> None:
+                progress.update(task, completed=index - 1, total=total,
+                                description=clip.title)
+
+            rendered = render_all(video, final, out_dir / "clips", ass_files,
+                                  force=redo_render, on_progress=tick)
+            progress.update(task, completed=len(final))
+
+        console.print(f"[green]✔ 6/6 render[/green]      {len(rendered)} MP4 ក្នុង "
+                      f"{short_path(out_dir / 'clips')}")
+        for index, (path, clip) in enumerate(zip(rendered, final), start=1):
+            actual = verify_clip(path, clip)      # ចាប់ trim ខុសដោយស្ងាត់
+            size_mb = path.stat().st_size / 1_000_000
+            console.print(f"[dim]  {index}. {path.name}  {actual:.1f}s  "
+                          f"{size_mb:.1f} MB  — {clip.title}[/dim]")
+    except (RenderError, FFmpegError, FileNotFoundError) as e:
+        console.print(f"[red]✘ 6/6 render បរាជ័យ:[/red] {e}")
+        raise typer.Exit(code=1)
+
+    console.print(f"\n[bold green]រួចរាល់![/bold green] clip {len(rendered)} "
+                  f"នៅក្នុង {short_path(out_dir / 'clips')}\n")
 
 
 if __name__ == "__main__":

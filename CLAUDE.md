@@ -24,6 +24,18 @@ Pipeline (one module per step, in `pipeline/`):
 5. `captions.py` — build `.ass` subtitle file per clip (≤ 2 lines, ≤ 32 chars/line, keyword highlight in #FFD23F)
 6. `render.py` — FFmpeg: trim → center-crop 9:16 → scale 1080×1920 → burn ASS → H.264 MP4
 
+All six steps are implemented and run end to end. Measured on a 35-min 640×360 podcast:
+audio 6 s, transcribe 8 min (GPU), highlights 8 min 33 s (7b), boundaries and captions under a
+second, render 39 s for five clips. Re-running with every cache warm takes about 40 s.
+
+Known limits to judge clips against:
+- Center-crop assumes a talking head. On screen-share footage it cuts the slide in half, and a
+  640×360 source upscaled to 1080×1920 is visibly soft. Use a 1080p source for clips worth posting.
+- `--redo <step>` re-runs one step (audio, transcribe, highlights, render, or all); `--force` is
+  the same as `--redo all`.
+- `.ass` and `.mp4` for a clip must share a folder: render runs FFmpeg with `cwd` set to that
+  folder so the `ass=` filter never sees a Windows path (`:` and `\` are filtergraph syntax).
+
 Out of scope for Phase 0: face tracking, diarization, Khmer translation, UI, batch.
 
 ## Tech choices

@@ -17,7 +17,7 @@ class FFmpegError(RuntimeError):
     """FFmpeg បរាជ័យ — យើងបង្កើត error ប្រភេទខ្លួនឯង ដើម្បីចាប់វាបានដោយឡែក."""
 
 
-def _require_ffmpeg(exe: str = "ffmpeg") -> str:
+def require_ffmpeg(exe: str = "ffmpeg") -> str:
     """ពិនិត្យថា ffmpeg/ffprobe នៅក្នុង PATH មុននឹងហៅ — error ច្បាស់ជាង crash."""
     path = shutil.which(exe)
     if not path:
@@ -40,7 +40,7 @@ def probe_duration(media_path: Path) -> float:
 
     ជំហានខាងមុខ (chunking, boundaries) ត្រូវដឹងរយៈពេលសរុប។
     """
-    _require_ffmpeg("ffprobe")
+    require_ffmpeg("ffprobe")
     cmd = [
         "ffprobe", "-v", "error",
         "-show_entries", "format=duration",
@@ -58,7 +58,7 @@ def probe_duration(media_path: Path) -> float:
 
 def has_audio_stream(media_path: Path) -> bool:
     """ពិនិត្យថា file មាន audio track ឬអត់ (video គ្មានសំឡេងក៏មានដែរ)."""
-    _require_ffmpeg("ffprobe")
+    require_ffmpeg("ffprobe")
     cmd = [
         "ffprobe", "-v", "error",
         "-select_streams", "a",            # a = audio streams តែប៉ុណ្ណោះ
@@ -103,7 +103,7 @@ def extract_audio(
     # mkdir ទុកក្រោយការពិនិត្យ — បើបរាជ័យ យើងកុំទុក folder ទទេនៅក្នុង output/
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    _require_ffmpeg("ffmpeg")
+    require_ffmpeg("ffmpeg")
     cmd = [
         "ffmpeg",
         "-hide_banner", "-loglevel", "error",
