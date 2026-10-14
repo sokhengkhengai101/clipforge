@@ -13,7 +13,8 @@ from rich.table import Table
 
 import config
 from pipeline.audio import FFmpegError, extract_audio, probe_duration
-from pipeline.highlights import HighlightsError, find_highlights, load_clips
+from pipeline.boundaries import clip_text, snap_boundaries
+from pipeline.highlights import HighlightsError, find_highlights, load_clips, save_clips
 from pipeline.llm import LLMError
 from pipeline.transcribe import TranscribeError, load_transcript, transcribe
 
@@ -192,12 +193,33 @@ def main(
         console.print(f"[red]✘ 3/6 highlights បរាជ័យ:[/red] {e}")
         raise typer.Exit(code=1)
 
-    # ---------- Steps 4-6: មិនទាន់សរសេរ ----------
+    # ---------- Step 4: boundaries ----------
+    # គណនាថោក (គ្មាន LLM) -> ធ្វើថ្មីរាល់ពេល, មិនត្រូវ cache
+    snap_warnings: list[str] = []
+    before = {c.title: c.start for c in clips}
+    final = snap_boundaries(clips, transcript, on_warning=snap_warnings.append)
+    clips_file = save_clips(final, out_dir / "clips.json", model=model,
+                            prompt=config.HIGHLIGHT_PROMPT)
+
+    console.print(f"[green]✔ 4/6 boundaries[/green]  {short_path(clips_file)}  "
+                  f"({len(final)} clips)")
+    for warning in snap_warnings:
+        console.print(f"[dim]    - {warning}[/dim]")
+    if final:
+        moved = sum(1 for c in final if abs(c.start - before.get(c.title, c.start)) > 0.5)
+        console.print(f"[dim]  start ត្រូវរុញ {moved}/{len(final)} clip "
+                      f"(snap ទៅព្រំដែនប្រយោគ + padding {config.PADDING_SEC}s)[/dim]")
+        console.print(clips_table(final))
+        console.print("")
+        for i, clip in enumerate(final, start=1):
+            console.print(f"[dim]  #{i} “{clip_text(clip, transcript)[:100]}...”[/dim]")
+
+    # ---------- Steps 5-6: មិនទាន់សរសេរ ----------
     console.print("")
-    for i, (name, desc) in enumerate(STEPS[3:], start=4):
+    for i, (name, desc) in enumerate(STEPS[4:], start=5):
         console.print(f"[dim]  {i}/6 {name:<11} {desc}[/dim]")
 
-    console.print("\n[yellow]ជំហានបន្ទាប់: pipeline/boundaries.py[/yellow]\n")
+    console.print("\n[yellow]ជំហានបន្ទាប់: pipeline/captions.py[/yellow]\n")
 
 
 if __name__ == "__main__":
