@@ -14,6 +14,7 @@ from rich.table import Table
 import config
 from pipeline.audio import FFmpegError, extract_audio, probe_duration
 from pipeline.boundaries import clip_text, snap_boundaries
+from pipeline.captions import CaptionError, build_all_captions, resolve_font
 from pipeline.highlights import HighlightsError, find_highlights, load_clips, save_clips
 from pipeline.llm import LLMError
 from pipeline.transcribe import TranscribeError, load_transcript, transcribe
@@ -214,12 +215,31 @@ def main(
         for i, clip in enumerate(final, start=1):
             console.print(f"[dim]  #{i} “{clip_text(clip, transcript)[:100]}...”[/dim]")
 
-    # ---------- Steps 5-6: មិនទាន់សរសេរ ----------
+    # ---------- Step 5: captions ----------
     console.print("")
-    for i, (name, desc) in enumerate(STEPS[4:], start=5):
+    caption_font, font_is_wanted = resolve_font()
+    if not font_is_wanted:
+        console.print(f"[yellow]⚠ font '{config.CAPTION_FONT}' គ្មានលើម៉ាស៊ីន[/yellow] "
+                      f"-> ប្រើ '{caption_font}' ជំនួស")
+    try:
+        ass_files = build_all_captions(final, transcript, out_dir / "clips", font=caption_font)
+        cue_count = sum(
+            1 for path in ass_files
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.startswith("Dialogue:")
+        )
+        console.print(f"[green]✔ 5/6 captions[/green]    {len(ass_files)} .ass ក្នុង "
+                      f"{short_path(out_dir / 'clips')}  ({cue_count} cues, font={caption_font})")
+    except CaptionError as e:
+        console.print(f"[red]✘ 5/6 captions បរាជ័យ:[/red] {e}")
+        raise typer.Exit(code=1)
+
+    # ---------- Step 6: មិនទាន់សរសេរ ----------
+    console.print("")
+    for i, (name, desc) in enumerate(STEPS[5:], start=6):
         console.print(f"[dim]  {i}/6 {name:<11} {desc}[/dim]")
 
-    console.print("\n[yellow]ជំហានបន្ទាប់: pipeline/captions.py[/yellow]\n")
+    console.print("\n[yellow]ជំហានបន្ទាប់: pipeline/render.py[/yellow]\n")
 
 
 if __name__ == "__main__":

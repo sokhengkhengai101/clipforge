@@ -1,5 +1,320 @@
-"""ជំហាន 5 — build .ass subtitle file ក្នុងមួយ clip.
+"""ជំហាន 5 — build `.ass` subtitle file ក្នុងមួយ clip.
 
-<= 2 lines, <= 32 chars/line, keyword highlight #FFD23F.
-TODO: build_ass(clip, words, out_path) -> Path
+**`.ass` (Advanced SubStation Alpha) ជាអ្វី?** វាជា format subtitle ដែលគ្រប់គ្រងពណ៌,
+font, ទីតាំង និងឥទ្ធិពលបាន (ខុសពី `.srt` ដែលមានតែអត្ថបទ)។ FFmpeg + libass អាច
+**burn** វាចូល video ដោយផ្ទាល់។
+
+ចំណុចប្រុងប្រយ័ត្ន ៣ ក្នុង format នេះ៖
+  1. **ពណ៌ជា BGR មិនមែន RGB** ហើយសរសេរបញ្ច្រាស: `#FFD23F` -> `&H003FD2FF`
+  2. **ពេលវេលាត្រូវរាប់ពីដើម clip** មិនមែនពីដើម video ដើមទេ (ព្រោះ render កាត់ clip ចេញ)
+  3. ការបំបែកបន្ទាត់ប្រើ `\\N` (N ធំ) មិនមែន newline ពិត
 """
+
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import config
+from pipeline.highlights import Clip
+from pipeline.transcribe import Transcript, Word
+
+# folder ដែល Windows ដាក់ font
+WINDOWS_FONT_DIRS = (
+    Path("C:/Windows/Fonts"),
+    Path.home() / "AppData/Local/Microsoft/Windows/Fonts",
+)
+
+# ពាក្យទូទៅដែលមិនគួរបំលេច (highlight) — គ្មានអត្ថន័យជាក់លាក់
+STOPWORDS = {
+    "the", "and", "that", "this", "with", "have", "has", "had", "for", "you", "your",
+    "are", "was", "were", "but", "not", "they", "them", "then", "than", "what", "when",
+    "will", "would", "could", "should", "from", "there", "their", "here", "about",
+    "just", "like", "know", "think", "really", "going", "gonna", "want", "said", "says",
+    "because", "been", "being", "does", "doing", "done", "some", "much", "more", "most",
+    "very", "also", "into", "over", "only", "even", "other", "which", "while", "where",
+    "thing", "things", "something", "anything", "everything", "actually", "basically",
+}
+
+
+class CaptionError(RuntimeError):
+    """សាងសង់ caption មិនបាន."""
+
+
+@dataclass
+class Cue:
+    """អត្ថបទមួយដែលលេចឡើងម្តង (≤ 2 បន្ទាត់)."""
+
+    start: float          # វិនាទីពីដើម clip
+    end: float
+    lines: list[list[Word]] = field(default_factory=list)
+
+    def text(self) -> str:
+        return " ".join(w.word.strip() for line in self.lines for w in line)
+
+
+# ---------- helper តូចៗ ----------
+
+def ass_color(hex_color: str, alpha: int = 0) -> str:
+    """`#FFD23F` -> `&H003FD2FF` (ASS ប្រើ BGR បញ្ច្រាស + alpha ខាងដើម).
+
+    ឧទាហរណ៍: R=FF G=D2 B=3F  ->  &H00 3F D2 FF
+                                      B  G  R
+    """
+    value = hex_color.lstrip("#")
+    if len(value) != 6:
+        raise CaptionError(f"ពណ៌ត្រូវជា #RRGGBB, ទទួលបាន {hex_color!r}")
+    red, green, blue = value[0:2], value[2:4], value[4:6]
+    return f"&H{alpha:02X}{blue}{green}{red}".upper()
+
+
+def ass_time(seconds: float) -> str:
+    """0.5 -> `0:00:00.50` ; 125.34 -> `0:02:05.34` (ASS ប្រើ centiseconds)."""
+    seconds = max(0.0, seconds)
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    whole_seconds = int(seconds % 60)
+    centiseconds = int(round((seconds - int(seconds)) * 100))
+    if centiseconds == 100:          # ជៀសវាង 1.999 -> .100
+        centiseconds = 99
+    return f"{hours}:{minutes:02d}:{whole_seconds:02d}.{centiseconds:02d}"
+
+
+def escape_ass_text(text: str) -> str:
+    """លុបតួអក្សរដែល ASS ប្រើជា syntax ចេញពីអត្ថបទធម្មតា."""
+    return text.replace("\\", "/").replace("{", "(").replace("}", ")").strip()
+
+
+def normalise_font_name(name: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", name.lower())
+
+
+def find_font_file(family: str) -> Path | None:
+    """រក file font តាមឈ្មោះ family (ឧ. "Montserrat ExtraBold").
+
+    libass ប្តូរទៅ font ផ្សេង **ដោយស្ងាត់ៗ** ពេលរកមិនឃើញ ដែលធ្វើឲ្យ caption មិនដូច
+    ការរចនាដោយយើងមិនដឹងខ្លួន។ ដូច្នេះយើងពិនិត្យខ្លួនឯង រួចព្រមាន។
+    """
+    wanted = normalise_font_name(family)
+    if not wanted:
+        return None
+    for folder in WINDOWS_FONT_DIRS:
+        if not folder.is_dir():
+            continue
+        for path in sorted(folder.glob("*.*")):
+            if path.suffix.lower() not in (".ttf", ".otf", ".ttc"):
+                continue
+            if wanted in normalise_font_name(path.stem):
+                return path
+    return None
+
+
+def resolve_font(family: str | None = None, fallbacks: tuple[str, ...] | None = None
+                 ) -> tuple[str, bool]:
+    """ត្រឡប់ (font ដែលត្រូវប្រើ, មែនទេជា font ដែលយើងចង់បាន).
+
+    បើ font ដែលចង់បានគ្មាន យើងព្យាយាម fallback បន្តបន្ទាប់។
+    """
+    family = family or config.CAPTION_FONT
+    fallbacks = fallbacks if fallbacks is not None else config.CAPTION_FONT_FALLBACKS
+
+    if find_font_file(family):
+        return family, True
+    for candidate in fallbacks:
+        if find_font_file(candidate):
+            return candidate, False
+    return family, False      # គ្មានអ្វីសោះ -> ទុកឈ្មោះដើម, libass នឹងជ្រើសខ្លួនឯង
+
+
+# ---------- បំបែកពាក្យទៅ cue ----------
+
+def words_in_clip(clip: Clip, transcript: Transcript) -> list[Word]:
+    """ពាក្យទាំងអស់ដែលនិយាយក្នុង clip នេះ (ពេលវេលានៅតែជារបស់ video ដើម)."""
+    return [
+        w for seg in transcript.segments for w in seg.words
+        if w.end > clip.start and w.start < clip.end
+    ]
+
+
+def wrap_into_cues(
+    words: list[Word],
+    clip_start: float,
+    max_chars: int | None = None,
+    max_lines: int | None = None,
+) -> list[Cue]:
+    """ចែកពាក្យទៅ cue ដែលសមនឹង ≤ max_lines បន្ទាត់ × ≤ max_chars តួ.
+
+    វិធីសាស្ត្រ: បន្ថែមពាក្យទៅបន្ទាត់បច្ចុប្បន្ន។ ពេញបន្ទាត់ -> បន្ទាត់ថ្មី។
+    ពេញ max_lines -> cue ថ្មី។ ពេលវេលាដកដោយ `clip_start` ព្រោះ video ដែល render
+    ចាប់ផ្តើមពី 0។
+    """
+    max_chars = max_chars or config.CAPTION_MAX_CHARS_PER_LINE
+    max_lines = max_lines or config.CAPTION_MAX_LINES
+
+    cues: list[Cue] = []
+    current_lines: list[list[Word]] = [[]]
+
+    def line_length(line: list[Word]) -> int:
+        texts = [w.word.strip() for w in line]
+        return sum(len(t) for t in texts) + max(0, len(texts) - 1)   # + ដកឃ្លា
+
+    def flush() -> None:
+        lines = [line for line in current_lines if line]
+        if not lines:
+            return
+        first_word = lines[0][0]
+        last_word = lines[-1][-1]
+        start = first_word.start - clip_start
+        end = last_word.end - clip_start
+        if end <= start:                 # ពាក្យ 0 វិនាទី (Whisper quirk) -> ឲ្យឃើញ 0.5s
+            end = start + 0.5
+        cues.append(Cue(start=max(0.0, start), end=end, lines=lines))
+
+    for word in words:
+        text = word.word.strip()
+        if not text:
+            continue
+        candidate = current_lines[-1] + [word]
+        if line_length(candidate) <= max_chars or not current_lines[-1]:
+            current_lines[-1].append(word)
+            continue
+        # បន្ទាត់ពេញ
+        if len(current_lines) < max_lines:
+            current_lines.append([word])
+        else:
+            flush()
+            current_lines = [[word]]
+
+    flush()
+
+    # cue មិនត្រូវត្រួតគ្នា (ធ្វើឲ្យ libass បង្ហាញពីរជាន់)
+    for earlier, later in zip(cues, cues[1:]):
+        if earlier.end > later.start:
+            earlier.end = later.start
+
+    return cues
+
+
+# ---------- keyword highlight ----------
+
+def pick_keywords(cue: Cue, max_keywords: int = 2, min_length: int = 5) -> set[str]:
+    """ជ្រើសពាក្យដែលគួរបំលេចជាពណ៌លឿងក្នុង cue នេះ.
+
+    ច្បាប់សាមញ្ញ និងអាចទាយទុកជាមុន: ពាក្យវែង (≥ 5 តួ) ដែលមិនមែន stopword,
+    យកពាក្យវែងបំផុត max_keywords ។ (Phase 1 អាចប្រើ LLM ជ្រើសឲ្យឆ្លាតជាង។)
+    """
+    candidates: list[str] = []
+    for line in cue.lines:
+        for word in line:
+            bare = re.sub(r"[^\w']", "", word.word.strip().lower())
+            if len(bare) >= min_length and bare not in STOPWORDS:
+                candidates.append(bare)
+
+    candidates.sort(key=len, reverse=True)
+    return set(candidates[:max_keywords])
+
+
+def cue_to_dialogue_text(cue: Cue, keywords: set[str], keyword_color: str) -> str:
+    """បម្លែង cue ទៅអត្ថបទ ASS មួយបន្ទាត់ (ប្រើ `\\N` បំបែកបន្ទាត់).
+
+    ពាក្យ keyword ត្រូវព័ទ្ធដោយ override tag:
+        {\\c&H003FD2FF&}skills{\\c&H00FFFFFF&}
+    `\\c` កំណត់ពណ៌អត្ថបទ; យើងត្រូវដាក់ពណ៌ដើមវិញក្រោយពាក្យនោះ។
+    """
+    normal = ass_color(config.CAPTION_TEXT_COLOR)
+    highlight = ass_color(keyword_color)
+
+    # បំលេចតែ **ដំណាក់ទីមួយ** នៃពាក្យនីមួយៗ។ បើមិនដូច្នោះ "skills, skills, skills"
+    # ក្លាយជាលឿងទាំងអស់ ហើយការបំលេចអស់អត្ថន័យ (bug ពិតដែលយើងបានឃើញ)។
+    remaining = set(keywords)
+
+    rendered_lines: list[str] = []
+    for line in cue.lines:
+        parts: list[str] = []
+        for word in line:
+            text = escape_ass_text(word.word.strip())
+            bare = re.sub(r"[^\w']", "", text.lower())
+            if bare in remaining:
+                remaining.discard(bare)
+                # ទម្រង់ត្រឹមត្រូវ: {\c&HBBGGRR&} — `&` បិទតម្លៃពណ៌
+                parts.append(f"{{\\c{highlight}&}}{text}{{\\c{normal}&}}")
+            else:
+                parts.append(text)
+        rendered_lines.append(" ".join(parts))
+
+    return "\\N".join(rendered_lines)
+
+
+# ---------- ASS file ----------
+
+def ass_header(font: str) -> str:
+    """ផ្នែកដើមនៃ `.ass`: resolution, style (font, ពណ៌, ទីតាំង)."""
+    primary = ass_color(config.CAPTION_TEXT_COLOR)
+    outline = ass_color(config.CAPTION_OUTLINE_COLOR)
+    # SecondaryColour មិនប្រើ តែ format តម្រូវឲ្យមាន
+    return "\n".join([
+        "[Script Info]",
+        "ScriptType: v4.00+",
+        f"PlayResX: {config.OUT_WIDTH}",
+        f"PlayResY: {config.OUT_HEIGHT}",
+        "WrapStyle: 2",          # 2 = កុំ wrap ដោយខ្លួនឯង, យើងគ្រប់គ្រងដោយ \\N
+        "ScaledBorderAndShadow: yes",
+        "",
+        "[V4+ Styles]",
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, "
+        "BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, "
+        "BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
+        (
+            f"Style: Default,{font},{config.CAPTION_FONT_SIZE},{primary},{primary},"
+            f"{outline},&H80000000,-1,0,0,0,100,100,0,0,1,"
+            f"{config.CAPTION_OUTLINE},{config.CAPTION_SHADOW},2,"
+            f"{config.CAPTION_MARGIN_X},{config.CAPTION_MARGIN_X},{config.CAPTION_MARGIN_V},1"
+        ),
+        "",
+        "[Events]",
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+    ])
+
+
+def build_ass(
+    clip: Clip,
+    transcript: Transcript,
+    out_path: Path,
+    *,
+    font: str | None = None,
+) -> Path:
+    """សរសេរ `.ass` សម្រាប់ clip មួយ. ត្រឡប់ path។"""
+    words = words_in_clip(clip, transcript)
+    if not words:
+        raise CaptionError(f"'{clip.title}' គ្មានពាក្យក្នុងចន្លោះ "
+                           f"{clip.start:.1f}-{clip.end:.1f}s")
+
+    cues = wrap_into_cues(words, clip.start)
+    chosen_font = font or resolve_font()[0]
+
+    lines = [ass_header(chosen_font)]
+    for cue in cues:
+        keywords = pick_keywords(cue)
+        text = cue_to_dialogue_text(cue, keywords, config.CAPTION_KEYWORD_COLOR)
+        lines.append(
+            f"Dialogue: 0,{ass_time(cue.start)},{ass_time(cue.end)},Default,,0,0,0,,{text}"
+        )
+
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return out_path
+
+
+def build_all_captions(
+    clips: list[Clip],
+    transcript: Transcript,
+    out_dir: Path,
+    *,
+    font: str | None = None,
+) -> list[Path]:
+    """សរសេរ `.ass` មួយក្នុងមួយ clip ទៅ `out_dir/clip_01.ass` ...។"""
+    out_dir = Path(out_dir)
+    paths: list[Path] = []
+    for index, clip in enumerate(clips, start=1):
+        paths.append(build_ass(clip, transcript, out_dir / f"clip_{index:02d}.ass", font=font))
+    return paths

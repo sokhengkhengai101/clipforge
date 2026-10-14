@@ -48,10 +48,22 @@ AUDIO_BITRATE = "128k"
 
 # ---------- Captions ----------
 CAPTION_FONT = "Montserrat ExtraBold"
+# បើ font ខាងលើគ្មានលើម៉ាស៊ីន -> សាកតាមលំដាប់នេះ (captions.resolve_font ព្រមានឲ្យដឹង)
+CAPTION_FONT_FALLBACKS = ("Inter Bold", "Arial Black", "Arial")
+# វាស់ពិតដោយ FFmpeg+libass (render frame រួចរាប់ pixel), Inter Bold, 32 តួ:
+#   40px -> 497px | 48px -> 596px | 56px -> 696px | 64px -> 795px
+# ទំនេរ = 1080 - 2×60 margin = 960px ដូច្នេះ 64px សម។ (Montserrat ExtraBold ធំជាង
+# Inter Bold ប្រហែល 10-15% -> ~900px, នៅតែសម។ វាស់ឡើងវិញក្រោយ install វា។)
 CAPTION_FONT_SIZE = 64
 CAPTION_MAX_LINES = 2
 CAPTION_MAX_CHARS_PER_LINE = 32
 CAPTION_KEYWORD_COLOR = "#FFD23F"   # លឿង — keyword highlight
+CAPTION_TEXT_COLOR = "#FFFFFF"      # ពណ៌អត្ថបទធម្មតា
+CAPTION_OUTLINE_COLOR = "#000000"   # គ្រោងខ្មៅ ឲ្យអានបានលើផ្ទាំងពណ៌ណាក៏បាន
+CAPTION_OUTLINE = 4                 # ប្រវែងគ្រោង (px)
+CAPTION_SHADOW = 1
+CAPTION_MARGIN_X = 60               # ចន្លោះឆ្វេង/ស្តាំ
+CAPTION_MARGIN_V = 420              # កម្ពស់ពីបាត (1920) -> caption នៅ lower third
 
 # ---------- Audio ----------
 AUDIO_SAMPLE_RATE = 16000  # Whisper ចូលចិត្ត 16 kHz mono
