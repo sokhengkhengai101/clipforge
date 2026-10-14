@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# virtualenv
+.venv/
+venv/
+
+# ClipForge outputs (never commit videos / audio / transcripts)
+# output/* = ignore ខាងក្នុងទាំងអស់, តែរក្សា .gitkeep ឲ្យ folder នៅតែមាន
+output/*
+!output/.gitkeep
+*.wav
+*.mp4
+*.mkv
+*.mov
+!tests/fixtures/*.mp4
+
+# Whisper / model caches
+models/
+.cache/
+
+# video ពិតរបស់ខ្ញុំសម្រាប់សាកល្បង (ធំពេកសម្រាប់ git)
+samples/
+
+# secrets
+.env
+
+# editors / OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini

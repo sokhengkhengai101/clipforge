@@ -1,0 +1,12 @@
+# GPU support លើ Windows (optional — install បន្ថែមលើ requirements.txt)
+#
+# ហេតុអ្វីត្រូវការ: CTranslate2 (engine របស់ faster-whisper) ត្រូវបាន build ជាមួយ CUDA 12
+# ដូច្នេះវាត្រូវការ `cublas64_12.dll` + `cudnn64_9.dll`។ ម៉ាស៊ីនដែលមាន CUDA 13 មិនមានឈ្មោះ
+# DLL នោះទេ។ Package ទាំងនេះដាក់ DLL នោះចូល .venv ហើយ `config.enable_cuda_dlls()`
+# ធ្វើឲ្យ CTranslate2 រកវាឃើញ។
+#
+# ទំហំ: ~1.4GB download, ~2.0GB លើ disk។ បើមិន install -> Whisper រត់លើ CPU ដោយស្វ័យប្រវត្តិ។
+# Install: pip install -r requirements-gpu.txt
+
+nvidia-cublas-cu12>=12.9
+nvidia-cudnn-cu12>=9,<10
