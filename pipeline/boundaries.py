@@ -214,9 +214,10 @@ def snap_boundaries(
         if result is not None:
             snapped.append(result)
 
-    deduped = dedupe_overlaps(snapped)
-    deduped.sort(key=lambda c: c.score, reverse=True)
-    return deduped
+    # **កុំតម្រៀបឡើងវិញ** — `highlights.py` បានដាក់លំដាប់រួចហើយ (តាមការប្រៀបធៀប
+    # របស់ LLM មិនមែនតាម score)។ ការតម្រៀបតាម score ទីនេះនឹងបំផ្លាញលំដាប់នោះ
+    # ហើយ clip_01 នឹងលែងជា clip ល្អបំផុត (យើងបានជួបវាពិត)។
+    return dedupe_overlaps(snapped)
 
 
 def clip_text(clip: Clip, transcript: Transcript) -> str:

@@ -334,3 +334,103 @@ def test_extract_json_raises_on_garbage():
 def test_complete_json_rejects_unknown_backend():
     with pytest.raises(L.LLMError, match="backend មិនស្គាល់"):
         L.complete_json("hi", backend="gemini")
+
+
+# ---------- ជំហានតម្រៀប ----------
+
+def transcript_with_words() -> Transcript:
+    """transcript ដែលមាន word timestamps (ត្រូវការដោយ format_candidates)."""
+    from pipeline.transcribe import Word
+    segments = []
+    for i in range(40):
+        words = [Word(word=f"w{i}_{j}", start=i * 10 + j, end=i * 10 + j + 1, probability=0.9)
+                 for j in range(10)]
+        segments.append(Segment(id=i, start=i * 10.0, end=(i + 1) * 10.0,
+                                text=" ".join(w.word for w in words), words=words))
+    return Transcript(language="en", language_probability=1.0, duration=400.0,
+                      model="t", device="cpu", segments=segments)
+
+
+def test_format_candidates_numbers_from_one():
+    clips = [make_clip(0, 30, title="ទីមួយ"), make_clip(60, 95, title="ទីពីរ")]
+    text = H.format_candidates(clips, transcript_with_words())
+    assert text.startswith("1. [30s] ទីមួយ")
+    assert "2. [35s] ទីពីរ" in text
+
+
+def test_parse_order_converts_to_zero_based():
+    assert H.parse_order({"order": [3, 1, 2]}, 3) == [2, 0, 1]
+
+
+def test_parse_order_accepts_bare_list():
+    assert H.parse_order([2, 1], 2) == [1, 0]
+
+
+@pytest.mark.parametrize("payload", [
+    {"order": [9, 1, "x", 2]},     # លេខក្រៅដែន និងអក្សរ
+    {"order": [1, 1, 2]},          # ស្ទួន
+    {},                            # គ្មាន order
+    "មិនមែន JSON object",
+])
+def test_parse_order_survives_bad_answers(payload):
+    """model មិនតែងតែត្រឡប់លេខគ្រប់ និងមិនស្ទួនទេ — លទ្ធផលត្រូវនៅពេញ និងមិនស្ទួន."""
+    order = H.parse_order(payload, 3)
+    assert sorted(order) == [0, 1, 2]
+
+
+def test_rank_clips_reorders(monkeypatch):
+    clips = [make_clip(0, 30, title="a"), make_clip(60, 95, title="b"),
+             make_clip(120, 150, title="c")]
+    monkeypatch.setattr(H, "complete_json", lambda *a, **k: {"order": [3, 1, 2]})
+    ranked = H.rank_clips(clips, transcript_with_words())
+    assert [c.title for c in ranked] == ["c", "a", "b"]
+
+
+def test_rank_clips_keeps_order_when_llm_fails(monkeypatch):
+    """ការតម្រៀបបរាជ័យមិនត្រូវធ្វើឲ្យ pipeline ដាច់ទេ."""
+    clips = [make_clip(0, 30, title="a"), make_clip(60, 95, title="b")]
+    warnings = []
+
+    def fail(*args, **kwargs):
+        raise L.LLMError("ollama ដាច់")
+
+    monkeypatch.setattr(H, "complete_json", fail)
+    ranked = H.rank_clips(clips, transcript_with_words(), on_warning=warnings.append)
+    assert [c.title for c in ranked] == ["a", "b"]
+    assert warnings and "តម្រៀប" in warnings[0]
+
+
+def test_rank_clips_skips_llm_for_single_clip(monkeypatch):
+    def explode(*args, **kwargs):
+        raise AssertionError("មិនគួរហៅ LLM សម្រាប់ clip តែមួយ")
+
+    monkeypatch.setattr(H, "complete_json", explode)
+    assert len(H.rank_clips([make_clip(0, 30)], transcript_with_words())) == 1
+
+
+def test_find_highlights_does_not_rank(monkeypatch):
+    """ការតម្រៀបកើតក្រោយ boundaries (ក្នុង make_clips) មិនមែនទីនេះទេ.
+
+    មូលហេតុ: candidate ឆៅអាចចាប់ផ្តើមពាក់កណ្តាលប្រយោគ។ យើងបានសាកតម្រៀបមុន
+    boundaries ហើយ LLM បានជ្រើសបំណែក ៦ វិនាទីដាក់លេខ ១។
+    """
+    def explode(*args, **kwargs):
+        raise AssertionError("find_highlights មិនត្រូវតម្រៀបទេ")
+
+    monkeypatch.setattr(H, "rank_clips", explode)
+    monkeypatch.setattr(H, "complete_json", fake_llm_response)
+    clips = H.find_highlights(make_transcript(), max_clips=1)
+    assert len(clips) == 1
+
+
+def test_dedupe_returns_clips_in_input_order():
+    """dedupe ប្រើ score ដើម្បីសម្រេចថារក្សាមួយណា តែមិនត្រូវតម្រៀបលទ្ធផលឡើងវិញ."""
+    clips = [make_clip(0, 30, score=5, title="ដំបូង"),
+             make_clip(100, 130, score=9, title="បន្ទាប់")]
+    assert [c.title for c in H.dedupe_overlaps(clips)] == ["ដំបូង", "បន្ទាប់"]
+
+
+def test_dedupe_still_drops_the_lower_scored_overlap():
+    kept = H.dedupe_overlaps([make_clip(0, 30, score=6, title="ទាប"),
+                              make_clip(5, 35, score=9, title="ខ្ពស់")])
+    assert [c.title for c in kept] == ["ខ្ពស់"]

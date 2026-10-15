@@ -237,14 +237,18 @@ def test_snap_boundaries_dedupes_after_snapping():
     assert result[0].title == "ខ្ពស់"      # score ខ្ពស់ឈ្នះ
 
 
-def test_snap_boundaries_sorts_by_score():
+def test_snap_boundaries_keeps_the_order_it_was_given():
+    """highlights.py ដាក់លំដាប់តាមការប្រៀបធៀបរបស់ LLM — boundaries មិនត្រូវតម្រៀបឡើងវិញ.
+
+    bug ពិត: ការតម្រៀបតាម score ទីនេះធ្វើឲ្យ clip_01 លែងជា clip ល្អបំផុត។
+    """
     transcript = simple_transcript(n_sentences=10)     # 100s
     clips = [
-        Clip(start=0.0, end=18.0, title="a", score=5),
+        Clip(start=0.0, end=18.0, title="a", score=5),   # LLM ដាក់វាមុន ទោះ score ទាប
         Clip(start=60.0, end=78.0, title="b", score=9),
     ]
     result = B.snap_boundaries(clips, transcript)
-    assert [c.title for c in result] == ["b", "a"]     # score ខ្ពស់មុន
+    assert [c.title for c in result] == ["a", "b"]
 
 
 def test_snap_extends_backward_only_when_forward_is_impossible():

@@ -20,7 +20,7 @@ import config
 from pipeline.llm import LLMError, complete_json
 from pipeline.transcribe import Segment, Transcript
 
-CACHE_VERSION = 3   # v3: prompt ប្តូរ -> v2: prompt ប្តូរ -> cache ចាស់ត្រូវធ្វើថ្មី
+CACHE_VERSION = 5   # v5: cache ផ្ទុក candidate ច្រើន -> v4: បន្ថែមជំហានតម្រៀប -> v3: prompt ប្តូរ -> v2: prompt ប្តូរ -> cache ចាស់ត្រូវធ្វើថ្មី
 
 # ប្រភេទ clip ដែលយើងទទួល (ត្រូវគ្នានឹង prompt)
 CLIP_TYPES = ("story", "insight", "howto", "contrarian", "question", "funny")
@@ -138,11 +138,14 @@ def chunk_transcript(
 
 # ---------- prompt ----------
 
-def load_prompt(name: str | None = None) -> tuple[str, str]:
+def load_prompt(name: str | None = None,
+                body_sections: tuple[str, ...] = ("User", "Transcript part")
+                ) -> tuple[str, str]:
     """អាន prompt file រួចបែងចែកជា (system, user_template).
 
-    File មានផ្នែក `## System`, `## User`, `## Transcript part`, `## Changelog`។
-    យើងយក System ដោយឡែក, ភ្ជាប់ User + Transcript part ជា template, ហើយបោះ Changelog។
+    File មានផ្នែក `## System`, `## User`, ផ្នែកទិន្នន័យ (`## Transcript part` ឬ
+    `## Candidates`), និង `## Changelog`។ យើងយក System ដោយឡែក, ភ្ជាប់ផ្នែកខាងក្រោម
+    ជា template, ហើយបោះ Changelog ចោល (វាសម្រាប់មនុស្សអាន មិនមែនសម្រាប់ model)។
     """
     path = config.PROMPTS_DIR / (name or config.HIGHLIGHT_PROMPT)
     text = path.read_text(encoding="utf-8")
@@ -152,12 +155,14 @@ def load_prompt(name: str | None = None) -> tuple[str, str]:
         header, _, body = block.partition("\n")
         sections[header.strip()] = body.strip()
 
-    missing = [k for k in ("System", "User", "Transcript part") if k not in sections]
+    missing = [k for k in ("System", *body_sections) if k not in sections]
     if missing:
         raise HighlightsError(f"{path.name} ខ្វះផ្នែក: {', '.join(missing)}")
 
-    user = sections["User"] + "\n\n## Transcript part\n\n" + sections["Transcript part"]
-    return sections["System"], user
+    parts = [sections[body_sections[0]]]
+    for header in body_sections[1:]:
+        parts.append(f"## {header}\n\n{sections[header]}")
+    return sections["System"], "\n\n".join(parts)
 
 
 def build_prompt(chunk: Chunk, user_template: str, clips_per_chunk: int) -> str:
@@ -245,6 +250,11 @@ def dedupe_overlaps(clips: list[Clip], max_overlap_ratio: float = 0.3) -> list[C
                 break
         if not is_duplicate:
             kept.append(clip)
+
+    # យើងប្រើ score ដើម្បី *សម្រេច* ថារក្សាមួយណាក្នុងចំណោម clip ស្ទួន តែត្រឡប់តាម
+    # **លំដាប់ដើម** ព្រោះអ្នកហៅអាចបានដាក់លំដាប់ដោយចេតនារួចហើយ។
+    original = {id(clip): index for index, clip in enumerate(clips)}
+    kept.sort(key=lambda c: original[id(c)])
     return kept
 
 
@@ -281,6 +291,79 @@ def load_clips(path: Path) -> list[Clip] | None:
         return None
 
 
+# ---------- ជំហានតម្រៀប (ដោះស្រាយពិន្ទុដែលជាប់គាំងនៅ 9) ----------
+
+def format_candidates(clips: list[Clip], transcript: Transcript,
+                      preview_chars: int = 180) -> str:
+    """រាយ candidate សម្រាប់ prompt តម្រៀប — លេខ, ប្រវែង, title, និងពាក្យដំបូង."""
+    lines: list[str] = []
+    for number, clip in enumerate(clips, start=1):
+        words = [
+            w for seg in transcript.segments for w in seg.words
+            if w.end > clip.start and w.start < clip.end
+        ]
+        opening = " ".join(w.word.strip() for w in words).strip()[:preview_chars]
+        if not opening:
+            opening = clip.hook or clip.title
+        lines.append(f'{number}. [{clip.duration:.0f}s] {clip.title}')
+        lines.append(f'   "{opening}..."')
+        lines.append("")        # បន្ទាត់ទទេរវាង candidate ឲ្យ prompt អានងាយ
+    return "\n".join(lines).strip()
+
+
+def parse_order(data: object, count: int) -> list[int]:
+    """បម្លែងចម្លើយ LLM ទៅលំដាប់ index (0-based) ដែលត្រឹមត្រូវ.
+
+    យើងមិនជឿថា model នឹងត្រឡប់លេខគ្រប់ និងមិនស្ទួនទេ — ដូច្នេះយើងច្រោះលេខខុស,
+    លុបលេខស្ទួន, រួចបន្ថែមលេខដែលបាត់ទៅចុង។
+    """
+    raw = data.get("order", []) if isinstance(data, dict) else data
+    if not isinstance(raw, list):
+        raw = []
+
+    order: list[int] = []
+    for value in raw:
+        try:
+            index = int(value) - 1          # prompt ប្រើលេខចាប់ពី ១
+        except (TypeError, ValueError):
+            continue
+        if 0 <= index < count and index not in order:
+            order.append(index)
+
+    order.extend(i for i in range(count) if i not in order)
+    return order
+
+
+def rank_clips(
+    clips: list[Clip],
+    transcript: Transcript,
+    *,
+    model: str | None = None,
+    on_warning: Callable[[str], None] | None = None,
+) -> list[Clip]:
+    """សុំ LLM ដាក់លំដាប់ candidate ធៀបគ្នា រួចត្រឡប់តាមលំដាប់នោះ.
+
+    បើការហៅបរាជ័យ យើងត្រឡប់លំដាប់ដើម (តាម score) — មិនដាច់ទេ។
+    """
+    if len(clips) < 2:
+        return clips
+
+    model = model or config.OLLAMA_MODEL
+    system, user_template = load_prompt(config.RANK_PROMPT,
+                                        body_sections=("User", "Candidates"))
+    prompt = user_template.replace("{{CANDIDATES}}",
+                                   format_candidates(clips, transcript))
+    try:
+        data = complete_json(prompt, system=system, model=model)
+    except LLMError as e:
+        if on_warning:
+            on_warning(f"ការតម្រៀបបរាជ័យ ({e}) — ប្រើលំដាប់តាម score ជំនួស")
+        return clips
+
+    order = parse_order(data, len(clips))
+    return [clips[i] for i in order]
+
+
 # ---------- ការងារសំខាន់ ----------
 
 def find_highlights(
@@ -296,6 +379,9 @@ def find_highlights(
     """រក clip ល្អបំផុតពី transcript មួយ.
 
     ត្រឡប់ clip ដែល validate រួច, dedupe រួច, តម្រៀបតាម score (ខ្ពស់មុន), យកត្រឹម max_clips។
+
+    **ការតម្រៀបពិតកើតឡើងក្រោយ `boundaries.py`** (មើល `rank_clips`) ព្រោះ candidate ឆៅ
+    អាចចាប់ផ្តើមពាក់កណ្តាលប្រយោគ ហើយ LLM មិនគួរវិនិច្ឆ័យអ្វីដែលអ្នកមើលមិនឃើញទេ។
     """
     max_clips = max_clips or config.MAX_CLIPS
     model = model or config.OLLAMA_MODEL

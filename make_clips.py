@@ -15,7 +15,8 @@ import config
 from pipeline.audio import FFmpegError, extract_audio, probe_duration
 from pipeline.boundaries import clip_text, snap_boundaries
 from pipeline.captions import CaptionError, build_all_captions, resolve_font
-from pipeline.highlights import HighlightsError, find_highlights, load_clips, save_clips
+from pipeline.highlights import (HighlightsError, find_highlights, load_clips,
+                                 rank_clips, save_clips)
 from pipeline.llm import LLMError
 from pipeline.reframe import (ReframeError, describe, dominant_kind, find_seats,
                              plan_clip)
@@ -191,22 +192,27 @@ def main(
     was_cached = not redo_highlights and load_clips(clips_cache) is not None
     warnings: list[str] = []
     try:
+        # ពេលមានជំហានតម្រៀប យើងរក candidate ច្រើន រួចជ្រើស ៥ ក្រោយពេលកែព្រំដែន
+        wanted = (max(max_clips, config.MAX_RANK_CANDIDATES)
+                  if config.RANK_CANDIDATES else max_clips)
         if was_cached:
-            clips = find_highlights(transcript, max_clips=max_clips, model=model,
+            clips = find_highlights(transcript, max_clips=wanted, model=model,
                                     cache_path=clips_cache)
         else:
             with Progress(*progress_columns("3/6 highlights"), console=console) as progress:
                 task = progress.add_task("highlights", total=1)
                 clips = find_highlights(
-                    transcript, max_clips=max_clips, model=model,
+                    transcript, max_clips=wanted, model=model,
                     cache_path=clips_cache, force=redo_highlights,
-                    on_progress=lambda done, total: progress.update(task, completed=done, total=total),
+                    on_progress=lambda done, total: progress.update(
+                        task, completed=done, total=total,
+                        description="តម្រៀប" if done >= total - 1 else "chunk"),
                     on_warning=warnings.append,
                 )
 
         tag = " [dim](cache)[/dim]" if was_cached else ""
         console.print(f"[green]✔ 3/6 highlights[/green]  {short_path(clips_cache)}  "
-                      f"({len(clips)} clips){tag}")
+                      f"({len(clips)} candidates){tag}")
         if warnings:
             console.print(f"[dim]  {len(warnings)} warning ត្រូវរំលង (clip ខុស format ឬក្រៅដែន)[/dim]")
             for warning in warnings[:3]:
@@ -224,6 +230,17 @@ def main(
     snap_warnings: list[str] = []
     before = {c.title: c.start for c in clips}
     final = snap_boundaries(clips, transcript, on_warning=snap_warnings.append)
+
+    # ---------- ជំហានតម្រៀប ----------
+    # ឥឡូវ clip មានព្រំដែនត្រឹមត្រូវហើយ (ចាប់ផ្តើមដើមប្រយោគ, >= 15s) ដូច្នេះ LLM
+    # វិនិច្ឆ័យអ្វីដែលអ្នកមើលនឹងឃើញពិត មិនមែនបំណែកឆៅទេ។
+    if config.RANK_CANDIDATES and len(final) > max_clips:
+        with console.status(f"[cyan]តម្រៀប[/cyan] — ប្រៀបធៀប {len(final)} candidate..."):
+            final = rank_clips(final, transcript, model=model,
+                               on_warning=snap_warnings.append)
+        console.print(f"[dim]  តម្រៀប {len(final)} candidate -> យក {max_clips} ល្អបំផុត[/dim]")
+    final = final[:max_clips]
+
     clips_file = save_clips(final, out_dir / "clips.json", model=model,
                             prompt=config.HIGHLIGHT_PROMPT)
 

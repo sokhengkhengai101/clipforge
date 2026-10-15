@@ -38,6 +38,11 @@ ANTHROPIC_MODEL = "claude-sonnet-5-5"   # ប្រើតែពេលមាន A
 LLM_TEMPERATURE = 0.2                   # ទាប = ចម្លើយជាប់លាប់ជាង (យើងចង់បាន JSON មិនមែនកំណាព្យ)
 LLM_MAX_TOKENS = 2048                   # output tokens អតិបរមាក្នុងមួយ chunk
 HIGHLIGHT_PROMPT = "podcast_highlights.md"   # file ក្នុង prompts/
+RANK_PROMPT = "rank_clips.md"
+# ជំហានទី ២: សុំ model ដាក់លំដាប់ candidate ធៀបគ្នា ព្រោះពិន្ទុដាច់ដោយឡែករបស់វា
+# ជាប់គាំងនៅ 9 (វាស់ឃើញ: 9,9,9,9,9)។ ថ្លៃបន្ថែម ~១ នាទីក្នុងមួយ video។
+RANK_CANDIDATES = True
+MAX_RANK_CANDIDATES = 15     # candidate ច្រើនពេកធ្វើឲ្យ prompt វែង និងយឺត
 
 # ---------- Render ----------
 OUT_WIDTH = 1080
