@@ -41,7 +41,18 @@ HIGHLIGHT_PROMPT = "podcast_highlights.md"   # file ក្នុង prompts/
 
 # ---------- Render ----------
 OUT_WIDTH = 1080
-OUT_HEIGHT = 1920          # 9:16 vertical
+OUT_HEIGHT = 1920          # 9:16 vertical (default)
+
+# ទំហំស្តង់ដារក្នុងមួយ aspect ratio។ ទទឹង 1080 សម្រាប់ portrait/square ព្រោះវាជា
+# ទំហំដែល TikTok/Reels/Shorts ប្រើ; 16:9 ប្រើ 1920×1080 សម្រាប់ YouTube ធម្មតា។
+ASPECT_PRESETS = {
+    "9:16": (1080, 1920),      # TikTok, Reels, Shorts
+    "4:5": (1080, 1350),       # Instagram feed (កាន់កាប់ផ្ទៃច្រើនជាង 1:1)
+    "1:1": (1080, 1080),       # square feed
+    "16:9": (1920, 1080),      # YouTube, LinkedIn
+}
+# ទិសដៅដាក់ផ្ទាំងក្នុង split: portrait/square -> ជាន់គ្នាបញ្ឈរ; landscape -> ឆ្វេង/ស្តាំ
+SPLIT_DIRECTION = "vertical"
 VIDEO_CRF = 20             # លេខតូច = គុណភាពល្អ + file ធំ
 VIDEO_PRESET = "medium"
 AUDIO_BITRATE = "128k"
@@ -80,23 +91,28 @@ SPLIT_TOP = "auto"                  # "auto" (អ្នកនិយាយលើ)
 CAPTION_FONT = "Montserrat ExtraBold"
 # បើ font ខាងលើគ្មានលើម៉ាស៊ីន -> សាកតាមលំដាប់នេះ (captions.resolve_font ព្រមានឲ្យដឹង)
 CAPTION_FONT_FALLBACKS = ("Inter Bold", "Arial Black", "Arial")
-# វាស់ពិតដោយ FFmpeg+libass (render frame រួចរាប់ pixel), Inter Bold, 32 តួ:
-#   40px -> 497px | 48px -> 596px | 56px -> 696px | 64px -> 795px
-# ទំនេរ = 1080 - 2×60 margin = 960px ដូច្នេះ 64px សម។ (Montserrat ExtraBold ធំជាង
-# Inter Bold ប្រហែល 10-15% -> ~900px, នៅតែសម។ វាស់ឡើងវិញក្រោយ install វា។)
-CAPTION_FONT_SIZE = 64
-CAPTION_MAX_LINES = 2
-CAPTION_MAX_CHARS_PER_LINE = 32
-CAPTION_KEYWORD_COLOR = "#FFD23F"   # លឿង — keyword highlight
+# Style ខ្លីៗបែប short-form (តាម OpusClip): អក្សរធំ, ពាក្យតិចក្នុងមួយបន្ទាត់, ALL CAPS។
+# វាស់ពិតដោយ FFmpeg+libass (render frame រួចរាប់ pixel), Montserrat ExtraBold,
+# 16 តួ ALL CAPS: 72px -> 497px | 90px -> 621px | 110px -> 759px | 130px -> 896px
+# ទំនេរ = 1080 - 2×60 margin = 960px ដូច្នេះ 110px គ្របដណ្តប់ ~70% នៃទទឹង។
+CAPTION_FONT_SIZE = 110
+CAPTION_MAX_LINES = 3
+CAPTION_MAX_CHARS_PER_LINE = 16
+# ALL CAPS ជា style ស្តង់ដារនៃ short-form — អានបានលឿនពេលរំកិលមើល
+CAPTION_UPPERCASE = True
+CAPTION_KEYWORD_COLOR = "#FFD23F"   # លឿង — keyword highlight (OpusClip ប្រើបៃតង #00E054)
+# cue ឥឡូវខ្លី (16 តួ × 3 បន្ទាត់) ដូច្នេះ ១ ពាក្យក្នុងមួយ cue គ្រប់គ្រាន់។
+# ២ ពាក្យធ្វើឲ្យពាក់កណ្តាល cue ក្លាយជាលឿង ហើយការបំលេចអស់អត្ថន័យ។
+CAPTION_KEYWORDS_PER_CUE = 1
 CAPTION_TEXT_COLOR = "#FFFFFF"      # ពណ៌អត្ថបទធម្មតា
 CAPTION_OUTLINE_COLOR = "#000000"   # គ្រោងខ្មៅ ឲ្យអានបានលើផ្ទាំងពណ៌ណាក៏បាន
 CAPTION_OUTLINE = 4                 # ប្រវែងគ្រោង (px)
 CAPTION_SHADOW = 1
 CAPTION_MARGIN_X = 60               # ចន្លោះឆ្វេង/ស្តាំ
 CAPTION_MARGIN_V = 420              # កម្ពស់ពីបាត (1920) -> caption នៅ lower third
-# ក្នុង split screen ស្នាមរវាងផ្ទាំងពីរនៅ y=960។ OpusClip ដាក់អក្សរជិតស្នាម ដូច្នេះ
-# យើងលើកវាឡើងដល់ 880 (បាតអក្សរ ~y 1040, ក្រោមស្នាមបន្តិច)។
-CAPTION_MARGIN_V_SPLIT = 880
+# ក្នុង split screen ស្នាមរវាងផ្ទាំងពីរនៅ y=960។ OpusClip ដាក់អក្សរ **ឆ្លងកាត់** ស្នាម។
+# ប្លុក ៣ បន្ទាត់នៅ 110px ខ្ពស់ ~363px ដូច្នេះ 780 ដាក់កណ្តាលប្លុកត្រង់ស្នាមគត់។
+CAPTION_MARGIN_V_SPLIT = 780
 
 # ---------- Audio ----------
 AUDIO_SAMPLE_RATE = 16000  # Whisper ចូលចិត្ត 16 kHz mono
@@ -200,3 +216,47 @@ def detect_device() -> tuple[str, str, str]:
         pass
 
     return ("cpu", WHISPER_MODEL_CPU, WHISPER_COMPUTE_CPU)
+
+
+def apply_aspect(name: str) -> tuple[int, int]:
+    """កំណត់ទំហំ output តាម aspect ratio ហើយគណនាតម្លៃដែលពឹងលើវាឡើងវិញ.
+
+    តម្លៃជាច្រើន (ទំហំ font, margin, សមាមាត្រផ្ទាំង) ត្រូវតែផ្លាស់ប្តូរតាមទំហំ output។
+    បើយើងទុកវាថេរ នោះ caption នឹងតូចពេកលើ 16:9 ហើយផ្ទាំង split នឹងខុសសមាមាត្រ។
+    Function នេះគណនាទាំងអស់ពី preset តែមួយ។
+
+    ហៅវា **ម្តងនៅដើម** មុនពេលផ្នែកណាមួយអាន config។
+    """
+    global OUT_WIDTH, OUT_HEIGHT, PANEL_ASPECT, SPLIT_DIRECTION
+    global CAPTION_FONT_SIZE, CAPTION_MARGIN_X, CAPTION_MARGIN_V, CAPTION_MARGIN_V_SPLIT
+
+    if name not in ASPECT_PRESETS:
+        raise ValueError(f"aspect មិនស្គាល់: {name} (មាន {', '.join(ASPECT_PRESETS)})")
+
+    OUT_WIDTH, OUT_HEIGHT = ASPECT_PRESETS[name]
+    SPLIT_DIRECTION = "vertical" if OUT_HEIGHT >= OUT_WIDTH else "horizontal"
+
+    # ផ្ទាំងនីមួយៗយកពាក់កណ្តាលនៃទិសដែលយើងបែងចែក
+    if SPLIT_DIRECTION == "vertical":
+        PANEL_ASPECT = OUT_WIDTH / (OUT_HEIGHT / 2)
+    else:
+        PANEL_ASPECT = (OUT_WIDTH / 2) / OUT_HEIGHT
+
+    # caption ធ្លាប់វាស់នៅទទឹង 1080 -> ធ្វើមាត្រដ្ឋានតាមទទឹងថ្មី
+    scale = OUT_WIDTH / 1080
+    CAPTION_MARGIN_X = int(60 * scale)
+
+    # ...តែកុំឲ្យប្លុកអក្សរលេបរូប។ នៅ 16:9 ការធ្វើមាត្រដ្ឋានតាមទទឹងផ្តល់ font 195px
+    # ហើយ ៣ បន្ទាត់ត្រូវការ 54% នៃកម្ពស់ — ធំពេក។ ដាក់ដែនត្រឹម 30% នៃកម្ពស់។
+    height_cap = OUT_HEIGHT * 0.30 / (CAPTION_MAX_LINES * 1.1)
+    CAPTION_FONT_SIZE = int(min(110 * scale, height_cap))
+    CAPTION_MARGIN_V = int(OUT_HEIGHT * 0.22)      # ~lower third, ផុតពី UI របស់ platform
+
+    if SPLIT_DIRECTION == "vertical":
+        # ដាក់ប្លុកអក្សរឲ្យកណ្តាលត្រង់ស្នាម (y = កម្ពស់/2) ដូច OpusClip
+        block_height = CAPTION_MAX_LINES * CAPTION_FONT_SIZE * 1.1
+        CAPTION_MARGIN_V_SPLIT = max(0, int(OUT_HEIGHT / 2 - block_height / 2))
+    else:
+        CAPTION_MARGIN_V_SPLIT = CAPTION_MARGIN_V   # គ្មានស្នាមផ្ដេកទេ
+
+    return OUT_WIDTH, OUT_HEIGHT

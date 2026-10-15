@@ -93,4 +93,10 @@ clipforge/
 - Check env: `python check_env.py` (must show all OK before running the pipeline)
 - Slow tests (real Whisper model): `pytest -m slow`
 - Run: `python make_clips.py path/to/video.mp4 --max-clips 5`
+- Aspect: `--aspect 9:16|4:5|1:1|16:9` (default 9:16). Each writes to its own folder
+  (`clips/`, `clips_4x5/`, ...). Portrait and square stack split panels vertically; 16:9 puts
+  them side by side, since a 1920x540 panel is too shallow to frame a face.
+- Layout: `--layout auto|center|split` (default auto: split on two-shots, face crop on close-ups,
+  centre crop when no face is found)
+- Review output: `python review.py <video name> --frames`
 - Test: `pytest -q`

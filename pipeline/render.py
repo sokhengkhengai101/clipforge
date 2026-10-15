@@ -105,14 +105,19 @@ def layout_chain(layout: Layout, index: int, source_label: str, out_label: str,
     out_height = out_height or config.OUT_HEIGHT
 
     if layout.kind == "split" and layout.top and layout.bottom:
-        half = out_height // 2
+        # output បញ្ឈរ/ការ៉េ -> ជាន់គ្នាបញ្ឈរ (vstack); output ផ្ដេក -> ឆ្វេង/ស្តាំ (hstack)។
+        # ផ្ទាំង 1920×540 នៅលើ 16:9 នឹងវែងនិងរាក់ពេក ដូច្នេះទិសត្រូវប្តូរតាម output។
+        horizontal = config.SPLIT_DIRECTION == "horizontal"
+        panel_w = out_width // 2 if horizontal else out_width
+        panel_h = out_height if horizontal else out_height // 2
+        stack = "hstack" if horizontal else "vstack"
         return (
             f"[{source_label}]split=2[a{index}][b{index}];"
             f"[a{index}]{layout.top.as_filter()},"
-            f"scale={out_width}:{half}:flags=lanczos[t{index}];"
+            f"scale={panel_w}:{panel_h}:flags=lanczos[t{index}];"
             f"[b{index}]{layout.bottom.as_filter()},"
-            f"scale={out_width}:{half}:flags=lanczos[m{index}];"
-            f"[t{index}][m{index}]vstack=inputs=2,setsar=1{suffix}[{out_label}]"
+            f"scale={panel_w}:{panel_h}:flags=lanczos[m{index}];"
+            f"[t{index}][m{index}]{stack}=inputs=2,setsar=1{suffix}[{out_label}]"
         )
 
     box = layout.box

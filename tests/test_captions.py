@@ -171,9 +171,11 @@ def test_wrap_skips_empty_words():
 # ---------- keywords ----------
 
 def test_pick_keywords_prefers_long_content_words():
+    """ពាក្យវែងបំផុតដែលមិនមែន stopword ឈ្នះ (default = ១ ក្នុងមួយ cue)."""
     words = make_words([("the", 0, 1), ("algorithm", 1, 2), ("is", 2, 3), ("broken", 3, 4)])
     cue = C.Cue(start=0, end=4, lines=[words])
-    assert C.pick_keywords(cue) == {"algorithm", "broken"}
+    assert C.pick_keywords(cue) == {"algorithm"}
+    assert C.pick_keywords(cue, max_keywords=2) == {"algorithm", "broken"}
 
 
 def test_pick_keywords_skips_stopwords_and_short_words():
@@ -302,3 +304,29 @@ def test_build_all_captions_accepts_per_clip_margins(tmp_path):
                                  margins=[880, None])
     assert ",880,1" in paths[0].read_text(encoding="utf-8")
     assert f",{config.CAPTION_MARGIN_V},1" in paths[1].read_text(encoding="utf-8")
+
+
+def test_uppercase_is_applied_when_configured(monkeypatch):
+    """style short-form: ALL CAPS អានលឿនជាងពេលរំកិលមើល."""
+    monkeypatch.setattr(config, "CAPTION_UPPERCASE", True)
+    words = make_words([("hello", 0, 1), ("world", 1, 2)])
+    cue = C.Cue(start=0, end=2, lines=[words])
+    text = C.cue_to_dialogue_text(cue, set(), config.CAPTION_KEYWORD_COLOR)
+    assert "HELLO WORLD" in text
+
+
+def test_uppercase_can_be_turned_off(monkeypatch):
+    monkeypatch.setattr(config, "CAPTION_UPPERCASE", False)
+    words = make_words([("hello", 0, 1)])
+    cue = C.Cue(start=0, end=1, lines=[words])
+    assert "hello" in C.cue_to_dialogue_text(cue, set(), config.CAPTION_KEYWORD_COLOR)
+
+
+def test_keyword_matching_still_works_with_uppercase(monkeypatch):
+    """ការបំលេចប្រៀបធៀបលើអក្សរតូច ដូច្នេះ ALL CAPS មិនបំបែកវាទេ."""
+    monkeypatch.setattr(config, "CAPTION_UPPERCASE", True)
+    words = make_words([("algorithm", 0, 1)])
+    cue = C.Cue(start=0, end=1, lines=[words])
+    text = C.cue_to_dialogue_text(cue, {"algorithm"}, config.CAPTION_KEYWORD_COLOR)
+    assert C.ass_color(config.CAPTION_KEYWORD_COLOR) in text
+    assert "ALGORITHM" in text

@@ -196,12 +196,13 @@ def wrap_into_cues(
 
 # ---------- keyword highlight ----------
 
-def pick_keywords(cue: Cue, max_keywords: int = 2, min_length: int = 5) -> set[str]:
+def pick_keywords(cue: Cue, max_keywords: int | None = None, min_length: int = 5) -> set[str]:
     """ជ្រើសពាក្យដែលគួរបំលេចជាពណ៌លឿងក្នុង cue នេះ.
 
     ច្បាប់សាមញ្ញ និងអាចទាយទុកជាមុន: ពាក្យវែង (≥ 5 តួ) ដែលមិនមែន stopword,
     យកពាក្យវែងបំផុត max_keywords ។ (Phase 1 អាចប្រើ LLM ជ្រើសឲ្យឆ្លាតជាង។)
     """
+    max_keywords = config.CAPTION_KEYWORDS_PER_CUE if max_keywords is None else max_keywords
     candidates: list[str] = []
     for line in cue.lines:
         for word in line:
@@ -233,6 +234,8 @@ def cue_to_dialogue_text(cue: Cue, keywords: set[str], keyword_color: str) -> st
         for word in line:
             text = escape_ass_text(word.word.strip())
             bare = re.sub(r"[^\w']", "", text.lower())
+            if config.CAPTION_UPPERCASE:
+                text = text.upper()        # style short-form: អានលឿនពេលរំកិល
             if bare in remaining:
                 remaining.discard(bare)
                 # ទម្រង់ត្រឹមត្រូវ: {\c&HBBGGRR&} — `&` បិទតម្លៃពណ៌

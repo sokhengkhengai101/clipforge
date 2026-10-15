@@ -92,6 +92,8 @@ def main(
                              help="ជំហានដែលត្រូវធ្វើថ្មី: audio, transcribe, highlights, render, all"),
     layout: str = typer.Option("auto", "--layout",
                                help="auto (split/មុខ/center តាម shot), center (ចាស់), split"),
+    aspect: str = typer.Option("9:16", "--aspect",
+                               help="សមាមាត្រ output: 9:16, 4:5, 1:1, 16:9"),
 ) -> None:
     # --redo ដាច់ជំហាន ដើម្បីកុំឲ្យការកែ prompt បង្ខំ transcribe ៨ នាទីឡើងវិញ
     steps_to_redo = {name.strip().lower() for name in redo.split(",") if name.strip()}
@@ -111,9 +113,19 @@ def main(
         console.print(f"[red]--layout មិនស្គាល់: {layout}[/red] (auto, center ឬ split)")
         raise typer.Exit(code=2)
 
+    # ត្រូវហៅមុនគេ — ទំហំ font, margin និងសមាមាត្រផ្ទាំងទាំងអស់គណនាពីវា
+    try:
+        out_width, out_height = config.apply_aspect(aspect)
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(code=2)
+
     device, default_whisper, compute = config.detect_device()
     whisper_model = whisper_model or default_whisper
     out_dir = config.OUTPUT_DIR / video.stem
+    # aspect ផ្សេងៗសរសេរទៅ folder ផ្សេង ដើម្បីកុំឲ្យជាន់គ្នា (clips/, clips_1x1/, ...)
+    clips_dir = out_dir / ("clips" if aspect == "9:16"
+                           else f"clips_{aspect.replace(':', 'x')}")
 
     console.print("\n[bold]ClipForge Studio[/bold] — Phase 0\n")
     console.print(f"  video       : {video}")
@@ -122,6 +134,7 @@ def main(
     console.print(f"  whisper     : {whisper_model} on {device} ({compute})")
     console.print(f"  llm         : {model}")
     console.print(f"  layout      : {layout}")
+    console.print(f"  aspect      : {aspect}  ({out_width}x{out_height})")
 
     # ---------- Step 1: audio ----------
     try:
@@ -266,7 +279,7 @@ def main(
         console.print(f"[yellow]⚠ font '{config.CAPTION_FONT}' គ្មានលើម៉ាស៊ីន[/yellow] "
                       f"-> ប្រើ '{caption_font}' ជំនួស")
     try:
-        ass_files = build_all_captions(final, transcript, out_dir / "clips",
+        ass_files = build_all_captions(final, transcript, clips_dir,
                                        font=caption_font, margins=margins)
         cue_count = sum(
             1 for path in ass_files
@@ -274,7 +287,7 @@ def main(
             if line.startswith("Dialogue:")
         )
         console.print(f"[green]✔ 5/6 captions[/green]    {len(ass_files)} .ass ក្នុង "
-                      f"{short_path(out_dir / 'clips')}  ({cue_count} cues, font={caption_font})")
+                      f"{short_path(clips_dir)}  ({cue_count} cues, font={caption_font})")
     except CaptionError as e:
         console.print(f"[red]✘ 5/6 captions បរាជ័យ:[/red] {e}")
         raise typer.Exit(code=1)
@@ -290,12 +303,12 @@ def main(
                 progress.update(task, completed=index - 1, total=total,
                                 description=clip.title)
 
-            rendered = render_all(video, final, out_dir / "clips", ass_files,
+            rendered = render_all(video, final, clips_dir, ass_files,
                                   force=redo_render, plans=plans, on_progress=tick)
             progress.update(task, completed=len(final))
 
         console.print(f"[green]✔ 6/6 render[/green]      {len(rendered)} MP4 ក្នុង "
-                      f"{short_path(out_dir / 'clips')}")
+                      f"{short_path(clips_dir)}")
         for index, (path, clip) in enumerate(zip(rendered, final), start=1):
             actual = verify_clip(path, clip)      # ចាប់ trim ខុសដោយស្ងាត់
             size_mb = path.stat().st_size / 1_000_000
@@ -306,7 +319,7 @@ def main(
         raise typer.Exit(code=1)
 
     console.print(f"\n[bold green]រួចរាល់![/bold green] clip {len(rendered)} "
-                  f"នៅក្នុង {short_path(out_dir / 'clips')}\n")
+                  f"នៅក្នុង {short_path(clips_dir)}\n")
 
 
 if __name__ == "__main__":

@@ -20,7 +20,7 @@ import config
 from pipeline.llm import LLMError, complete_json
 from pipeline.transcribe import Segment, Transcript
 
-CACHE_VERSION = 2   # v2: prompt ប្តូរ -> cache ចាស់ត្រូវធ្វើថ្មី
+CACHE_VERSION = 3   # v3: prompt ប្តូរ -> v2: prompt ប្តូរ -> cache ចាស់ត្រូវធ្វើថ្មី
 
 # ប្រភេទ clip ដែលយើងទទួល (ត្រូវគ្នានឹង prompt)
 CLIP_TYPES = ("story", "insight", "howto", "contrarian", "question", "funny")
