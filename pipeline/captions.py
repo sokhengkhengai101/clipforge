@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import config
+from pipeline.boundaries import ends_sentence
 from pipeline.highlights import Clip
 from pipeline.transcribe import Transcript, Word
 
@@ -135,6 +136,25 @@ def words_in_clip(clip: Clip, transcript: Transcript) -> list[Word]:
     ]
 
 
+def group_into_sentences(words: list[Word]) -> list[list[Word]]:
+    """ចែកពាក្យជាប្រយោគ (តាមវណ្ណយុត្តិ) ដើម្បីរៀបចំ cue តាមប្រយោគ.
+
+    ពាក្យទទេត្រូវបោះចោលទីនេះ ដូច្នេះអ្នកហៅមិនចាំបាច់ពិនិត្យទៀត។
+    """
+    sentences: list[list[Word]] = []
+    current: list[Word] = []
+    for word in words:
+        if not word.word.strip():
+            continue
+        current.append(word)
+        if ends_sentence(word.word.strip()):
+            sentences.append(current)
+            current = []
+    if current:
+        sentences.append(current)
+    return sentences
+
+
 def wrap_into_cues(
     words: list[Word],
     clip_start: float,
@@ -169,20 +189,65 @@ def wrap_into_cues(
             end = start + 0.5
         cues.append(Cue(start=max(0.0, start), end=end, lines=lines))
 
-    for word in words:
-        text = word.word.strip()
-        if not text:
-            continue
+    def add_word(word: Word) -> None:
+        """ដាក់ពាក្យមួយ — ចុះបន្ទាត់ថ្មី ឬបើក cue ថ្មីពេលពេញ."""
+        nonlocal current_lines
         candidate = current_lines[-1] + [word]
         if line_length(candidate) <= max_chars or not current_lines[-1]:
             current_lines[-1].append(word)
-            continue
-        # បន្ទាត់ពេញ
-        if len(current_lines) < max_lines:
+        elif len(current_lines) < max_lines:
             current_lines.append([word])
         else:
             flush()
             current_lines = [[word]]
+
+    def fits_whole(sentence: list[Word]) -> bool:
+        """ប្រយោគនេះសមនឹងទីវ៉ាងដែលនៅសល់ក្នុង cue បច្ចុប្បន្នឬទេ (សាកដាក់មើល)."""
+        lines = [list(line) for line in current_lines]
+        for word in sentence:
+            if line_length(lines[-1] + [word]) <= max_chars or not lines[-1]:
+                lines[-1].append(word)
+            elif len(lines) < max_lines:
+                lines.append([word])
+            else:
+                return False
+        return True
+
+    def cues_needed(sentence: list[Word]) -> int:
+        """ប្រយោគនេះត្រូវការ cue ប៉ុន្មាន បើដាក់ចាប់ពី cue ទទេ."""
+        count, lines = 1, [[]]
+        for word in sentence:
+            if line_length(lines[-1] + [word]) <= max_chars or not lines[-1]:
+                lines[-1].append(word)
+            elif len(lines) < max_lines:
+                lines.append([word])
+            else:
+                count += 1
+                lines = [[word]]
+        return count
+
+    # **រៀបចំតាមប្រយោគ មិនមែនតាមពាក្យ**។ បើយើងដាក់ពាក្យម្តងមួយៗ កន្ទុយប្រយោគមុន
+    # អាចទៅបើក cue ថ្មី ហើយអ្នកមើលឃើញ "APPS. I THINK IN THE FUTURE," (យើងឃើញពិត)។
+    for sentence in group_into_sentences(words):
+        if any(current_lines) and not fits_whole(sentence):
+            flush()
+            current_lines = [[]]
+
+        if fits_whole(sentence):
+            for word in sentence:
+                add_word(word)
+            continue
+
+        # ប្រយោគវែងជាង cue មួយ -> **ចែកឲ្យស្មើគ្នា**។ ការបំពេញបែប greedy ទុកពាក្យ
+        # តែមួយនៅ cue ចុងក្រោយ ("APPS.") ដែលភ្លឹបភ្លែតលើអេក្រង់។
+        total = sum(len(w.word.strip()) + 1 for w in sentence)
+        target = total / cues_needed(sentence)
+        for index, word in enumerate(sentence):
+            add_word(word)
+            room_left = index < len(sentence) - 1
+            if room_left and sum(line_length(l) for l in current_lines) >= target:
+                flush()
+                current_lines = [[]]
 
     flush()
 

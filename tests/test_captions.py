@@ -330,3 +330,90 @@ def test_keyword_matching_still_works_with_uppercase(monkeypatch):
     text = C.cue_to_dialogue_text(cue, {"algorithm"}, config.CAPTION_KEYWORD_COLOR)
     assert C.ass_color(config.CAPTION_KEYWORD_COLOR) in text
     assert "ALGORITHM" in text
+
+
+def test_cue_closes_at_sentence_end():
+    """bug ពិត: cue ចាប់ផ្តើមដោយកន្ទុយប្រយោគមុន ("APPS. I THINK IN THE FUTURE,")."""
+    words = make_words([
+        ("different", 0.0, 0.5), ("apps.", 0.5, 1.0),
+        ("I", 1.0, 1.3), ("think", 1.3, 1.6), ("in", 1.6, 1.9), ("the", 1.9, 2.2),
+        ("future", 2.2, 2.6), ("every", 2.6, 3.0), ("business", 3.0, 3.5),
+    ])
+    cues = C.wrap_into_cues(words, clip_start=0.0, max_chars=16, max_lines=3)
+
+    first = cues[0].text()
+    assert first.endswith("apps.")           # cue ទី ១ បញ្ចប់ត្រង់ចុងប្រយោគ
+    assert not cues[1].text().startswith("apps")
+
+
+def test_short_sentence_does_not_become_its_own_cue():
+    """"Yeah." ខ្លីពេក -> មិនត្រូវបិទ cue ភ្លាមទេ (បើមិនដូច្នោះអក្សរភ្លឹបភ្លែត)."""
+    words = make_words([
+        ("Yeah.", 0.0, 0.4),
+        ("I", 0.4, 0.7), ("think", 0.7, 1.0), ("so", 1.0, 1.3),
+    ])
+    cues = C.wrap_into_cues(words, clip_start=0.0, max_chars=16, max_lines=3)
+    assert cues[0].text().startswith("Yeah. I")
+
+
+def test_sentence_break_respects_min_chars(monkeypatch):
+    monkeypatch.setattr(config, "CAPTION_MIN_CUE_CHARS", 100)   # ខ្ពស់ពេក -> មិនបិទ
+    words = make_words([("apps.", 0.0, 0.5), ("Next", 0.5, 1.0), ("thing", 1.0, 1.5)])
+    cues = C.wrap_into_cues(words, clip_start=0.0, max_chars=30, max_lines=3)
+    assert len(cues) == 1
+
+
+def test_cue_never_opens_with_a_sentence_tail():
+    """bug ពិត: "APPS. I THINK IN THE FUTURE," — កន្ទុយប្រយោគមុនបើក cue ថ្មី."""
+    words = make_words([
+        ("we", 0.0, 0.2), ("have", 0.2, 0.4), ("a", 0.4, 0.5), ("lot", 0.5, 0.7),
+        ("of", 0.7, 0.8), ("different", 0.8, 1.2), ("apps.", 1.2, 1.5),
+        ("I", 1.5, 1.6), ("think", 1.6, 1.9), ("in", 1.9, 2.0), ("the", 2.0, 2.1),
+        ("future", 2.1, 2.5), ("every", 2.5, 2.8), ("business", 2.8, 3.2),
+    ])
+    cues = C.wrap_into_cues(words, clip_start=0.0, max_chars=16, max_lines=3)
+    for cue in cues:
+        first = cue.text().split()[0]
+        assert not first.endswith((".", "?", "!")), f"cue ចាប់ផ្តើមដោយកន្ទុយ: {cue.text()!r}"
+
+
+def test_group_into_sentences():
+    words = make_words([("one.", 0, 1), ("two", 1, 2), ("three?", 2, 3), ("four", 3, 4)])
+    groups = C.group_into_sentences(words)
+    assert [[w.word for w in g] for g in groups] == [["one."], ["two", "three?"], ["four"]]
+
+
+def test_group_into_sentences_drops_empty_words():
+    words = make_words([("  ", 0, 1), ("real.", 1, 2)])
+    assert [w.word for w in C.group_into_sentences(words)[0]] == ["real."]
+
+
+def test_short_sentences_share_a_cue_when_they_fit():
+    """"Yeah." មិនត្រូវក្លាយជា cue ដាច់ដោយឡែកបើវាសមជាមួយប្រយោគបន្ទាប់."""
+    words = make_words([("Yes.", 0.0, 0.3), ("No.", 0.3, 0.6)])
+    cues = C.wrap_into_cues(words, clip_start=0.0, max_chars=16, max_lines=3)
+    assert len(cues) == 1 and cues[0].text() == "Yes. No."
+
+
+def test_long_sentence_still_splits_across_cues():
+    """ប្រយោគវែងជាង cue មួយ -> ត្រូវបំបែក (ការបន្តមិនមែនជាកន្ទុយទេ)."""
+    words = make_words([(f"word{i}", i * 0.3, i * 0.3 + 0.3) for i in range(30)])
+    cues = C.wrap_into_cues(words, clip_start=0.0, max_chars=16, max_lines=2)
+    assert len(cues) > 1
+
+
+def test_long_sentence_splits_evenly_not_greedily():
+    """bug ពិត: ការបំពេញបែប greedy ទុកពាក្យតែមួយនៅ cue ចុងក្រោយ ("APPS.")."""
+    words = make_words([(f"word{i}", i * 0.3, i * 0.3 + 0.3) for i in range(13)]
+                       + [("end.", 3.9, 4.2)])
+    cues = C.wrap_into_cues(words, clip_start=0.0, max_chars=16, max_lines=2)
+    lengths = [len(cue.text()) for cue in cues]
+    assert min(lengths) > 8, f"cue ខ្លីពេក: {[c.text() for c in cues]}"
+
+
+def test_no_single_word_cue_from_a_long_sentence():
+    words = make_words([("we", 0.0, 0.2), ("have", 0.2, 0.4), ("a", 0.4, 0.5),
+                        ("lot", 0.5, 0.7), ("of", 0.7, 0.8), ("different", 0.8, 1.2),
+                        ("apps.", 1.2, 1.5)])
+    cues = C.wrap_into_cues(words, clip_start=0.0, max_chars=16, max_lines=2)
+    assert all(len(cue.text().split()) > 1 for cue in cues)

@@ -300,3 +300,71 @@ def test_plan_clip_center_mode_skips_detection(monkeypatch):
     clip = Clip(start=0.0, end=30.0, title="x", score=8)
     segments = R.plan_clip("v.mp4", clip, SIZE, layout_mode="center")
     assert len(segments) == 1 and segments[0].layout.kind == "center"
+
+
+# ---------- ភាពរលូន ----------
+
+def split_segment(start, end, with_fallback=True) -> R.Segment:
+    layout = R.Layout(kind="split",
+                      top=R.panel_box(face(cx=430), *SIZE),
+                      bottom=R.panel_box(face(cx=1430), *SIZE))
+    if with_fallback:
+        layout.box = R.single_box(face(cx=430), *SIZE)
+    return R.Segment(start=start, end=end, layout=layout)
+
+
+def single_segment(start, end, cx=900) -> R.Segment:
+    return R.Segment(start=start, end=end,
+                     layout=R.Layout(kind="single", box=R.single_box(face(cx=cx), *SIZE)))
+
+
+def test_short_split_becomes_single():
+    """split ៣ វិនាទីកណ្តាល clip មើលទៅដូចកំហុស — បន្ទាបទៅ single."""
+    segments = [single_segment(0, 10), split_segment(10, 13), single_segment(13, 25)]
+    smoothed = R.smooth_segments(segments, min_split_sec=4.0)
+    assert all(s.layout.kind == "single" for s in smoothed)
+
+
+def test_long_split_is_kept():
+    segments = [single_segment(0, 10), split_segment(10, 20)]
+    smoothed = R.smooth_segments(segments, min_split_sec=4.0)
+    assert [s.layout.kind for s in smoothed] == ["single", "split"]
+
+
+def test_short_split_without_fallback_box_is_kept():
+    """គ្មានប្រអប់បម្រុង -> កុំខ្ចីប្រអប់ពី shot ផ្សេង (នឹង crop ខុសកន្លែង)."""
+    segments = [split_segment(0, 2, with_fallback=False)]
+    assert R.smooth_segments(segments, min_split_sec=4.0)[0].layout.kind == "split"
+
+
+def test_identical_neighbours_are_merged():
+    """segment ជាប់គ្នាដែលដូចបេះបិទ -> បញ្ចូលគ្នា (filtergraph ខ្លីជាង)."""
+    segments = [single_segment(0, 5, cx=900), single_segment(5, 9, cx=900)]
+    smoothed = R.smooth_segments(segments)
+    assert len(smoothed) == 1
+    assert (smoothed[0].start, smoothed[0].end) == (0, 9)
+
+
+def test_different_boxes_are_not_merged():
+    segments = [single_segment(0, 5, cx=400), single_segment(5, 9, cx=1400)]
+    assert len(R.smooth_segments(segments)) == 2
+
+
+def test_smoothing_preserves_total_time():
+    segments = [single_segment(0, 5), split_segment(5, 7), single_segment(7, 20)]
+    smoothed = R.smooth_segments(segments, min_split_sec=4.0)
+    assert smoothed[0].start == 0 and smoothed[-1].end == 20
+    for a, b in zip(smoothed, smoothed[1:]):
+        assert a.end == b.start        # គ្មានរន្ធពេលវេលា
+
+
+def test_short_first_shot_merges_forward():
+    """shot ដំបូងគ្មាន shot មុន -> ត្រូវបញ្ចូលទៅ shot បន្ទាប់ (clip មិនចាប់ផ្តើមភ្លឹបភ្លែត)."""
+    shots = R.split_into_shots(0.0, 20.0, [1.0, 8.0], min_shot_sec=2.0)
+    assert shots[0] == (0.0, 8.0)
+    assert len(shots) == 2
+
+
+def test_single_short_shot_is_kept():
+    """clip ខ្លីទាំងមូល -> នៅតែត្រូវមាន shot មួយ មិនត្រូវបាត់."""
+    assert R.split_into_shots(0.0, 1.0, [], min_shot_sec=2.0) == [(0.0, 1.0)]

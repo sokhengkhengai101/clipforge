@@ -66,7 +66,12 @@ AUDIO_BITRATE = "128k"
 # ពេល camera កាត់ប្តូរ រូបប្រែខ្លាំង -> scene score ខ្ពស់។ 0.3 ជាតម្លៃដែលវាស់ឃើញថាល្អ
 # លើ podcast ដែលមាន multi-camera (ចាប់ការកាត់ ២២ ដងក្នុង ១២០ វិនាទី)។
 SCENE_THRESHOLD = 0.3
-MIN_SHOT_SEC = 1.0                  # shot ខ្លីជាងនេះ បញ្ចូលទៅ shot មុន
+# shot ខ្លីជាងនេះ បញ្ចូលទៅ shot មុន។ វាស់ឃើញថា 1.0s ទុកឲ្យមាន segment 1-2 វិនាទី
+# ដែលធ្វើឲ្យរូបលោតភ្លឹបភ្លែត (clip មួយមាន 7 shots ក្នុង 22 វិនាទី)។
+MIN_SHOT_SEC = 2.0
+# split ដែលខ្លីជាងនេះមិនសមនឹងការប្តូរ layout ទេ -> បង្ហាញជា single វិញ។
+# ការលោតពី close-up ទៅ split ៣ វិនាទី រួចត្រឡប់វិញ មើលទៅដូចកំហុស។
+MIN_SPLIT_SEC = 4.0
 
 FACE_MODEL_PATH = PROJECT_ROOT / "models" / "face_detection_yunet_2023mar.onnx"
 FACE_MODEL_URL = ("https://github.com/opencv/opencv_zoo/raw/main/models/"
@@ -109,6 +114,9 @@ CAPTION_KEYWORD_COLOR = "#FFD23F"   # លឿង — keyword highlight (OpusClip 
 # cue ឥឡូវខ្លី (16 តួ × 3 បន្ទាត់) ដូច្នេះ ១ ពាក្យក្នុងមួយ cue គ្រប់គ្រាន់។
 # ២ ពាក្យធ្វើឲ្យពាក់កណ្តាល cue ក្លាយជាលឿង ហើយការបំលេចអស់អត្ថន័យ។
 CAPTION_KEYWORDS_PER_CUE = 1
+# cue ត្រូវបិទត្រង់ចុងប្រយោគ តែលុះត្រាតែវាមានអក្សរយ៉ាងតិចប៉ុណ្ណេះ — បើមិនដូច្នោះ
+# ប្រយោគខ្លី ("Yeah.") ក្លាយជា cue ភ្លឹបភ្លែតដាច់ដោយឡែក។
+CAPTION_MIN_CUE_CHARS = 12
 CAPTION_TEXT_COLOR = "#FFFFFF"      # ពណ៌អត្ថបទធម្មតា
 CAPTION_OUTLINE_COLOR = "#000000"   # គ្រោងខ្មៅ ឲ្យអានបានលើផ្ទាំងពណ៌ណាក៏បាន
 CAPTION_OUTLINE = 4                 # ប្រវែងគ្រោង (px)

@@ -38,7 +38,7 @@ class Sentence:
     words: list[Word] = field(default_factory=list)
 
 
-def _ends_sentence(word_text: str) -> bool:
+def ends_sentence(word_text: str) -> bool:
     """ពាក្យនេះបញ្ចប់ប្រយោគឬអត់? (លុបសញ្ញាសម្រង់/វង់ចេញមុន)"""
     cleaned = word_text.strip().rstrip('"\'»)]}')
     return cleaned.endswith(SENTENCE_ENDINGS)
@@ -68,7 +68,7 @@ def build_sentences(transcript: Transcript) -> list[Sentence]:
         next_word = all_words[i + 1] if i + 1 < len(all_words) else None
         long_pause = next_word is not None and (next_word.start - word.end) > PAUSE_SEC
 
-        if _ends_sentence(word.word) or long_pause or next_word is None:
+        if ends_sentence(word.word) or long_pause or next_word is None:
             text = " ".join(w.word.strip() for w in current).strip()
             sentences.append(Sentence(
                 start=current[0].start, end=current[-1].end, text=text, words=list(current),

@@ -226,15 +226,24 @@ def main(
         raise typer.Exit(code=1)
 
     # ---------- Step 4: boundaries ----------
-    # គណនាថោក (គ្មាន LLM) -> ធ្វើថ្មីរាល់ពេល, មិនត្រូវ cache
     snap_warnings: list[str] = []
     before = {c.title: c.start for c in clips}
-    final = snap_boundaries(clips, transcript, on_warning=snap_warnings.append)
+
+    # ជម្រើសចុងក្រោយត្រូវ cache ព្រោះជំហានតម្រៀបហៅ LLM ហើយ LLM មិនឆ្លើយដូចគ្នា
+    # ជានិច្ចទេ។ បើយើងតម្រៀបឡើងវិញរាល់ពេល render នោះ clip ដែលអ្នកបានអនុម័ត
+    # នឹងប្តូរដោយខ្លួនឯង (យើងបានជួបវាពិត)។ `--redo highlights` ធ្វើឲ្យវាធ្វើថ្មី។
+    cached_final = None if redo_highlights else load_clips(out_dir / "clips.json")
+    if cached_final:
+        final = cached_final
+        console.print("[dim]  ជម្រើសចុងក្រោយយកពី clips.json (cache) — "
+                      "ប្រើ --redo highlights ដើម្បីជ្រើសថ្មី[/dim]")
+    else:
+        final = snap_boundaries(clips, transcript, on_warning=snap_warnings.append)
 
     # ---------- ជំហានតម្រៀប ----------
     # ឥឡូវ clip មានព្រំដែនត្រឹមត្រូវហើយ (ចាប់ផ្តើមដើមប្រយោគ, >= 15s) ដូច្នេះ LLM
     # វិនិច្ឆ័យអ្វីដែលអ្នកមើលនឹងឃើញពិត មិនមែនបំណែកឆៅទេ។
-    if config.RANK_CANDIDATES and len(final) > max_clips:
+    if cached_final is None and config.RANK_CANDIDATES and len(final) > max_clips:
         with console.status(f"[cyan]តម្រៀប[/cyan] — ប្រៀបធៀប {len(final)} candidate..."):
             final = rank_clips(final, transcript, model=model,
                                on_warning=snap_warnings.append)

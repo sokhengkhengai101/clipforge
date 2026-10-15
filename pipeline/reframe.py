@@ -157,6 +157,13 @@ def split_into_shots(start: float, end: float, cuts: list[float],
             shots[-1] = (shots[-1][0], b)      # បញ្ចូលទៅ shot មុន
         else:
             shots.append((a, b))
+
+    # shot **ដំបូង** គ្មាន shot មុនឲ្យបញ្ចូលទេ ដូច្នេះបើវាខ្លីពេក បញ្ចូលវាទៅ shot បន្ទាប់។
+    # បើមិនដូច្នោះ clip ចាប់ផ្តើមដោយការភ្លឹបភ្លែត ១ វិនាទី (យើងឃើញពិតក្នុង clip #3)។
+    if len(shots) > 1 and shots[0][1] - shots[0][0] < min_shot_sec:
+        shots[1] = (shots[0][0], shots[1][1])
+        shots.pop(0)
+
     return shots or [(start, end)]
 
 
@@ -487,10 +494,14 @@ def plan_shot(video_path: Path, start: float, end: float, size: tuple[int, int],
         if right.cx - left.cx >= frame_w * config.MIN_FACE_SEPARATION:
             # ប្រើ seat សកលបើមាន (ស្ថិតស្ថេរជាង) បើអត់ ប្រើមុខពី frame នេះ
             a, b = seats.as_tuple() if seats else (left, right)
+            biggest = max(best, key=lambda f: f.w)
             return Layout(
                 kind="split",
                 top=panel_box(a, frame_w, frame_h),
                 bottom=panel_box(b, frame_w, frame_h),
+                # box បម្រុង: បើ split ខ្លីពេក យើងប្តូរទៅ single ដោយប្រើប្រអប់នេះ
+                # ដែលគណនាពី frame របស់ shot នេះផ្ទាល់ (មិនមែនខ្ចីពី shot ផ្សេង)។
+                box=single_box(biggest, frame_w, frame_h),
             )
 
     if force == "split" and seats:
@@ -503,6 +514,39 @@ def plan_shot(video_path: Path, start: float, end: float, size: tuple[int, int],
                       person=identify(best_frame, best[0], seats))
 
     return Layout(kind="center", box=center_box(frame_w, frame_h))
+
+
+def smooth_segments(segments: list[Segment],
+                    min_split_sec: float | None = None) -> list[Segment]:
+    """ដក layout ដែលលោតឡើងមួយភ្លែត រួចបញ្ចូល segment ដែលដូចគ្នា.
+
+    ការប្តូរ layout ជាការប្តូររូបភាពធំ។ បើវាមានតែ ២-៣ វិនាទី អ្នកមើលឃើញជាការភ្លឹបភ្លែត
+    មិនមែនជាជម្រើសរចនាទេ។ យើងបន្ទាបវាទៅ single (ដោយប្រើប្រអប់បម្រុងដែលគណនាពី
+    shot នោះផ្ទាល់) រួចបញ្ចូល segment ជាប់គ្នាដែលមាន layout ដូចបេះបិទ។
+    """
+    min_split_sec = config.MIN_SPLIT_SEC if min_split_sec is None else min_split_sec
+
+    cleaned: list[Segment] = []
+    for segment in segments:
+        layout = segment.layout
+        if (layout.kind == "split" and segment.duration < min_split_sec
+                and layout.box is not None):
+            layout = Layout(kind="single", box=layout.box, person=layout.person)
+        cleaned.append(Segment(start=segment.start, end=segment.end, layout=layout))
+
+    merged: list[Segment] = []
+    for segment in cleaned:
+        if merged and _same_layout(merged[-1].layout, segment.layout):
+            merged[-1] = Segment(start=merged[-1].start, end=segment.end,
+                                 layout=merged[-1].layout)
+        else:
+            merged.append(segment)
+    return merged
+
+
+def _same_layout(a: Layout, b: Layout) -> bool:
+    return (a.kind == b.kind and a.top == b.top and a.bottom == b.bottom
+            and a.box == b.box)
 
 
 def plan_clip(video_path: Path, clip: Clip, size: tuple[int, int],
@@ -525,6 +569,7 @@ def plan_clip(video_path: Path, clip: Clip, size: tuple[int, int],
         Segment(start=a, end=b, layout=plan_shot(video_path, a, b, size, seats, force))
         for a, b in shots
     ]
+    segments = smooth_segments(segments)
     return order_split_panels(segments, size, seats)
 
 

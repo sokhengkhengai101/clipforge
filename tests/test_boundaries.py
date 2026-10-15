@@ -46,7 +46,7 @@ def simple_transcript(n_sentences: int = 3) -> Transcript:
     return transcript_from_words(words, duration=n_sentences * 10.0)
 
 
-# ---------- _ends_sentence ----------
+# ---------- ends_sentence ----------
 
 @pytest.mark.parametrize("text,expected", [
     ("hello.", True),
@@ -57,8 +57,8 @@ def simple_transcript(n_sentences: int = 3) -> Transcript:
     ("hello", False),
     (" word, ", False),
 ])
-def test_ends_sentence(text, expected):
-    assert B._ends_sentence(text) is expected
+def testends_sentence(text, expected):
+    assert B.ends_sentence(text) is expected
 
 
 # ---------- build_sentences ----------
