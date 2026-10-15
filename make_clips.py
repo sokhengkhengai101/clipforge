@@ -95,6 +95,11 @@ def main(
                                help="auto (split/មុខ/center តាម shot), center (ចាស់), split"),
     aspect: str = typer.Option("9:16", "--aspect",
                                help="សមាមាត្រ output: 9:16, 4:5, 1:1, 16:9"),
+    caption_words: int = typer.Option(config.CAPTION_MAX_WORDS_PER_CUE, "--caption-words",
+                                      help="ពាក្យអតិបរមាក្នុងមួយ cue (2-8)"),
+    caption_color: str = typer.Option(config.CAPTION_KEYWORD_COLOR, "--caption-color",
+                                      help="ពណ៌ពាក្យសកម្ម: yellow, green, cyan, orange, "
+                                           "white ឬ #RRGGBB"),
 ) -> None:
     # --redo ដាច់ជំហាន ដើម្បីកុំឲ្យការកែ prompt បង្ខំ transcribe ៨ នាទីឡើងវិញ
     steps_to_redo = {name.strip().lower() for name in redo.split(",") if name.strip()}
@@ -117,9 +122,15 @@ def main(
     # ត្រូវហៅមុនគេ — ទំហំ font, margin និងសមាមាត្រផ្ទាំងទាំងអស់គណនាពីវា
     try:
         out_width, out_height = config.apply_aspect(aspect)
+        config.CAPTION_KEYWORD_COLOR = config.resolve_caption_color(caption_color)
     except ValueError as e:
         console.print(f"[red]{e}[/red]")
         raise typer.Exit(code=2)
+
+    if not 2 <= caption_words <= 8:
+        console.print(f"[red]--caption-words ត្រូវនៅចន្លោះ 2-8 (ទទួលបាន {caption_words})[/red]")
+        raise typer.Exit(code=2)
+    config.CAPTION_MAX_WORDS_PER_CUE = caption_words
 
     device, default_whisper, compute = config.detect_device()
     whisper_model = whisper_model or default_whisper
@@ -136,6 +147,8 @@ def main(
     console.print(f"  llm         : {model}")
     console.print(f"  layout      : {layout}")
     console.print(f"  aspect      : {aspect}  ({out_width}x{out_height})")
+    console.print(f"  caption     : {caption_words} ពាក្យ/cue, "
+                  f"ពណ៌ {config.CAPTION_KEYWORD_COLOR}")
 
     # ---------- Step 1: audio ----------
     try:

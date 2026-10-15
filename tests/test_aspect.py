@@ -124,3 +124,29 @@ def test_caption_block_never_dominates_the_frame():
 def test_landscape_font_is_capped_not_scaled():
     config.apply_aspect("16:9")
     assert config.CAPTION_FONT_SIZE < int(110 * 1920 / 1080)
+
+
+# ---------- ជម្រើស caption ពី CLI ----------
+
+@pytest.mark.parametrize("value,expected", [
+    ("green", "#00E054"),
+    ("YELLOW", "#FFD23F"),
+    ("  cyan  ", "#00E5FF"),
+    ("#00E054", "#00E054"),
+    ("00e054", "#00E054"),       # គ្មាន # ក៏ទទួល
+    ("#abcdef", "#ABCDEF"),
+])
+def test_resolve_caption_color(value, expected):
+    assert config.resolve_caption_color(value) == expected
+
+
+@pytest.mark.parametrize("value", ["banana", "#12345", "#GGGGGG", ""])
+def test_resolve_caption_color_rejects_junk(value):
+    with pytest.raises(ValueError, match="ពណ៌មិនស្គាល់"):
+        config.resolve_caption_color(value)
+
+
+def test_every_preset_is_valid_hex():
+    for name, hex_value in config.CAPTION_COLOR_PRESETS.items():
+        assert config.resolve_caption_color(name) == hex_value
+        assert len(hex_value) == 7 and hex_value.startswith("#")

@@ -114,7 +114,15 @@ CAPTION_MAX_CHARS_PER_LINE = 16
 CAPTION_MAX_WORDS_PER_CUE = 4
 # ALL CAPS ជា style ស្តង់ដារនៃ short-form — អានបានលឿនពេលរំកិលមើល
 CAPTION_UPPERCASE = True
-CAPTION_KEYWORD_COLOR = "#FFD23F"   # លឿង — keyword highlight (OpusClip ប្រើបៃតង #00E054)
+CAPTION_KEYWORD_COLOR = "#FFD23F"   # លឿង (design token ក្នុង CLAUDE.md)
+# ពណ៌ដែលជ្រើសបានពី CLI (`--caption-color`)។ OpusClip ប្រើបៃតង។
+CAPTION_COLOR_PRESETS = {
+    "yellow": "#FFD23F",
+    "green": "#00E054",
+    "cyan": "#00E5FF",
+    "orange": "#FF7A00",
+    "white": "#FFFFFF",
+}
 # cue ឥឡូវខ្លី (16 តួ × 3 បន្ទាត់) ដូច្នេះ ១ ពាក្យក្នុងមួយ cue គ្រប់គ្រាន់។
 # ២ ពាក្យធ្វើឲ្យពាក់កណ្តាល cue ក្លាយជាលឿង ហើយការបំលេចអស់អត្ថន័យ។
 CAPTION_KEYWORDS_PER_CUE = 1
@@ -293,3 +301,22 @@ def apply_aspect(name: str) -> tuple[int, int]:
         CAPTION_MARGIN_V_SPLIT = CAPTION_MARGIN_V   # គ្មានស្នាមផ្ដេកទេ
 
     return OUT_WIDTH, OUT_HEIGHT
+
+
+def resolve_caption_color(value: str) -> str:
+    """ទទួលឈ្មោះ preset ("green") ឬ hex ("#00E054") -> ត្រឡប់ hex.
+
+    យើងទទួលទាំងពីរដើម្បីឲ្យ CLI ងាយប្រើ តែនៅអាចដាក់ពណ៌ brand ផ្ទាល់ខ្លួនបាន។
+    """
+    text = value.strip()
+    if text.lower() in CAPTION_COLOR_PRESETS:
+        return CAPTION_COLOR_PRESETS[text.lower()]
+
+    candidate = text if text.startswith("#") else "#" + text
+    if len(candidate) == 7 and all(c in "0123456789abcdefABCDEF" for c in candidate[1:]):
+        return candidate.upper()
+
+    raise ValueError(
+        f"ពណ៌មិនស្គាល់: {value!r} "
+        f"(ប្រើ {', '.join(CAPTION_COLOR_PRESETS)} ឬ #RRGGBB)"
+    )
