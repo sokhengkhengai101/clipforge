@@ -100,6 +100,14 @@ MIN_FACE_SEPARATION = 0.15          # មុខ ២ ត្រូវឃ្លា�
 SEAT_SAMPLE_FRAMES = 60             # frame ដែលស្កេនទាំង video ដើម្បីរកកៅអី
 MIN_SEAT_SAMPLES = 5                # ត្រូវឃើញ two-shot យ៉ាងតិចប៉ុណ្ណេះ ទើបទុកចិត្ត
 SHOT_SAMPLE_FRAMES = 3              # frame គំរូក្នុងមួយ shot
+# ក្នុង shot ដែលកាមេរ៉ា/មនុស្សផ្លាស់ទី ប្រអប់ថេរធ្វើឲ្យមុខចេញក្រៅរូប (យើងឃើញពិត:
+# មុខរំកិលពី x=1200 ទៅ x=724 ក្នុង ២ វិនាទី)។ បើចលនាធំជាងដែននេះ (ភាគរយនៃទទឹង)
+# យើងយក frame បន្ថែម រួចធ្វើ crop ដែលរំកិលតាម។
+TRACK_MOVE_THRESHOLD = 0.08
+TRACK_SAMPLE_SEC = 1.0              # ចន្លោះពេលយក frame ពេលតាមដាន
+TRACK_DEADZONE = 0.02               # ចលនាតូចជាងនេះ (ភាគរយទទឹង) មិនរំកិលទេ
+TRACK_MAX_POINTS = 40               # ចំណុចតាមដានអតិបរមាក្នុងមួយ shot (expression មិនឲ្យវែងពេក)
+TRACK_SMOOTH_WINDOW = 3             # មធ្យមរំកិល — បន្ថយការញ័ររបស់ detector
 # វិភាគ shot ស្របគ្នា — ពេលភាគច្រើនចំណាយលើការរង់ចាំ FFmpeg មិនមែន CPU ទេ។
 PLAN_WORKERS = 4
 

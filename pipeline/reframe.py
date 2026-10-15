@@ -75,14 +75,22 @@ class Seats:
 
 @dataclass
 class Box:
-    """ប្រអប់ crop (pixel ក្នុងរូបដើម). លេខគូទាំងអស់ ព្រោះ H.264 តម្រូវ."""
+    """ប្រអប់ crop (pixel ក្នុងរូបដើម). លេខគូទាំងអស់ ព្រោះ H.264 តម្រូវ.
+
+    `x_expr` ជា expression របស់ FFmpeg ដែលគណនា x តាមពេល (`t`)។ យើងប្រើវាពេល
+    មុខផ្លាស់ទីក្នុង shot — ប្រអប់ថេរធ្វើឲ្យមុខចេញក្រៅរូប។ `x` នៅតែត្រូវកំណត់
+    ជាតម្លៃមធ្យម ដើម្បីឲ្យកូដផ្សេង (ការគណនាការពង្រីក) នៅដំណើរការ។
+    """
 
     x: int
     y: int
     w: int
     h: int
+    x_expr: str | None = None
 
     def as_filter(self) -> str:
+        if self.x_expr:
+            return f"crop={self.w}:{self.h}:x='{self.x_expr}':y={self.y}"
         return f"crop={self.w}:{self.h}:{self.x}:{self.y}"
 
 
@@ -363,6 +371,143 @@ def center_box(frame_w: int, frame_h: int) -> Box:
                       width, height, frame_w, frame_h)
 
 
+# ---------- ការតាមដានមុខក្នុង shot (crop ដែលរំកិល) ----------
+
+def face_movement(faces: list[Face], frame_w: int) -> float:
+    """ចលនាផ្ដេកធំបំផុតរវាងមុខទាំងនេះ ជាភាគរយនៃទទឹងរូប."""
+    if len(faces) < 2:
+        return 0.0
+    centres = [f.cx for f in faces]
+    return (max(centres) - min(centres)) / frame_w
+
+
+def track_times(start: float, end: float, step: float | None = None,
+                max_points: int | None = None) -> list[float]:
+    """ពេលវេលាដែលត្រូវទាញ frame ពេលតាមដាន — ច្រើនជាង `sample_times` ហើយជៀសគែម.
+
+    គែម shot ជាកន្លែងកាមេរ៉ាកាត់ ដូច្នេះ frame នៅទីនោះអាចនៅជារូបនៃ shot មុន។
+    `max_points` ទប់កុំឲ្យ expression វែងពេកលើ shot វែង (៦០ វិនាទីគ្មានការកាត់)។
+    """
+    step = config.TRACK_SAMPLE_SEC if step is None else step
+    max_points = config.TRACK_MAX_POINTS if max_points is None else max_points
+
+    span = max(0.0, end - start)
+    edge = min(0.2, span / 4)
+    first, last = start + edge, end - edge
+    if last <= first:
+        return [(start + end) / 2]
+
+    count = int((last - first) / max(step, 1e-6)) + 1
+    count = max(2, min(max_points, count))
+    gap = (last - first) / (count - 1)
+    return [first + gap * i for i in range(count)]
+
+
+def track_face_centres(video_path: Path, start: float, end: float,
+                       size: tuple[int, int]) -> list[tuple[float, float]]:
+    """(ពេលធៀបនឹងដើម shot, កណ្តាលមុខ x) រាល់ frame គំរូដែលឃើញមុខ.
+
+    ពេលធៀបនឹង**ដើម shot** ព្រោះ `render.py` ដាក់ `setpts=PTS-STARTPTS` លើ shot
+    នីមួយៗ ដូច្នេះ `t` ក្នុង filter ចាប់ផ្តើមពី 0 រាល់ shot។
+    """
+    tracked: list[tuple[float, float]] = []
+    for moment in track_times(start, end):
+        faces = detect_faces(video_path, moment, size)
+        if faces:
+            biggest = max(faces, key=lambda f: f.w)
+            tracked.append((moment - start, biggest.cx))
+    return tracked
+
+
+def moving_average(points: list[tuple[float, float]],
+                   window: int | None = None) -> list[tuple[float, float]]:
+    """ធ្វើឲ្យគន្លងរលូន — detector រញ្ជួយបន្តិចរាល់ frame ហើយ crop ដែលញ័រមើលមិនបាន."""
+    window = config.TRACK_SMOOTH_WINDOW if window is None else window
+    if window <= 1 or len(points) < 3:
+        return list(points)
+
+    half = window // 2
+    smoothed: list[tuple[float, float]] = []
+    for index, (moment, _) in enumerate(points):
+        near = [x for _, x in points[max(0, index - half):index + half + 1]]
+        smoothed.append((moment, sum(near) / len(near)))
+    return smoothed
+
+
+def apply_deadzone(points: list[tuple[float, float]],
+                   deadzone_px: float) -> list[tuple[float, float]]:
+    """ទុកតែចំណុចដែលឃ្លាតពីចំណុចមុនគួរសម — ចលនាតូចមិនសមនឹងរំកិលកាមេរ៉ាទេ.
+
+    ចំណុចដែលដកចេញនៅតែត្រូវឆ្លងកាត់ ព្រោះ expression ទាញបន្ទាត់ត្រង់រវាងចំណុច
+    ដែលនៅសល់។ ចំណុចចុងក្រោយត្រូវបន្ថែមវិញ ដើម្បីកាន់តម្លៃដល់ចប់ shot។
+    """
+    if not points:
+        return []
+
+    kept = [points[0]]
+    for moment, value in points[1:]:
+        if abs(value - kept[-1][1]) >= deadzone_px:
+            kept.append((moment, value))
+    if kept[-1][0] < points[-1][0]:
+        kept.append((points[-1][0], kept[-1][1]))
+    return kept
+
+
+def build_x_expression(points: list[tuple[float, float]]) -> str:
+    """Expression របស់ FFmpeg ដែលគណនា x តាមពេល `t` (បន្ទាត់ត្រង់រវាងចំណុចវាស់បាន).
+
+    FFmpeg គណនាវាឡើងវិញ**រាល់ frame** ដូច្នេះការរំកិលរលូន មិនមែនលោតទេ។ ទម្រង់៖
+    `if(lt(t,t1), x0+(t-t0)*ជម្រាល, ...)` ហើយក្រោយចំណុចចុងក្រោយ x នៅនឹង។
+    """
+    if not points:
+        return "0"
+    if len(points) == 1:
+        return f"{points[0][1]:.0f}"
+
+    expression = f"{points[-1][1]:.0f}"          # ក្រោយចំណុចចុងក្រោយ: នៅនឹង
+    for (t0, x0), (t1, x1) in reversed(list(zip(points, points[1:]))):
+        slope = (x1 - x0) / max(1e-6, t1 - t0)
+        expression = (f"if(lt(t,{t1:.3f}),"
+                      f"{x0:.0f}+(t-{t0:.3f})*{slope:.2f},{expression})")
+
+    first_t, first_x = points[0]
+    if first_t > 0.001:                          # មុនចំណុចដំបូង: នៅនឹងដែរ
+        expression = f"if(lt(t,{first_t:.3f}),{first_x:.0f},{expression})"
+    return expression
+
+
+def tracked_box(video_path: Path, start: float, end: float,
+                size: tuple[int, int], reference: Face) -> Box:
+    """ប្រអប់ 9:16 ដែលរំកិលតាមមុខក្នុង shot នេះ.
+
+    បើការតាមដានមិនបាន (ចាប់មុខបានតិចពេក ឬមុខស្ទើរនៅនឹង) ត្រឡប់ប្រអប់ថេរធម្មតា។
+    """
+    frame_w, frame_h = size
+    static = single_box(reference, frame_w, frame_h)
+
+    centres = track_face_centres(video_path, start, end, size)
+    if len(centres) < 2:
+        return static
+    spread = max(x for _, x in centres) - min(x for _, x in centres)
+    if spread / frame_w < config.TRACK_MOVE_THRESHOLD:
+        return static              # frame ក្រាស់បង្ហាញថាវាស្ទើរនៅនឹង -> ប្រអប់ថេរ
+
+    # x នៃប្រអប់ = កណ្តាលមុខ − ពាក់កណ្តាលទទឹងប្រអប់ ហើយកាត់ឲ្យនៅក្នុងរូប
+    half = static.w / 2
+    limit = float(frame_w - static.w)
+    points = [(moment, min(max(0.0, cx - half), limit)) for moment, cx in centres]
+    points = apply_deadzone(moving_average(points), frame_w * config.TRACK_DEADZONE)
+    if len(points) < 2:
+        return static
+    if max(x for _, x in points) - min(x for _, x in points) < 2:
+        return static
+
+    # `x` ជាតម្លៃមធ្យម: កូដផ្សេង (ការគណនាការពង្រីក, test) នៅប្រើវាបាន
+    average = _even_pos(sum(x for _, x in points) / len(points))
+    return Box(x=average, y=static.y, w=static.w, h=static.h,
+               x_expr=build_x_expression(points))
+
+
 # ---------- កៅអី (seat) សកល ----------
 
 def sample_times(start: float, end: float, count: int) -> list[float]:
@@ -486,9 +631,12 @@ def plan_shot(video_path: Path, start: float, end: float, size: tuple[int, int],
 
     best: list[Face] = []
     best_frame = None
+    seen: list[Face] = []          # មុខធំបំផុតក្នុង frame គំរូនីមួយៗ — ប្រើធៀបចលនា
     for moment in sample_times(start, end, config.SHOT_SAMPLE_FRAMES):
         frame = grab_frame(video_path, moment, size)
         faces = detect_faces_in_frame(frame, size)
+        if faces:
+            seen.append(max(faces, key=lambda f: f.w))
         if len(faces) > len(best):
             best, best_frame = faces, frame
         if len(best) >= 2:
@@ -515,7 +663,13 @@ def plan_shot(video_path: Path, start: float, end: float, size: tuple[int, int],
                       bottom=panel_box(seats.right, frame_w, frame_h))
 
     if best:
-        return Layout(kind="single", box=single_box(best[0], frame_w, frame_h),
+        # បើ frame គំរូបង្ហាញថាមុខផ្លាស់ទី ប្រអប់ថេរនឹងកាត់មុខចេញ។
+        # ពេលនោះ យើងយក frame បន្ថែម រួចធ្វើ crop ដែលរំកិលតាមមុខ។
+        if face_movement(seen, frame_w) > config.TRACK_MOVE_THRESHOLD:
+            box = tracked_box(video_path, start, end, size, best[0])
+        else:
+            box = single_box(best[0], frame_w, frame_h)
+        return Layout(kind="single", box=box,
                       person=identify(best_frame, best[0], seats))
 
     return Layout(kind="center", box=center_box(frame_w, frame_h))

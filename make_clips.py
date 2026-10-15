@@ -298,10 +298,12 @@ def main(
         console.print(f"[dim]  តម្រៀប {len(final)} candidate -> យក {max_clips} ល្អបំផុត[/dim]")
     final = final[:max_clips]
 
-    clips_file = save_clips(final, out_dir / "clips.json", model=model,
-                            prompt=config.HIGHLIGHT_PROMPT)
-
+    # `--full` មិនត្រូវសរសេរ clips.json ទេ — មិនមានការជ្រើសអ្វីទាំងអស់
+    # ហើយបើសរសេរ នោះ run ធម្មតាបន្ទាប់នឹងអាន cache នោះ រួច render វីដៀអូពេញជា "clip" ។
+    clips_file = out_dir / "clips.json"
     if not full:
+        clips_file = save_clips(final, clips_file, model=model,
+                                prompt=config.HIGHLIGHT_PROMPT)
         console.print(f"[green]✔ 4/6 boundaries[/green]  {short_path(clips_file)}  "
                       f"({len(final)} clips)")
     for warning in snap_warnings:

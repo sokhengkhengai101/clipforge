@@ -435,3 +435,15 @@ def test_short_filtergraph_stays_inline(tmp_path, fast_render, monkeypatch):
     R.render_clip(FIXTURE, sample_clip(0.0, 5.0), tmp_path / "c.mp4",
                   segments=two_segments(0.0, 5.0))
     assert "-filter_complex" in seen["cmd"] and "-/filter_complex" not in seen["cmd"]
+
+
+def test_moving_crop_expression_survives_the_filtergraph():
+    """crop ដែលរំកិលត្រូវនៅក្នុង quote — បើអត់ FFmpeg អាន comma ជាសញ្ញាបែង filter."""
+    expression = "if(lt(t,1.000),100+(t-0.000)*50.00,300)"
+    segments = [Segment(start=10.0, end=20.0, layout=Layout(
+        kind="single", box=Box(x=200, y=0, w=180, h=240, x_expr=expression)))]
+    f = R.build_segments_filter(segments, 10.0)
+    assert f"x='{expression}'" in f
+    # comma នៃ expression ត្រូវនៅក្នុង quote ហើយ scale នៅបន្តដូចដើម
+    assert f.startswith("[0:v]crop=180:240:x='")
+    assert ",scale=" in f.split("'")[2]

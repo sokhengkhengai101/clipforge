@@ -35,8 +35,13 @@ Known limits to judge clips against:
   the same as `--redo all`.
 - `.ass` and `.mp4` for a clip must share a folder: render runs FFmpeg with `cwd` set to that
   folder so the `ass=` filter never sees a Windows path (`:` and `\` are filtergraph syntax).
+- `SCENE_THRESHOLD = 0.3` misses real cuts. At 33.78-40.46s of the 47-min interview it reports no
+  cut, while 0.2 finds three (34.33, 35.91, 39.29) that match what the frames show. A montage then
+  lands in one "shot" and gets one crop box. Moving crop hides most of it; lowering the threshold
+  is untested and would change every clip, so it is a separate step.
 
-Out of scope for Phase 0: face tracking, diarization, Khmer translation, UI, batch.
+Out of scope for Phase 0: per-frame MediaPipe tracking, diarization, Khmer
+translation, UI, batch. (Sampled face tracking inside a shot is in, see Layout below.)
 
 ## Tech choices
 
@@ -97,14 +102,22 @@ clipforge/
   (`clips/`, `clips_4x5/`, ...). Portrait and square stack split panels vertically; 16:9 puts
   them side by side, since a 1920x540 panel is too shallow to frame a face.
 - Layout: `--layout auto|center|split` (default auto: split on two-shots, face crop on close-ups,
-  centre crop when no face is found)
+  centre crop when no face is found). On a close-up where the face moves more than 8% of the frame
+  width across the shot's sample frames, the crop follows it: `reframe` samples the shot every 1 s
+  (40 points max), smooths the path (moving average + 2% deadzone) and emits one FFmpeg
+  `crop=...:x='if(lt(t,..),..)'` expression, so FFmpeg recomputes x every frame. Measured on the
+  shot at 33.78-40.46s of the 47-min interview: a static box left the face jammed against the frame
+  edge in 12 of 26 sampled frames, the moving box keeps it at x=200-670 of 1080. It costs one frame
+  grab per second of moving shot (five clips: 40s -> 54s with warm caches), and only 2 of 44
+  segments in those five clips move enough to trigger it.
 - Captions: `--caption-words 2..8` (default 5) and `--caption-color yellow|green|cyan|orange|white|#RRGGBB`
   (default #FFD23F from the design tokens; OpusClip uses green)
 - Encoder: `--encoder auto|nvenc|x264` (default auto: NVENC when the GPU accepts it).
   Measured on a 17.5s clip at 1080x1920, VMAF against lossless: libx264 medium 12.6s/6.7MB/97.96,
   h264_nvenc p5 cq26 2.9s/7.0MB/98.02. Rendering five clips went from 1m25s to 19s.
 - Full video: `--full` renders the whole video as one vertical file into `output/<name>/full/`,
-  skipping highlight selection. Measured on the 47-min interview: 360 shots, 17,209 caption cues,
-  15m30s total (4.5 min planning, 10m17s render), 959MB.
+  skipping highlight selection. It does not write `clips.json` -- it used to, and the next ordinary
+  run then read that cache and rendered the whole video as "clip 1". Measured on the 47-min
+  interview: 360 shots, 17,209 caption cues, 15m30s total (4.5 min planning, 10m17s render), 959MB.
 - Review output: `python review.py <video name> --frames`
 - Test: `pytest -q`

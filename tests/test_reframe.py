@@ -377,3 +377,181 @@ def test_real_camera_shots_survive_the_default_merge():
     shots = R.split_into_shots(0.0, 20.0, [5.7, 7.1])      # ប្រើ config default
     assert len(shots) == 3, "shot 1.4s ត្រូវតែរស់ ដើម្បីទទួល layout ផ្ទាល់ខ្លួន"
     assert shots[1] == (5.7, 7.1)
+
+
+# ---------- ការតាមដានមុខ (moving crop) ----------
+
+def eval_x(expression: str, t: float) -> float:
+    """គណនា expression របស់ FFmpeg ក្នុង Python — តេស្តលេខពិតមិនមែនត្រឹម text."""
+    python_expr = expression.replace("if(", "_if(")
+    return float(eval(python_expr, {
+        "_if": lambda condition, yes, no: yes if condition else no,
+        "lt": lambda a, b: a < b,
+        "t": t,
+    }))
+
+
+def fake_frames(monkeypatch, position):
+    """Video ក្លែងក្លាយ: `position(t)` ត្រឡប់កណ្តាលមុខ (ឬ None = រកមុខមិនបាន).
+
+    `grab_frame` ត្រឡប់ត្រឹម timestamp ហើយ detector ប្រើតម្លៃនោះ ដូច្នេះ fake
+    តែមួយបម្រើទាំង `plan_shot` (grab + detect_faces_in_frame) ទាំង `detect_faces`។
+    """
+    monkeypatch.setattr(R, "grab_frame", lambda path, t, size: t)
+
+    def detect(frame, size):
+        if frame is None:
+            return []
+        cx = position(frame)
+        return [] if cx is None else [face(cx=cx, w=340, h=400)]
+
+    monkeypatch.setattr(R, "detect_faces_in_frame", detect)
+
+
+def test_face_movement():
+    assert R.face_movement([face(cx=900), face(cx=900)], 1920) == 0.0
+    assert R.face_movement([face(cx=900)], 1920) == 0.0
+    # 1300 -> 724: ឃ្លាត 576px នៃ 1920 = 30%
+    assert R.face_movement([face(cx=1300), face(cx=724), face(cx=900)],
+                           1920) == pytest.approx(0.3)
+
+
+def test_track_times_avoids_shot_edges():
+    times = R.track_times(10.0, 16.0)
+    assert times == sorted(times)
+    assert all(10.0 < t < 16.0 for t in times)
+    assert len(times) >= 5                     # ~1 វិនាទីម្តង លើ shot ៦ វិនាទី
+
+
+def test_track_times_respects_max_points():
+    times = R.track_times(0.0, 300.0, step=1.0, max_points=10)
+    assert len(times) == 10
+
+
+def test_track_times_on_very_short_shot():
+    assert len(R.track_times(5.0, 5.05)) >= 1
+
+
+def test_build_x_expression_constant_for_one_point():
+    assert R.build_x_expression([(0.0, 400.0)]) == "400"
+
+
+def test_build_x_expression_interpolates_linearly():
+    expression = R.build_x_expression([(0.0, 100.0), (2.0, 300.0)])
+    assert eval_x(expression, 0.0) == pytest.approx(100, abs=1)
+    assert eval_x(expression, 1.0) == pytest.approx(200, abs=1)
+    assert eval_x(expression, 2.0) == pytest.approx(300, abs=1)
+    assert eval_x(expression, 9.0) == pytest.approx(300, abs=1)   # ក្រោយចុង: នៅនឹង
+
+
+def test_build_x_expression_holds_value_before_first_point():
+    expression = R.build_x_expression([(0.5, 100.0), (1.5, 200.0)])
+    assert eval_x(expression, 0.0) == pytest.approx(100, abs=1)
+    assert eval_x(expression, 0.4) == pytest.approx(100, abs=1)
+
+
+def test_build_x_expression_handles_many_points():
+    points = [(i * 1.0, 100.0 + i * 20) for i in range(20)]
+    expression = R.build_x_expression(points)
+    for moment, value in points:
+        assert eval_x(expression, moment) == pytest.approx(value, abs=1)
+
+
+def test_apply_deadzone_drops_small_moves():
+    points = [(0.0, 100.0), (1.0, 105.0), (2.0, 300.0)]
+    kept = R.apply_deadzone(points, 40.0)
+    assert [t for t, _ in kept] == [0.0, 2.0]     # 105 ជិត 100 ពេក -> ដក
+
+
+def test_apply_deadzone_holds_last_value_to_the_end():
+    """ចំណុចចុងក្រោយត្រូវរក្សាពេល ដើម្បីកុំឲ្យ crop លោតត្រឡប់វិញនៅចុង shot."""
+    kept = R.apply_deadzone([(0.0, 100.0), (1.0, 102.0), (3.0, 104.0)], 40.0)
+    assert kept[-1] == (3.0, 100.0)
+
+
+def test_moving_average_smooths_jitter():
+    points = [(0.0, 100.0), (1.0, 200.0), (2.0, 100.0)]
+    smoothed = R.moving_average(points, window=3)
+    assert [t for t, _ in smoothed] == [0.0, 1.0, 2.0]
+    assert smoothed[1][1] == pytest.approx(133.33, abs=0.1)
+
+
+def test_moving_average_without_window():
+    points = [(0.0, 100.0), (1.0, 200.0)]
+    assert R.moving_average(points, window=1) == points
+
+
+def test_box_as_filter_with_expression():
+    box = R.Box(x=500, y=0, w=606, h=1080,
+                x_expr="if(lt(t,1.000),100,200)")
+    # expression ត្រូវស្ថិតក្នុង quote ព្រោះ comma ជាសញ្ញាបែង filter របស់ FFmpeg
+    assert box.as_filter() == "crop=606:1080:x='if(lt(t,1.000),100,200)':y=0"
+
+
+def test_tracked_box_falls_back_when_face_is_still(monkeypatch):
+    fake_frames(monkeypatch, lambda t: 960)
+    box = R.tracked_box(None, 10.0, 16.0, SIZE, face(cx=960, w=340, h=400))
+    assert box.x_expr is None
+    assert box.as_filter() == R.single_box(face(cx=960, w=340, h=400), 1920, 1080).as_filter()
+
+
+def test_tracked_box_falls_back_when_no_faces(monkeypatch):
+    fake_frames(monkeypatch, lambda t: None)
+    box = R.tracked_box(None, 10.0, 16.0, SIZE, face(cx=960))
+    assert box.x_expr is None
+
+
+def test_tracked_box_keeps_moving_face_inside(monkeypatch):
+    """ករណីពិតដែលខូច: មុខរំកិលពី x≈1300 ទៅ x≈724 ក្នុង shot ៦.៧ វិនាទី."""
+    start, end = 33.78, 40.46
+
+    def position(t):
+        progress = (t - start) / (end - start)
+        return 1300 - 576 * progress
+
+    fake_frames(monkeypatch, position)
+    box = R.tracked_box(None, start, end, SIZE, face(cx=1300, w=340, h=400))
+    assert box.x_expr is not None
+
+    # រាល់ ០.៥ វិនាទី: មុខ (ទទឹង 340) ត្រូវនៅក្នុងប្រអប់ទាំងស្រុង
+    moment = 0.0
+    while moment <= end - start:
+        x = eval_x(box.x_expr, moment)
+        cx = position(start + moment)
+        assert 0 <= x <= 1920 - box.w
+        assert x <= cx - 170 + 2 and cx + 170 - 2 <= x + box.w, f"t={moment}"
+        moment += 0.5
+
+
+def test_tracked_box_clamps_at_frame_edge(monkeypatch):
+    """មុខរំកិលចេញក្រៅគែម -> x ត្រូវឈប់នៅ 0 និង frame_w - w."""
+    fake_frames(monkeypatch, lambda t: -200 + (t - 0.0) * 500)
+    box = R.tracked_box(None, 0.0, 6.0, SIZE, face(cx=100, w=340, h=400))
+    assert box.x_expr is not None
+    for moment in (0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0):
+        x = eval_x(box.x_expr, moment)
+        assert 0 <= x <= 1920 - box.w, f"t={moment} x={x}"
+
+
+def test_plan_shot_tracks_a_moving_face(monkeypatch):
+    def position(t):
+        return 1300 - 90 * (t - 10.0)        # រំកិល 90px/វិនាទី
+
+    fake_frames(monkeypatch, position)
+    layout = R.plan_shot(None, 10.0, 16.0, SIZE)
+    assert layout.kind == "single"
+    assert layout.box.x_expr is not None
+    assert layout.box.x % 2 == 0             # x មធ្យមនៅតែជាលេខគូ
+
+
+def test_plan_shot_keeps_static_box_for_a_still_face(monkeypatch):
+    fake_frames(monkeypatch, lambda t: 960)
+    layout = R.plan_shot(None, 10.0, 16.0, SIZE)
+    assert layout.kind == "single"
+    assert layout.box.x_expr is None
+
+
+def test_plan_shot_center_mode_never_tracks(monkeypatch):
+    fake_frames(monkeypatch, lambda t: 1300 - 90 * (t - 10.0))
+    layout = R.plan_shot(None, 10.0, 16.0, SIZE, force="center")
+    assert layout.kind == "center" and layout.box.x_expr is None
