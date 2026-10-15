@@ -377,15 +377,30 @@ def word_intervals(cue: Cue, clip_start: float = 0.0) -> list[tuple[float, float
     words = [w for line in cue.lines for w in line]
     intervals: list[tuple[float, float]] = []
     for index, word in enumerate(words):
-        start = max(cue.start, word.start - clip_start)
+        start = min(max(cue.start, word.start - clip_start), cue.end)
         if index + 1 < len(words):
             end = max(start, words[index + 1].start - clip_start)
         else:
             end = cue.end
         if end - start < config.CAPTION_MIN_WORD_SEC:
             end = start + config.CAPTION_MIN_WORD_SEC
-        intervals.append((start, min(end, cue.end) if index + 1 < len(words) else end))
+        # **កាត់ត្រឹម `cue.end` ជានិច្ច** រួមទាំងពាក្យចុងក្រោយ។ ច្បាប់ប្រវែងអប្បបរមា
+        # ធ្លាប់រុញពាក្យចុងក្រោយហួស cue ទៅត្រួត cue បន្ទាប់ 0.1s ហើយ caption ពីរ
+        # លេចព្រមគ្នាលើអេក្រង់ (យើងឃើញវាក្នុង clip_02 នាទី 30.02)។
+        intervals.append((start, min(end, cue.end)))
     return intervals
+
+
+def display_word(text: str) -> str:
+    """អត្ថបទដែលបង្ហាញលើអេក្រង់ — លុបវណ្ណយុត្តិ តែរក្សា ' និង - ក្នុងពាក្យ.
+
+    `ends_sentence()` និងការរៀបចំ cue នៅតែប្រើអត្ថបទ**ដើម** ដូច្នេះការលុបនេះ
+    ប៉ះពាល់តែអ្វីដែលភ្នែកឃើញ។
+    """
+    if not config.CAPTION_STRIP_PUNCTUATION:
+        return text
+    cleaned = re.sub(r"[^\w'\-]", "", text)
+    return cleaned.strip("-'") or text
 
 
 def render_line(line: list[Word], active: Word | None) -> str:
@@ -403,7 +418,7 @@ def render_line(line: list[Word], active: Word | None) -> str:
 
     parts: list[str] = []
     for word in line:
-        text = escape_ass_text(word.word.strip())
+        text = display_word(escape_ass_text(word.word.strip()))
         if config.CAPTION_UPPERCASE:
             text = text.upper()
         if active is not None and word is active:
@@ -442,8 +457,16 @@ def cue_events(cue: Cue, anchor: str = "normal", margin_v: int | None = None,
     words = [w for line in cue.lines for w in line]
     events = []
     for word, (start, end) in zip(words, word_intervals(cue, clip_start)):
+        # ពាក្យចុងក្រោយអាចចាប់ផ្តើមត្រង់ចុង cue (Whisper ឲ្យពេលមិនច្បាស់) ->
+        # ចន្លោះ 0 វិនាទី។ Event បែបនេះគ្មានអ្វីបង្ហាញ ហើយជាសំរាមក្នុង .ass។
+        if end - start < 0.02:
+            continue
         for line, y in zip(cue.lines, ys):
             events.append(dialogue(start, end, y, render_line(line, word)))
+
+    if not events:        # គ្រប់ចន្លោះខ្លីពេក -> បង្ហាញ cue ដោយគ្មានការបំលេច
+        return [dialogue(cue.start, cue.end, y, render_line(line, None))
+                for line, y in zip(cue.lines, ys)]
     return events
 
 

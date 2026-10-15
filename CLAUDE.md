@@ -98,7 +98,7 @@ clipforge/
   them side by side, since a 1920x540 panel is too shallow to frame a face.
 - Layout: `--layout auto|center|split` (default auto: split on two-shots, face crop on close-ups,
   centre crop when no face is found)
-- Captions: `--caption-words 2..8` (default 4) and `--caption-color yellow|green|cyan|orange|white|#RRGGBB`
+- Captions: `--caption-words 2..8` (default 5) and `--caption-color yellow|green|cyan|orange|white|#RRGGBB`
   (default #FFD23F from the design tokens; OpusClip uses green)
 - Review output: `python review.py <video name> --frames`
 - Test: `pytest -q`

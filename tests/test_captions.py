@@ -582,3 +582,83 @@ def test_plain_text_is_identical_whichever_word_is_active():
     renders = [C.render_line(words, w) for w in words]
     plain = {_re.sub("[{][^}]*[}]", "", r) for r in renders}
     assert len(plain) == 1
+
+
+def test_no_event_runs_past_its_cue():
+    """bug ពិត: ច្បាប់ប្រវែងអប្បបរមារុញពាក្យចុងក្រោយហួស cue ហើយ caption ពីរលេចព្រមគ្នា."""
+    words = make_words([("one", 0.0, 0.4), ("two", 0.4, 0.8), ("three", 0.8, 0.82)])
+    cue = C.wrap_into_cues(words, clip_start=0.0, max_chars=40, max_lines=2)[0]
+    for start, end in C.word_intervals(cue):
+        assert start >= cue.start - 1e-9
+        assert end <= cue.end + 1e-9
+
+
+def test_consecutive_cues_never_overlap_on_screen():
+    """cue តៗគ្នាមិនត្រូវលេចព្រមគ្នា — អក្សរពីរជាន់គ្នាអានមិនបាន."""
+    specs = [(f"word{i}", i * 0.12, i * 0.12 + 0.11) for i in range(24)]
+    words = make_words(specs)
+    cues = C.wrap_into_cues(words, clip_start=0.0)
+    spans = []
+    for cue in cues:
+        intervals = C.word_intervals(cue)
+        spans.append((min(s for s, _ in intervals), max(e for _, e in intervals)))
+    for (_, end), (next_start, _) in zip(spans, spans[1:]):
+        assert end <= next_start + 1e-9
+
+
+def test_zero_length_word_events_are_dropped():
+    """ពាក្យចាប់ផ្តើមត្រង់ចុង cue -> event ប្រវែង 0 ដែលគ្មានអ្វីបង្ហាញ."""
+    words = make_words([("one", 0.0, 0.5), ("two", 0.5, 1.0)])
+    cue = C.Cue(start=0.0, end=0.5, lines=[words])       # "two" ចាប់ត្រង់ចុង
+    for event in C.cue_events(cue, "normal"):
+        parts = event[len("Dialogue: "):].split(",")
+        assert parts[1] != parts[2], f"event ប្រវែង 0: {event[:60]}"
+
+
+def test_cue_still_shows_when_every_interval_is_degenerate():
+    words = make_words([("only", 2.0, 2.0)])
+    cue = C.Cue(start=2.0, end=2.0, lines=[words])
+    events = C.cue_events(cue, "normal")
+    assert len(events) == 1        # fallback: បង្ហាញដោយគ្មានការបំលេច
+
+
+# ---------- លុបវណ្ណយុត្តិ ----------
+
+@pytest.mark.parametrize("raw,shown", [
+    ("apps.", "apps"),
+    ("business,", "business"),
+    ("everything?", "everything"),
+    ("wow!", "wow"),
+    ("(aside)", "aside"),
+    ('"quoted"', "quoted"),
+    ("we've", "we've"),          # apostrophe រក្សា
+    ("long-term", "long-term"),  # hyphen រក្សា
+    ("agent.md", "agentmd"),
+])
+def test_display_word_strips_punctuation(raw, shown):
+    assert C.display_word(raw) == shown
+
+
+def test_display_word_can_be_turned_off(monkeypatch):
+    monkeypatch.setattr(config, "CAPTION_STRIP_PUNCTUATION", False)
+    assert C.display_word("apps.") == "apps."
+
+
+def test_display_word_keeps_something_for_punctuation_only(monkeypatch):
+    """ពាក្យដែលមានតែវណ្ណយុត្តិមិនត្រូវបាត់ទៅជាអក្សរទទេ."""
+    assert C.display_word("--") == "--"
+    assert C.display_word("...") == "..."
+
+
+def test_rendered_line_has_no_punctuation():
+    words = make_words([("apps.", 0.0, 0.3), ("we've", 0.3, 0.6), ("long-term", 0.6, 1.0)])
+    text = C.render_line(words, None)
+    assert text == "APPS WE'VE LONG-TERM"
+
+
+def test_sentence_detection_still_uses_the_original_text():
+    """ការលុបវណ្ណយុត្តិប៉ះតែការបង្ហាញ — cue នៅតែបិទត្រង់ចុងប្រយោគ."""
+    words = make_words([("we", 0.0, 0.2), ("have", 0.2, 0.4), ("apps.", 0.4, 0.7),
+                        ("I", 0.7, 0.8), ("think", 0.8, 1.1), ("so", 1.1, 1.4)])
+    cues = C.wrap_into_cues(words, clip_start=0.0, max_chars=16, max_lines=3)
+    assert cues[0].text().endswith("apps.")

@@ -110,8 +110,9 @@ CAPTION_FONT_FALLBACKS = ("Inter Bold", "Arial Black", "Arial")
 CAPTION_FONT_SIZE = 110
 CAPTION_MAX_LINES = 3
 CAPTION_MAX_CHARS_PER_LINE = 16
-# ពាក្យច្រើនក្នុង cue តែមួយធ្វើឲ្យអ្នកមើលអានមិនទាន់។ OpusClip បង្ហាញ ~៤ ពាក្យខ្លី។
-CAPTION_MAX_WORDS_PER_CUE = 4
+# ពាក្យច្រើនក្នុង cue តែមួយធ្វើឲ្យអ្នកមើលអានមិនទាន់។ OpusClip បង្ហាញ ~៤-៥ ពាក្យខ្លី។
+# ប្តូរពេល run ដោយ `--caption-words 2..8`។
+CAPTION_MAX_WORDS_PER_CUE = 5
 # ALL CAPS ជា style ស្តង់ដារនៃ short-form — អានបានលឿនពេលរំកិលមើល
 CAPTION_UPPERCASE = True
 CAPTION_KEYWORD_COLOR = "#FFD23F"   # លឿង (design token ក្នុង CLAUDE.md)
@@ -138,6 +139,9 @@ CAPTION_WORD_HIGHLIGHT = True
 # 1.0 = បំលេចតែពណ៌ គ្មានការពង្រីក។
 CAPTION_ACTIVE_SCALE = 1.10
 CAPTION_MIN_WORD_SEC = 0.10         # ពាក្យខ្លីពេកធ្វើឲ្យការបំលេចភ្លឹបភ្លែត
+# លុបវណ្ណយុត្តិចេញពី caption (OpusClip ក៏មិនបង្ហាញដែរ)។ រក្សា ' និង - ព្រោះ
+# "WEVE" និង "LONGTERM" អានមិនបាន។ ការរកប្រយោគនៅតែប្រើអត្ថបទដើម។
+CAPTION_STRIP_PUNCTUATION = True
 CAPTION_TEXT_COLOR = "#FFFFFF"      # ពណ៌អត្ថបទធម្មតា
 CAPTION_OUTLINE_COLOR = "#000000"   # គ្រោងខ្មៅ ឲ្យអានបានលើផ្ទាំងពណ៌ណាក៏បាន
 CAPTION_OUTLINE = 4                 # ប្រវែងគ្រោង (px)
