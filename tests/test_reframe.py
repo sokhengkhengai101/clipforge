@@ -368,3 +368,12 @@ def test_short_first_shot_merges_forward():
 def test_single_short_shot_is_kept():
     """clip ខ្លីទាំងមូល -> នៅតែត្រូវមាន shot មួយ មិនត្រូវបាត់."""
     assert R.split_into_shots(0.0, 1.0, [], min_shot_sec=2.0) == [(0.0, 1.0)]
+
+
+def test_real_camera_shots_survive_the_default_merge():
+    """bug ពិត: MIN_SHOT_SEC=2.0 បញ្ចូល close-up 1.4s ទៅ shot wide ហើយប្រអប់កៅអី
+    ត្រូវបានដាក់លើ camera angle ខុស -> ផ្ទាំង split បង្ហាញតែជញ្ជាំង។
+    """
+    shots = R.split_into_shots(0.0, 20.0, [5.7, 7.1])      # ប្រើ config default
+    assert len(shots) == 3, "shot 1.4s ត្រូវតែរស់ ដើម្បីទទួល layout ផ្ទាល់ខ្លួន"
+    assert shots[1] == (5.7, 7.1)
