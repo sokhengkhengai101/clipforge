@@ -306,7 +306,8 @@ def main(
                       f"-> ប្រើ '{caption_font}' ជំនួស")
     try:
         ass_files = build_all_captions(final, transcript, clips_dir,
-                                       font=caption_font, margins=margins)
+                                       font=caption_font, margins=margins,
+                                       plans=plans)
         cue_count = sum(
             1 for path in ass_files
             for line in path.read_text(encoding="utf-8").splitlines()

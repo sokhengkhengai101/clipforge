@@ -119,6 +119,11 @@ CAPTION_KEYWORDS_PER_CUE = 1
 # cue ត្រូវបិទត្រង់ចុងប្រយោគ តែលុះត្រាតែវាមានអក្សរយ៉ាងតិចប៉ុណ្ណេះ — បើមិនដូច្នោះ
 # ប្រយោគខ្លី ("Yeah.") ក្លាយជា cue ភ្លឹបភ្លែតដាច់ដោយឡែក។
 CAPTION_MIN_CUE_CHARS = 12
+# បំលេចពាក្យដែលកំពុងនិយាយ (លឿង + ធំបន្តិច) ជំនួស keyword ថេរ។
+# False = ត្រឡប់ទៅ keyword ថេរ (ងាយប្រៀបធៀប)។
+CAPTION_WORD_HIGHLIGHT = True
+CAPTION_ACTIVE_SCALE = 1.10         # ពាក្យសកម្មធំជាង 10%
+CAPTION_MIN_WORD_SEC = 0.10         # ពាក្យខ្លីពេកធ្វើឲ្យការបំលេចភ្លឹបភ្លែត
 CAPTION_TEXT_COLOR = "#FFFFFF"      # ពណ៌អត្ថបទធម្មតា
 CAPTION_OUTLINE_COLOR = "#000000"   # គ្រោងខ្មៅ ឲ្យអានបានលើផ្ទាំងពណ៌ណាក៏បាន
 CAPTION_OUTLINE = 4                 # ប្រវែងគ្រោង (px)
@@ -128,6 +133,7 @@ CAPTION_MARGIN_V = 420              # កម្ពស់ពីបាត (1920) -
 # ក្នុង split screen ស្នាមរវាងផ្ទាំងពីរនៅ y=960។ OpusClip ដាក់អក្សរ **ឆ្លងកាត់** ស្នាម។
 # ប្លុក ៣ បន្ទាត់នៅ 110px ខ្ពស់ ~363px ដូច្នេះ 780 ដាក់កណ្តាលប្លុកត្រង់ស្នាមគត់។
 CAPTION_MARGIN_V_SPLIT = 780
+CAPTION_LINE_GAP = 90               # គម្លាតបន្ទាត់ (គណនាឡើងវិញក្នុង apply_aspect)
 
 # ---------- Audio ----------
 AUDIO_SAMPLE_RATE = 16000  # Whisper ចូលចិត្ត 16 kHz mono
@@ -244,6 +250,7 @@ def apply_aspect(name: str) -> tuple[int, int]:
     """
     global OUT_WIDTH, OUT_HEIGHT, PANEL_ASPECT, SPLIT_DIRECTION
     global CAPTION_FONT_SIZE, CAPTION_MARGIN_X, CAPTION_MARGIN_V, CAPTION_MARGIN_V_SPLIT
+    global CAPTION_LINE_GAP
 
     if name not in ASPECT_PRESETS:
         raise ValueError(f"aspect មិនស្គាល់: {name} (មាន {', '.join(ASPECT_PRESETS)})")
@@ -265,6 +272,11 @@ def apply_aspect(name: str) -> tuple[int, int]:
     # ហើយ ៣ បន្ទាត់ត្រូវការ 54% នៃកម្ពស់ — ធំពេក។ ដាក់ដែនត្រឹម 30% នៃកម្ពស់។
     height_cap = OUT_HEIGHT * 0.30 / (CAPTION_MAX_LINES * 1.1)
     CAPTION_FONT_SIZE = int(min(110 * scale, height_cap))
+
+    # libass **មិនអើពើ** `LineSpacing` ក្នុង [Script Info] (វាស់រួច: 0/30/60 ផ្តល់លទ្ធផល
+    # ដូចគ្នាបេះបិទ)។ យើងដាក់បន្ទាត់នីមួយៗដោយ `\pos` វិញ ដូច្នេះគម្លាតនេះត្រូវប្រើពិត។
+    # 0.82 ផ្តល់ ~90px នៅ font 110 — តឹងជាង default របស់ libass (~110px)។
+    CAPTION_LINE_GAP = int(CAPTION_FONT_SIZE * 0.82)
     CAPTION_MARGIN_V = int(OUT_HEIGHT * 0.22)      # ~lower third, ផុតពី UI របស់ platform
 
     if SPLIT_DIRECTION == "vertical":

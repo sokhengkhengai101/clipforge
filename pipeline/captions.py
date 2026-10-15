@@ -312,6 +312,117 @@ def cue_to_dialogue_text(cue: Cue, keywords: set[str], keyword_color: str) -> st
     return "\\N".join(rendered_lines)
 
 
+# ---------- ទីតាំង និង event ----------
+
+def anchor_for(cue: Cue, clip_start: float, segments: list | None) -> str:
+    """cue នេះគួរនៅកណ្តាលអេក្រង់ (split) ឬទីតាំងដើម (normal)?
+
+    OpusClip ដាក់អក្សរត្រង់ស្នាមរវាងផ្ទាំងពីរ ប៉ុន្តែតែ**ពេលមាន** split ប៉ុណ្ណោះ។
+    យើងប្រៀបធៀបពេលកណ្តាលនៃ cue នឹងផែនការ layout។
+    """
+    if not segments:
+        return "normal"
+    middle = clip_start + (cue.start + cue.end) / 2
+    for segment in segments:
+        if segment.start <= middle < segment.end:
+            return "split" if segment.layout.kind == "split" else "normal"
+    return "normal"
+
+
+def line_positions(count: int, anchor: str, margin_v: int | None = None) -> list[float]:
+    """y កណ្តាលនៃបន្ទាត់នីមួយៗ (ពីលើទៅក្រោម).
+
+    libass **មិនអើពើ** `LineSpacing` ដូច្នេះយើងដាក់បន្ទាត់នីមួយៗដោយ `\\pos`។
+    - `split`  -> ប្លុកនៅកណ្តាលត្រង់ស្នាម (កម្ពស់ / 2)
+    - `normal` -> បាតប្លុកនៅ កម្ពស់ − margin (ទីតាំង lower third ដើម)
+    """
+    gap = config.CAPTION_LINE_GAP
+    margin_v = config.CAPTION_MARGIN_V if margin_v is None else margin_v
+    span = (count - 1) * gap
+
+    if anchor == "split":
+        first = config.OUT_HEIGHT / 2 - span / 2
+    else:
+        bottom = config.OUT_HEIGHT - margin_v
+        first = bottom - span - config.CAPTION_FONT_SIZE / 2
+
+    return [first + index * gap for index in range(count)]
+
+
+def word_intervals(cue: Cue, clip_start: float = 0.0) -> list[tuple[float, float]]:
+    """ចន្លោះពេលសម្រាប់ពាក្យនីមួយៗ — ពាក្យមួយរស់រហូតដល់ពាក្យបន្ទាប់ចាប់ផ្តើម.
+
+    ការប្រើ `word.end` ទុកចន្លោះតូចៗដែលគ្មានពាក្យណាបំលេច ហើយវាភ្លឹបភ្លែត។
+
+    **ពាក្យផ្ទុកពេលដាច់ខាត តែ cue ផ្ទុកពេលធៀបនឹងដើម clip** ដូច្នេះត្រូវដក `clip_start`។
+    ការភ្លេចវាផ្តល់ `Dialogue: 0,0:08:20.00,0:00:03.00` (test ចាប់បាន)។
+    """
+    words = [w for line in cue.lines for w in line]
+    intervals: list[tuple[float, float]] = []
+    for index, word in enumerate(words):
+        start = max(cue.start, word.start - clip_start)
+        if index + 1 < len(words):
+            end = max(start, words[index + 1].start - clip_start)
+        else:
+            end = cue.end
+        if end - start < config.CAPTION_MIN_WORD_SEC:
+            end = start + config.CAPTION_MIN_WORD_SEC
+        intervals.append((start, min(end, cue.end) if index + 1 < len(words) else end))
+    return intervals
+
+
+def render_line(line: list[Word], active: Word | None) -> str:
+    """អត្ថបទបន្ទាត់មួយ ដែលពាក្យសកម្មលឿង និងធំជាងបន្តិច."""
+    normal_colour = ass_color(config.CAPTION_TEXT_COLOR)
+    active_colour = ass_color(config.CAPTION_KEYWORD_COLOR)
+    big = int(config.CAPTION_FONT_SIZE * config.CAPTION_ACTIVE_SCALE)
+
+    parts: list[str] = []
+    for word in line:
+        text = escape_ass_text(word.word.strip())
+        if config.CAPTION_UPPERCASE:
+            text = text.upper()
+        if active is not None and word is active:
+            parts.append(f"{{\\fs{big}\\c{active_colour}&}}{text}"
+                         f"{{\\fs{config.CAPTION_FONT_SIZE}\\c{normal_colour}&}}")
+        else:
+            parts.append(text)
+    return " ".join(parts)
+
+
+def dialogue(start: float, end: float, y: float, text: str) -> str:
+    """Dialogue មួយបន្ទាត់ ដាក់ទីតាំងដោយ `\\an5\\pos` (an5 = កណ្តាលទាំងផ្ដេកនិងបញ្ឈរ)."""
+    x = config.OUT_WIDTH / 2
+    return (f"Dialogue: 0,{ass_time(start)},{ass_time(end)},Default,,0,0,0,,"
+            f"{{\\an5\\pos({x:.0f},{y:.0f})}}{text}")
+
+
+def cue_events(cue: Cue, anchor: str = "normal", margin_v: int | None = None,
+               clip_start: float = 0.0) -> list[str]:
+    """Dialogue ទាំងអស់សម្រាប់ cue មួយ.
+
+    ពេលបើកការបំលេចតាមសំឡេង យើងបញ្ចេញបន្ទាត់ទាំងអស់ឡើងវិញក្នុងមួយចន្លោះពេលពាក្យ
+    (ពាក្យ × បន្ទាត់ event) ព្រោះបន្ទាត់ផ្សេងត្រូវតែនៅលើអេក្រង់ដដែល។
+    """
+    ys = line_positions(len(cue.lines), anchor, margin_v)
+
+    if not config.CAPTION_WORD_HIGHLIGHT:
+        keywords = pick_keywords(cue)
+        events = []
+        for line, y in zip(cue.lines, ys):
+            active = next((w for w in line
+                           if re.sub(r"[^\w']", "", w.word.strip().lower()) in keywords), None)
+            events.append(dialogue(cue.start, cue.end, y, render_line(line, active)))
+        return events
+
+    words = [w for line in cue.lines for w in line]
+    events = []
+    for word, (start, end) in zip(words, word_intervals(cue, clip_start)):
+        for line, y in zip(cue.lines, ys):
+            events.append(dialogue(start, end, y, render_line(line, word)))
+    return events
+
+
 # ---------- ASS file ----------
 
 def ass_header(font: str, margin_v: int | None = None) -> str:
@@ -355,8 +466,13 @@ def build_ass(
     *,
     font: str | None = None,
     margin_v: int | None = None,
+    segments: list | None = None,
 ) -> Path:
-    """សរសេរ `.ass` សម្រាប់ clip មួយ. ត្រឡប់ path។"""
+    """សរសេរ `.ass` សម្រាប់ clip មួយ. ត្រឡប់ path។
+
+    `segments` = ផែនការ layout ពី `reframe.plan_clip()`។ Caption ផ្លាស់ទីទៅកណ្តាល
+    អេក្រង់ខណៈ shot ជា split រួចត្រឡប់មកទីតាំងដើមវិញ — ក្នុងមួយ cue មិនមែនក្នុងមួយ clip។
+    """
     words = words_in_clip(clip, transcript)
     if not words:
         raise CaptionError(f"'{clip.title}' គ្មានពាក្យក្នុងចន្លោះ "
@@ -367,11 +483,8 @@ def build_ass(
 
     lines = [ass_header(chosen_font, margin_v)]
     for cue in cues:
-        keywords = pick_keywords(cue)
-        text = cue_to_dialogue_text(cue, keywords, config.CAPTION_KEYWORD_COLOR)
-        lines.append(
-            f"Dialogue: 0,{ass_time(cue.start)},{ass_time(cue.end)},Default,,0,0,0,,{text}"
-        )
+        anchor = anchor_for(cue, clip.start, segments)
+        lines.extend(cue_events(cue, anchor, margin_v, clip_start=clip.start))
 
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -386,12 +499,14 @@ def build_all_captions(
     *,
     font: str | None = None,
     margins: list[int | None] | None = None,
+    plans: list[list] | None = None,
 ) -> list[Path]:
     """សរសេរ `.ass` មួយក្នុងមួយ clip ទៅ `out_dir/clip_01.ass` ...។"""
     out_dir = Path(out_dir)
     paths: list[Path] = []
     for index, clip in enumerate(clips, start=1):
         margin = margins[index - 1] if margins is not None and index <= len(margins) else None
+        segments = plans[index - 1] if plans is not None and index <= len(plans) else None
         paths.append(build_ass(clip, transcript, out_dir / f"clip_{index:02d}.ass",
-                               font=font, margin_v=margin))
+                               font=font, margin_v=margin, segments=segments))
     return paths
