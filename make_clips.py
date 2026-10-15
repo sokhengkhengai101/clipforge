@@ -17,6 +17,8 @@ from pipeline.boundaries import clip_text, snap_boundaries
 from pipeline.captions import CaptionError, build_all_captions, resolve_font
 from pipeline.highlights import HighlightsError, find_highlights, load_clips, save_clips
 from pipeline.llm import LLMError
+from pipeline.reframe import (ReframeError, describe, dominant_kind, find_seats,
+                             plan_clip)
 from pipeline.render import (RenderError, compute_crop, probe_dimensions,
                              render_all, verify_clip)
 from pipeline.transcribe import TranscribeError, load_transcript, transcribe
@@ -88,6 +90,8 @@ def main(
     force: bool = typer.Option(False, "--force", help="ធ្វើថ្មីទាំងអស់ (ដូច --redo all)"),
     redo: str = typer.Option("", "--redo",
                              help="ជំហានដែលត្រូវធ្វើថ្មី: audio, transcribe, highlights, render, all"),
+    layout: str = typer.Option("auto", "--layout",
+                               help="auto (split/មុខ/center តាម shot), center (ចាស់), split"),
 ) -> None:
     # --redo ដាច់ជំហាន ដើម្បីកុំឲ្យការកែ prompt បង្ខំ transcribe ៨ នាទីឡើងវិញ
     steps_to_redo = {name.strip().lower() for name in redo.split(",") if name.strip()}
@@ -103,6 +107,10 @@ def main(
     redo_highlights = "highlights" in steps_to_redo
     redo_render = "render" in steps_to_redo
 
+    if layout not in ("auto", "center", "split"):
+        console.print(f"[red]--layout មិនស្គាល់: {layout}[/red] (auto, center ឬ split)")
+        raise typer.Exit(code=2)
+
     device, default_whisper, compute = config.detect_device()
     whisper_model = whisper_model or default_whisper
     out_dir = config.OUTPUT_DIR / video.stem
@@ -113,6 +121,7 @@ def main(
     console.print(f"  max clips   : {max_clips}")
     console.print(f"  whisper     : {whisper_model} on {device} ({compute})")
     console.print(f"  llm         : {model}")
+    console.print(f"  layout      : {layout}")
 
     # ---------- Step 1: audio ----------
     try:
@@ -218,6 +227,38 @@ def main(
         for i, clip in enumerate(final, start=1):
             console.print(f"[dim]  #{i} “{clip_text(clip, transcript)[:100]}...”[/dim]")
 
+    # ---------- Step 4b: reframe (ផែនការ layout ក្នុងមួយ shot) ----------
+    console.print("")
+    source_size = probe_dimensions(video)
+    plans: list[list] | None = None
+    margins: list[int | None] = [None] * len(final)
+
+    if layout != "center":
+        try:
+            seats = find_seats(video, source_size, duration,
+                               cache_path=out_dir / "seats.json")
+            if seats is None:
+                console.print("[yellow]⚠ រកកៅអីមិនឃើញ (មិនមែន two-shot?)[/yellow] "
+                              "-> split នឹងមិនកើតទេ")
+            else:
+                console.print(f"[dim]  កៅអី: ឆ្វេង x={seats.left.x} ស្តាំ x={seats.right.x}"
+                              f"[/dim]")
+
+            plans = []
+            with console.status("[cyan]reframe[/cyan] — វិភាគ shot និងមុខ..."):
+                for clip in final:
+                    plans.append(plan_clip(video, clip, source_size, seats,
+                                           layout_mode=layout))
+            for index, (clip, segments) in enumerate(zip(final, plans), start=1):
+                console.print(f"[dim]  #{index} {len(segments):2} shots — "
+                              f"{describe(segments)}[/dim]")
+                if dominant_kind(segments) == "split":
+                    margins[index - 1] = config.CAPTION_MARGIN_V_SPLIT
+        except ReframeError as e:
+            console.print(f"[yellow]⚠ reframe បរាជ័យ:[/yellow] {e}")
+            console.print("[yellow]  -> ប្រើ center-crop ជំនួស[/yellow]")
+            plans = None
+
     # ---------- Step 5: captions ----------
     console.print("")
     caption_font, font_is_wanted = resolve_font()
@@ -225,7 +266,8 @@ def main(
         console.print(f"[yellow]⚠ font '{config.CAPTION_FONT}' គ្មានលើម៉ាស៊ីន[/yellow] "
                       f"-> ប្រើ '{caption_font}' ជំនួស")
     try:
-        ass_files = build_all_captions(final, transcript, out_dir / "clips", font=caption_font)
+        ass_files = build_all_captions(final, transcript, out_dir / "clips",
+                                       font=caption_font, margins=margins)
         cue_count = sum(
             1 for path in ass_files
             for line in path.read_text(encoding="utf-8").splitlines()
@@ -240,12 +282,6 @@ def main(
     # ---------- Step 6: render ----------
     console.print("")
     try:
-        source_size = probe_dimensions(video)
-        crop = compute_crop(*source_size)
-        console.print(f"[dim]  crop {source_size[0]}x{source_size[1]} -> "
-                      f"{crop[0]}x{crop[1]} (កណ្តាល) -> scale "
-                      f"{config.OUT_WIDTH}x{config.OUT_HEIGHT}[/dim]")
-
         rendered: list[Path] = []
         with Progress(*progress_columns("6/6 render"), console=console) as progress:
             task = progress.add_task("render", total=len(final))
@@ -255,7 +291,7 @@ def main(
                                 description=clip.title)
 
             rendered = render_all(video, final, out_dir / "clips", ass_files,
-                                  force=redo_render, on_progress=tick)
+                                  force=redo_render, plans=plans, on_progress=tick)
             progress.update(task, completed=len(final))
 
         console.print(f"[green]✔ 6/6 render[/green]      {len(rendered)} MP4 ក្នុង "

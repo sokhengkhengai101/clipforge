@@ -273,3 +273,32 @@ def test_build_all_captions_numbers_files(tmp_path):
     paths = C.build_all_captions(clips, transcript, tmp_path, font="Inter Bold")
     assert [p.name for p in paths] == ["clip_01.ass", "clip_02.ass"]
     assert all(p.is_file() for p in paths)
+
+
+def test_margin_v_defaults_to_config(tmp_path):
+    words = sentence_words(start=0.0, count=10)
+    transcript = transcript_with(words)
+    path = C.build_ass(Clip(start=0.0, end=6.0, title="x", score=8), transcript,
+                       tmp_path / "c.ass", font="Inter Bold")
+    assert f",{config.CAPTION_MARGIN_V},1" in path.read_text(encoding="utf-8")
+
+
+def test_margin_v_can_be_overridden_for_split(tmp_path):
+    """ក្នុង split screen អក្សរត្រូវឡើងជិតស្នាមរវាងផ្ទាំងពីរ."""
+    words = sentence_words(start=0.0, count=10)
+    transcript = transcript_with(words)
+    path = C.build_ass(Clip(start=0.0, end=6.0, title="x", score=8), transcript,
+                       tmp_path / "c.ass", font="Inter Bold",
+                       margin_v=config.CAPTION_MARGIN_V_SPLIT)
+    assert f",{config.CAPTION_MARGIN_V_SPLIT},1" in path.read_text(encoding="utf-8")
+
+
+def test_build_all_captions_accepts_per_clip_margins(tmp_path):
+    words = sentence_words(start=0.0, count=80, step=0.5)
+    transcript = transcript_with(words, duration=100.0)
+    clips = [Clip(start=0.0, end=16.0, title="a", score=9),
+             Clip(start=20.0, end=36.0, title="b", score=8)]
+    paths = C.build_all_captions(clips, transcript, tmp_path, font="Inter Bold",
+                                 margins=[880, None])
+    assert ",880,1" in paths[0].read_text(encoding="utf-8")
+    assert f",{config.CAPTION_MARGIN_V},1" in paths[1].read_text(encoding="utf-8")

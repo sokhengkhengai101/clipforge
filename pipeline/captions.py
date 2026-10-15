@@ -246,10 +246,15 @@ def cue_to_dialogue_text(cue: Cue, keywords: set[str], keyword_color: str) -> st
 
 # ---------- ASS file ----------
 
-def ass_header(font: str) -> str:
-    """ផ្នែកដើមនៃ `.ass`: resolution, style (font, ពណ៌, ទីតាំង)."""
+def ass_header(font: str, margin_v: int | None = None) -> str:
+    """ផ្នែកដើមនៃ `.ass`: resolution, style (font, ពណ៌, ទីតាំង).
+
+    `margin_v` = ចម្ងាយពីបាតរូប។ ក្នុង split screen យើងលើកអក្សរឡើងជិតស្នាម
+    រវាងផ្ទាំងពីរ ជំនួសការទុកវានៅ lower third។
+    """
     primary = ass_color(config.CAPTION_TEXT_COLOR)
     outline = ass_color(config.CAPTION_OUTLINE_COLOR)
+    margin_v = config.CAPTION_MARGIN_V if margin_v is None else margin_v
     # SecondaryColour មិនប្រើ តែ format តម្រូវឲ្យមាន
     return "\n".join([
         "[Script Info]",
@@ -267,7 +272,7 @@ def ass_header(font: str) -> str:
             f"Style: Default,{font},{config.CAPTION_FONT_SIZE},{primary},{primary},"
             f"{outline},&H80000000,-1,0,0,0,100,100,0,0,1,"
             f"{config.CAPTION_OUTLINE},{config.CAPTION_SHADOW},2,"
-            f"{config.CAPTION_MARGIN_X},{config.CAPTION_MARGIN_X},{config.CAPTION_MARGIN_V},1"
+            f"{config.CAPTION_MARGIN_X},{config.CAPTION_MARGIN_X},{margin_v},1"
         ),
         "",
         "[Events]",
@@ -281,6 +286,7 @@ def build_ass(
     out_path: Path,
     *,
     font: str | None = None,
+    margin_v: int | None = None,
 ) -> Path:
     """សរសេរ `.ass` សម្រាប់ clip មួយ. ត្រឡប់ path។"""
     words = words_in_clip(clip, transcript)
@@ -291,7 +297,7 @@ def build_ass(
     cues = wrap_into_cues(words, clip.start)
     chosen_font = font or resolve_font()[0]
 
-    lines = [ass_header(chosen_font)]
+    lines = [ass_header(chosen_font, margin_v)]
     for cue in cues:
         keywords = pick_keywords(cue)
         text = cue_to_dialogue_text(cue, keywords, config.CAPTION_KEYWORD_COLOR)
@@ -311,10 +317,13 @@ def build_all_captions(
     out_dir: Path,
     *,
     font: str | None = None,
+    margins: list[int | None] | None = None,
 ) -> list[Path]:
     """សរសេរ `.ass` មួយក្នុងមួយ clip ទៅ `out_dir/clip_01.ass` ...។"""
     out_dir = Path(out_dir)
     paths: list[Path] = []
     for index, clip in enumerate(clips, start=1):
-        paths.append(build_ass(clip, transcript, out_dir / f"clip_{index:02d}.ass", font=font))
+        margin = margins[index - 1] if margins is not None and index <= len(margins) else None
+        paths.append(build_ass(clip, transcript, out_dir / f"clip_{index:02d}.ass",
+                               font=font, margin_v=margin))
     return paths

@@ -44,6 +44,11 @@ OUT_WIDTH = 1080
 OUT_HEIGHT = 1920          # 9:16 vertical
 VIDEO_CRF = 20             # លេខតូច = គុណភាពល្អ + file ធំ
 VIDEO_PRESET = "medium"
+# ពេល layout ប្តូរពាក់កណ្តាល clip យើង render shot នីមួយៗដោយឡែករួច concat។
+# Segment ប្រើ CRF ល្អជាង (18) ព្រោះវាត្រូវ encode ម្តងទៀតពេល burn caption —
+# ការ encode ២ ដងបាត់បង់គុណភាព ដូច្នេះជំហានដំបូងត្រូវច្បាស់ជាង។
+SEGMENT_CRF = 18
+SEGMENT_PRESET = "veryfast"
 AUDIO_BITRATE = "128k"
 
 # ---------- Reframe (split screen / face crop) ----------
@@ -94,6 +99,9 @@ CAPTION_OUTLINE = 4                 # ប្រវែងគ្រោង (px)
 CAPTION_SHADOW = 1
 CAPTION_MARGIN_X = 60               # ចន្លោះឆ្វេង/ស្តាំ
 CAPTION_MARGIN_V = 420              # កម្ពស់ពីបាត (1920) -> caption នៅ lower third
+# ក្នុង split screen ស្នាមរវាងផ្ទាំងពីរនៅ y=960។ OpusClip ដាក់អក្សរជិតស្នាម ដូច្នេះ
+# យើងលើកវាឡើងដល់ 880 (បាតអក្សរ ~y 1040, ក្រោមស្នាមបន្តិច)។
+CAPTION_MARGIN_V_SPLIT = 880
 
 # ---------- Audio ----------
 AUDIO_SAMPLE_RATE = 16000  # Whisper ចូលចិត្ត 16 kHz mono
