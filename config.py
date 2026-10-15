@@ -110,6 +110,8 @@ CAPTION_FONT_FALLBACKS = ("Inter Bold", "Arial Black", "Arial")
 CAPTION_FONT_SIZE = 110
 CAPTION_MAX_LINES = 3
 CAPTION_MAX_CHARS_PER_LINE = 16
+# ពាក្យច្រើនក្នុង cue តែមួយធ្វើឲ្យអ្នកមើលអានមិនទាន់។ OpusClip បង្ហាញ ~៤ ពាក្យខ្លី។
+CAPTION_MAX_WORDS_PER_CUE = 4
 # ALL CAPS ជា style ស្តង់ដារនៃ short-form — អានបានលឿនពេលរំកិលមើល
 CAPTION_UPPERCASE = True
 CAPTION_KEYWORD_COLOR = "#FFD23F"   # លឿង — keyword highlight (OpusClip ប្រើបៃតង #00E054)
@@ -122,7 +124,11 @@ CAPTION_MIN_CUE_CHARS = 12
 # បំលេចពាក្យដែលកំពុងនិយាយ (លឿង + ធំបន្តិច) ជំនួស keyword ថេរ។
 # False = ត្រឡប់ទៅ keyword ថេរ (ងាយប្រៀបធៀប)។
 CAPTION_WORD_HIGHLIGHT = True
-CAPTION_ACTIVE_SCALE = 1.10         # ពាក្យសកម្មធំជាង 10%
+# ពាក្យសកម្មពង្រីក **បញ្ឈរតែប៉ុណ្ណោះ** (\fscy)។ ការពង្រីកទាំងទទឹង (\fs) ប្តូរទទឹង
+# បន្ទាត់ ហើយដោយបន្ទាត់ដាក់កណ្តាល ពាក្យឯទៀតលោតឆ្វេង-ស្តាំរាល់ពេលបំលេចផ្លាស់ទី។
+# វាស់រួច: \fs -> ទទឹង 692->708/712px (លោត); \fscy -> 692px ដដែល, កម្ពស់ 51->55px។
+# 1.0 = បំលេចតែពណ៌ គ្មានការពង្រីក។
+CAPTION_ACTIVE_SCALE = 1.10
 CAPTION_MIN_WORD_SEC = 0.10         # ពាក្យខ្លីពេកធ្វើឲ្យការបំលេចភ្លឹបភ្លែត
 CAPTION_TEXT_COLOR = "#FFFFFF"      # ពណ៌អត្ថបទធម្មតា
 CAPTION_OUTLINE_COLOR = "#000000"   # គ្រោងខ្មៅ ឲ្យអានបានលើផ្ទាំងពណ៌ណាក៏បាន

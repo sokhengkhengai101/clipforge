@@ -10,6 +10,7 @@ font, ទីតាំង និងឥទ្ធិពលបាន (ខុសព�
   3. ការបំបែកបន្ទាត់ប្រើ `\\N` (N ធំ) មិនមែន newline ពិត
 """
 
+import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -160,6 +161,7 @@ def wrap_into_cues(
     clip_start: float,
     max_chars: int | None = None,
     max_lines: int | None = None,
+    max_words: int | None = None,
 ) -> list[Cue]:
     """ចែកពាក្យទៅ cue ដែលសមនឹង ≤ max_lines បន្ទាត់ × ≤ max_chars តួ.
 
@@ -169,6 +171,7 @@ def wrap_into_cues(
     """
     max_chars = max_chars or config.CAPTION_MAX_CHARS_PER_LINE
     max_lines = max_lines or config.CAPTION_MAX_LINES
+    max_words = max_words or config.CAPTION_MAX_WORDS_PER_CUE
 
     cues: list[Cue] = []
     current_lines: list[list[Word]] = [[]]
@@ -201,8 +204,13 @@ def wrap_into_cues(
             flush()
             current_lines = [[word]]
 
+    def word_count() -> int:
+        return sum(len(line) for line in current_lines)
+
     def fits_whole(sentence: list[Word]) -> bool:
         """ប្រយោគនេះសមនឹងទីវ៉ាងដែលនៅសល់ក្នុង cue បច្ចុប្បន្នឬទេ (សាកដាក់មើល)."""
+        if word_count() + len(sentence) > max_words:
+            return False
         lines = [list(line) for line in current_lines]
         for word in sentence:
             if line_length(lines[-1] + [word]) <= max_chars or not lines[-1]:
@@ -215,15 +223,20 @@ def wrap_into_cues(
 
     def cues_needed(sentence: list[Word]) -> int:
         """ប្រយោគនេះត្រូវការ cue ប៉ុន្មាន បើដាក់ចាប់ពី cue ទទេ."""
-        count, lines = 1, [[]]
+        count, lines, words = 1, [[]], 0
         for word in sentence:
+            if words >= max_words:
+                count += 1
+                lines, words = [[word]], 1
+                continue
+            words += 1
             if line_length(lines[-1] + [word]) <= max_chars or not lines[-1]:
                 lines[-1].append(word)
             elif len(lines) < max_lines:
                 lines.append([word])
             else:
                 count += 1
-                lines = [[word]]
+                lines, words = [[word]], 1
         return count
 
     # **រៀបចំតាមប្រយោគ មិនមែនតាមពាក្យ**។ បើយើងដាក់ពាក្យម្តងមួយៗ កន្ទុយប្រយោគមុន
@@ -241,11 +254,15 @@ def wrap_into_cues(
         # ប្រយោគវែងជាង cue មួយ -> **ចែកឲ្យស្មើគ្នា**។ ការបំពេញបែប greedy ទុកពាក្យ
         # តែមួយនៅ cue ចុងក្រោយ ("APPS.") ដែលភ្លឹបភ្លែតលើអេក្រង់។
         total = sum(len(w.word.strip()) + 1 for w in sentence)
-        target = total / cues_needed(sentence)
+        needed = cues_needed(sentence)
+        target = total / needed
+        words_per_cue = math.ceil(len(sentence) / needed)
         for index, word in enumerate(sentence):
             add_word(word)
             room_left = index < len(sentence) - 1
-            if room_left and sum(line_length(l) for l in current_lines) >= target:
+            full = (sum(line_length(l) for l in current_lines) >= target
+                    or word_count() >= words_per_cue)
+            if room_left and full:
                 flush()
                 current_lines = [[]]
 
@@ -372,10 +389,17 @@ def word_intervals(cue: Cue, clip_start: float = 0.0) -> list[tuple[float, float
 
 
 def render_line(line: list[Word], active: Word | None) -> str:
-    """អត្ថបទបន្ទាត់មួយ ដែលពាក្យសកម្មលឿង និងធំជាងបន្តិច."""
+    """អត្ថបទបន្ទាត់មួយ ដែលពាក្យសកម្មលឿង និងពង្រីកបញ្ឈរបន្តិច.
+
+    **ពង្រីកបញ្ឈរ (`\\fscy`) មិនមែនទាំងទទឹង (`\\fs`)**។ `\\fs` ប្តូរទទឹងបន្ទាត់ ហើយ
+    ដោយបន្ទាត់ត្រូវដាក់កណ្តាល ពាក្យឯទៀតលោតឆ្វេង-ស្តាំរាល់ពេលការបំលេចផ្លាស់ទី។
+    វាស់រួច: `\\fs` -> ទទឹង 692 ទៅ 708/712px; `\\fscy` -> 692px ដដែល (កម្ពស់ 51->55)។
+    """
     normal_colour = ass_color(config.CAPTION_TEXT_COLOR)
     active_colour = ass_color(config.CAPTION_KEYWORD_COLOR)
-    big = int(config.CAPTION_FONT_SIZE * config.CAPTION_ACTIVE_SCALE)
+    scale = int(round(config.CAPTION_ACTIVE_SCALE * 100))
+    grow = f"\\fscy{scale}" if scale != 100 else ""
+    shrink = "\\fscy100" if scale != 100 else ""
 
     parts: list[str] = []
     for word in line:
@@ -383,8 +407,8 @@ def render_line(line: list[Word], active: Word | None) -> str:
         if config.CAPTION_UPPERCASE:
             text = text.upper()
         if active is not None and word is active:
-            parts.append(f"{{\\fs{big}\\c{active_colour}&}}{text}"
-                         f"{{\\fs{config.CAPTION_FONT_SIZE}\\c{normal_colour}&}}")
+            parts.append(f"{{{grow}\\c{active_colour}&}}{text}"
+                         f"{{{shrink}\\c{normal_colour}&}}")
         else:
             parts.append(text)
     return " ".join(parts)

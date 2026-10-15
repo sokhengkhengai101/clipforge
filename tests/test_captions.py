@@ -506,10 +506,10 @@ def test_word_intervals_respect_minimum_length(monkeypatch):
 def test_active_word_is_bigger_and_coloured():
     words = make_words([("alpha", 0.0, 0.5), ("beta", 0.5, 1.0)])
     text = C.render_line(words, words[0])
-    big = int(config.CAPTION_FONT_SIZE * config.CAPTION_ACTIVE_SCALE)
-    assert rf"\fs{big}" in text              # raw string: "\f" ធម្មតាជា formfeed
+    scale = int(round(config.CAPTION_ACTIVE_SCALE * 100))
+    assert rf"\fscy{scale}" in text          # raw string: "\f" ធម្មតាជា formfeed
     assert C.ass_color(config.CAPTION_KEYWORD_COLOR) in text
-    assert rf"\fs{config.CAPTION_FONT_SIZE}" in text   # ត្រឡប់ទំហំដើមក្រោយពាក្យសកម្ម
+    assert r"\fscy100" in text               # ត្រឡប់ទំហំដើមក្រោយពាក្យសកម្ម
     assert "BETA" in text
 
 
@@ -537,3 +537,48 @@ def test_split_cue_events_sit_higher_than_normal():
     normal_y = float(C.cue_events(cue, "normal")[0].split("\pos(540,")[1].split(")")[0])
     split_y = float(C.cue_events(cue, "split")[0].split("\pos(540,")[1].split(")")[0])
     assert split_y < normal_y
+
+
+# ---------- ដែនពាក្យ និងការបំលេចដែលមិនលោត ----------
+
+def test_cue_never_exceeds_the_word_cap():
+    """ពាក្យច្រើនពេកក្នុង cue តែមួយ -> អ្នកមើលអានមិនទាន់."""
+    words = make_words([(f"w{i}", i * 0.3, i * 0.3 + 0.3) for i in range(20)])
+    for cue in C.wrap_into_cues(words, clip_start=0.0):
+        assert sum(len(line) for line in cue.lines) <= config.CAPTION_MAX_WORDS_PER_CUE
+
+
+def test_word_cap_is_configurable():
+    words = make_words([(f"w{i}", i * 0.3, i * 0.3 + 0.3) for i in range(12)])
+    cues = C.wrap_into_cues(words, clip_start=0.0, max_words=2)
+    assert all(sum(len(l) for l in cue.lines) <= 2 for cue in cues)
+
+
+def test_short_sentence_stays_one_cue_under_the_cap():
+    words = make_words([("just", 0.0, 0.3), ("three", 0.3, 0.6), ("words.", 0.6, 1.0)])
+    assert len(C.wrap_into_cues(words, clip_start=0.0)) == 1
+
+
+def test_active_word_scales_vertically_not_horizontally():
+    r"""bug ពិត: `\fs` ប្តូរទទឹងបន្ទាត់ ហើយអក្សរលោតពេលការបំលេចផ្លាស់ទី."""
+    words = make_words([("alpha", 0.0, 0.5), ("beta", 0.5, 1.0)])
+    text = C.render_line(words, words[0])
+    assert r"\fscy" in text
+    assert r"\fs1" not in text.replace(r"\fscy", "")    # គ្មាន \fs<size>
+
+
+def test_scale_one_means_colour_only(monkeypatch):
+    monkeypatch.setattr(config, "CAPTION_ACTIVE_SCALE", 1.0)
+    words = make_words([("alpha", 0.0, 0.5)])
+    text = C.render_line(words, words[0])
+    assert r"\fscy" not in text
+    assert C.ass_color(config.CAPTION_KEYWORD_COLOR) in text
+
+
+def test_plain_text_is_identical_whichever_word_is_active():
+    """អត្ថបទដែលមើលឃើញត្រូវដូចគ្នា -> គ្មានហេតុផលឲ្យទទឹងប្រែប្រួល."""
+    import re as _re
+    words = make_words([("alpha", 0.0, 0.5), ("beta", 0.5, 1.0), ("gamma", 1.0, 1.5)])
+    renders = [C.render_line(words, w) for w in words]
+    plain = {_re.sub("[{][^}]*[}]", "", r) for r in renders}
+    assert len(plain) == 1
