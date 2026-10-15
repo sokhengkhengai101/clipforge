@@ -100,6 +100,8 @@ MIN_FACE_SEPARATION = 0.15          # មុខ ២ ត្រូវឃ្លា�
 SEAT_SAMPLE_FRAMES = 60             # frame ដែលស្កេនទាំង video ដើម្បីរកកៅអី
 MIN_SEAT_SAMPLES = 5                # ត្រូវឃើញ two-shot យ៉ាងតិចប៉ុណ្ណេះ ទើបទុកចិត្ត
 SHOT_SAMPLE_FRAMES = 3              # frame គំរូក្នុងមួយ shot
+# វិភាគ shot ស្របគ្នា — ពេលភាគច្រើនចំណាយលើការរង់ចាំ FFmpeg មិនមែន CPU ទេ។
+PLAN_WORKERS = 4
 
 PANEL_ASPECT = 1080 / 960           # ផ្ទាំងនីមួយៗក្នុង split = 9:8
 # កម្ពស់ប្រអប់ = កម្ពស់មុខ × នេះ។ តូច = ជិតជាង តែពង្រីកខ្លាំងជាង (ព្រិល)។

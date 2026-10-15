@@ -82,6 +82,17 @@ class Clip(BaseModel):
         return self.end - self.start
 
 
+def full_video_clip(duration: float, title: str = "full") -> Clip:
+    """Clip តែមួយដែលគ្របលើ video ទាំងមូល (សម្រាប់ `--full`).
+
+    យើងប្រើ `model_construct` ដែល**រំលង validator** ដោយចេតនា៖ `Clip` កំណត់ប្រវែង
+    អតិបរមា 300 វិនាទី ដើម្បីច្រោះចម្លើយ LLM ដែលឆ្គង។ ការ render ពេញ video មិនមែន
+    មកពី LLM ទេ ដូច្នេះដែននោះមិនអនុវត្ត។
+    """
+    return Clip.model_construct(start=0.0, end=duration, title=title, hook="",
+                                type="insight", score=10.0, reason="full video")
+
+
 # ---------- chunking ----------
 
 @dataclass

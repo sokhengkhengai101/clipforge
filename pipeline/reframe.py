@@ -16,6 +16,8 @@ Face detector គឺ **YuNet** (ONNX តូច 228KB) ដែលចាប់ម�
 import json
 import math
 import subprocess
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -169,14 +171,19 @@ def split_into_shots(start: float, end: float, cuts: list[float],
 
 # ---------- ការចាប់មុខ ----------
 
-_detector_cache: dict[tuple[int, int], object] = {}
+# detector មួយ **ក្នុងមួយ thread** — YuNet object មិនមែន thread-safe ហើយយើង
+# វិភាគ shot ស្របគ្នាដើម្បីបង្កើនល្បឿន។
+_thread_state = threading.local()
 
 
 def _get_detector(width: int, height: int):
-    """ផ្ទុក YuNet ម្តង រួចប្រើឡើងវិញ (ការផ្ទុកយឺត ~0.3s)."""
+    """ផ្ទុក YuNet ម្តងក្នុងមួយ thread រួចប្រើឡើងវិញ (ការផ្ទុកយឺត ~0.3s)."""
+    cache = getattr(_thread_state, "detectors", None)
+    if cache is None:
+        cache = _thread_state.detectors = {}
     key = (width, height)
-    if key in _detector_cache:
-        return _detector_cache[key]
+    if key in cache:
+        return cache[key]
 
     try:
         import cv2
@@ -193,17 +200,15 @@ def _get_detector(width: int, height: int):
     detector = cv2.FaceDetectorYN_create(
         str(model), "", (width, height), config.FACE_MIN_SCORE, 0.3, 5000
     )
-    _detector_cache[key] = detector
+    cache[key] = detector
     return detector
 
 
-_recognizer_cache: list = []
-
-
 def _get_recognizer():
-    """ផ្ទុក SFace ម្តង — model ដែលបម្លែងមុខទៅជាលេខ (embedding)."""
-    if _recognizer_cache:
-        return _recognizer_cache[0]
+    """ផ្ទុក SFace ម្តងក្នុងមួយ thread — model ដែលបម្លែងមុខទៅជាលេខ (embedding)."""
+    existing = getattr(_thread_state, "recognizer", None)
+    if existing is not None:
+        return existing
 
     import cv2
 
@@ -214,7 +219,7 @@ def _get_recognizer():
             f"curl -L -o {model} {config.FACE_RECOGNITION_MODEL_URL}"
         )
     recognizer = cv2.FaceRecognizerSF_create(str(model), "")
-    _recognizer_cache.append(recognizer)
+    _thread_state.recognizer = recognizer
     return recognizer
 
 
@@ -565,10 +570,19 @@ def plan_clip(video_path: Path, clip: Clip, size: tuple[int, int],
     shots = split_into_shots(clip.start, clip.end, cuts)
 
     force = layout_mode if layout_mode in ("split", "center") else None
-    segments = [
-        Segment(start=a, end=b, layout=plan_shot(video_path, a, b, size, seats, force))
-        for a, b in shots
-    ]
+    # shot នីមួយៗឯករាជ្យ ហើយពេលភាគច្រើនចំណាយលើការរង់ចាំ FFmpeg ទាញ frame ->
+    # thread ជួយបានច្រើន (ការវិភាគ 47 នាទីធ្លាក់ពី ~8 នាទីមកតិចជាង)។
+    workers = max(1, min(config.PLAN_WORKERS, len(shots)))
+    if workers == 1:
+        layouts = [plan_shot(video_path, a, b, size, seats, force) for a, b in shots]
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            layouts = list(pool.map(
+                lambda shot: plan_shot(video_path, shot[0], shot[1], size, seats, force),
+                shots,
+            ))
+    segments = [Segment(start=a, end=b, layout=layout)
+                for (a, b), layout in zip(shots, layouts)]
     segments = smooth_segments(segments)
     return order_split_panels(segments, size, seats)
 

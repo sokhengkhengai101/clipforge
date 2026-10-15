@@ -14,17 +14,22 @@ from rich.table import Table
 import config
 from pipeline.audio import FFmpegError, extract_audio, probe_duration
 from pipeline.boundaries import clip_text, snap_boundaries
-from pipeline.captions import CaptionError, build_all_captions, resolve_font
-from pipeline.highlights import (HighlightsError, find_highlights, load_clips,
-                                 rank_clips, save_clips)
+from pipeline.captions import (CaptionError, build_all_captions, build_ass,
+                               resolve_font)
+from pipeline.highlights import (HighlightsError, find_highlights, full_video_clip,
+                                 load_clips, rank_clips, save_clips)
 from pipeline.llm import LLMError
 from pipeline.reframe import (ReframeError, describe, dominant_kind, find_seats,
                              plan_clip)
 from pipeline.render import (RenderError, compute_crop, encoder_args,
-                             probe_dimensions, render_all, verify_clip)
+                             probe_dimensions, render_all, render_clip, verify_clip)
 from pipeline.transcribe import TranscribeError, load_transcript, transcribe
 
 config.enable_utf8_output()  # ត្រូវហៅមុន Console() ដើម្បីឲ្យ rich ចាំ encoding ត្រឹមត្រូវ
+
+class _SkipSelection(Exception):
+    """សញ្ញាខាងក្នុង: `--full` មិនត្រូវការការជ្រើស clip ទេ."""
+
 
 app = typer.Typer(add_completion=False, help="បង្កើត vertical clips ពី video វែង")
 console = Console()
@@ -102,6 +107,8 @@ def main(
                                            "white ឬ #RRGGBB"),
     encoder: str = typer.Option(config.VIDEO_ENCODER, "--encoder",
                                 help="auto (GPU បើមាន), nvenc (GPU), x264 (CPU)"),
+    full: bool = typer.Option(False, "--full",
+                              help="render video ទាំងមូលជាបញ្ឈរ ១ file (រំលងការជ្រើស clip)"),
 ) -> None:
     # --redo ដាច់ជំហាន ដើម្បីកុំឲ្យការកែ prompt បង្ខំ transcribe ៨ នាទីឡើងវិញ
     steps_to_redo = {name.strip().lower() for name in redo.split(",") if name.strip()}
@@ -145,6 +152,10 @@ def main(
     # aspect ផ្សេងៗសរសេរទៅ folder ផ្សេង ដើម្បីកុំឲ្យជាន់គ្នា (clips/, clips_1x1/, ...)
     clips_dir = out_dir / ("clips" if aspect == "9:16"
                            else f"clips_{aspect.replace(':', 'x')}")
+    if full:
+        # video ពេញទៅ folder ផ្សេង ដើម្បីកុំឲ្យជាន់លើ clip ខ្លី
+        clips_dir = out_dir / ("full" if aspect == "9:16"
+                               else f"full_{aspect.replace(':', 'x')}")
 
     console.print("\n[bold]ClipForge Studio[/bold] — Phase 0\n")
     console.print(f"  video       : {video}")
@@ -211,10 +222,15 @@ def main(
         raise typer.Exit(code=1)
 
     # ---------- Step 3: highlights ----------
+    # `--full` render ទាំង video -> គ្មានអ្វីត្រូវជ្រើស និងគ្មានព្រំដែនត្រូវកែ
+    clips = [] if full else None
     clips_cache = out_dir / "highlights.json"
     was_cached = not redo_highlights and load_clips(clips_cache) is not None
     warnings: list[str] = []
     try:
+        if full:
+            console.print("[green]✔ 3/6 highlights[/green]  រំលង ([cyan]--full[/cyan])")
+            raise _SkipSelection
         # ពេលមានជំហានតម្រៀប យើងរក candidate ច្រើន រួចជ្រើស ៥ ក្រោយពេលកែព្រំដែន
         wanted = (max(max_clips, config.MAX_RANK_CANDIDATES)
                   if config.RANK_CANDIDATES else max_clips)
@@ -244,24 +260,33 @@ def main(
             console.print(clips_table(clips))
         else:
             console.print("[yellow]  គ្មាន clip ត្រូវបានរកឃើញ — សាកកែ prompt ឬប្តូរ model[/yellow]")
+    except _SkipSelection:
+        pass
     except (HighlightsError, LLMError) as e:
         console.print(f"[red]✘ 3/6 highlights បរាជ័យ:[/red] {e}")
         raise typer.Exit(code=1)
 
     # ---------- Step 4: boundaries ----------
     snap_warnings: list[str] = []
-    before = {c.title: c.start for c in clips}
-
-    # ជម្រើសចុងក្រោយត្រូវ cache ព្រោះជំហានតម្រៀបហៅ LLM ហើយ LLM មិនឆ្លើយដូចគ្នា
-    # ជានិច្ចទេ។ បើយើងតម្រៀបឡើងវិញរាល់ពេល render នោះ clip ដែលអ្នកបានអនុម័ត
-    # នឹងប្តូរដោយខ្លួនឯង (យើងបានជួបវាពិត)។ `--redo highlights` ធ្វើឲ្យវាធ្វើថ្មី។
-    cached_final = None if redo_highlights else load_clips(out_dir / "clips.json")
-    if cached_final:
-        final = cached_final
-        console.print("[dim]  ជម្រើសចុងក្រោយយកពី clips.json (cache) — "
-                      "ប្រើ --redo highlights ដើម្បីជ្រើសថ្មី[/dim]")
+    cached_final = None
+    before: dict[str, float] = {}
+    if full:
+        final = [full_video_clip(duration, video.stem)]
+        console.print(f"[green]✔ 4/6 boundaries[/green]  រំលង ([cyan]--full[/cyan]) — "
+                      f"video ពេញ {duration / 60:.1f} នាទី")
     else:
-        final = snap_boundaries(clips, transcript, on_warning=snap_warnings.append)
+        before = {c.title: c.start for c in clips}
+
+        # ជម្រើសចុងក្រោយត្រូវ cache ព្រោះជំហានតម្រៀបហៅ LLM ហើយ LLM មិនឆ្លើយដូចគ្នា
+        # ជានិច្ចទេ។ បើយើងតម្រៀបឡើងវិញរាល់ពេល render នោះ clip ដែលអ្នកបានអនុម័ត
+        # នឹងប្តូរដោយខ្លួនឯង (យើងបានជួបវាពិត)។ `--redo highlights` ធ្វើឲ្យវាធ្វើថ្មី។
+        cached_final = None if redo_highlights else load_clips(out_dir / "clips.json")
+        if cached_final:
+            final = cached_final
+            console.print("[dim]  ជម្រើសចុងក្រោយយកពី clips.json (cache) — "
+                          "ប្រើ --redo highlights ដើម្បីជ្រើសថ្មី[/dim]")
+        else:
+            final = snap_boundaries(clips, transcript, on_warning=snap_warnings.append)
 
     # ---------- ជំហានតម្រៀប ----------
     # ឥឡូវ clip មានព្រំដែនត្រឹមត្រូវហើយ (ចាប់ផ្តើមដើមប្រយោគ, >= 15s) ដូច្នេះ LLM
@@ -276,8 +301,9 @@ def main(
     clips_file = save_clips(final, out_dir / "clips.json", model=model,
                             prompt=config.HIGHLIGHT_PROMPT)
 
-    console.print(f"[green]✔ 4/6 boundaries[/green]  {short_path(clips_file)}  "
-                  f"({len(final)} clips)")
+    if not full:
+        console.print(f"[green]✔ 4/6 boundaries[/green]  {short_path(clips_file)}  "
+                      f"({len(final)} clips)")
     for warning in snap_warnings:
         console.print(f"[dim]    - {warning}[/dim]")
     if final:
@@ -339,8 +365,9 @@ def main(
         console.print(f"[green]✔ 5/6 captions[/green]    {len(ass_files)} .ass ក្នុង "
                       f"{short_path(clips_dir)}  ({cue_count} cues, font={caption_font})")
     except CaptionError as e:
-        console.print(f"[red]✘ 5/6 captions បរាជ័យ:[/red] {e}")
-        raise typer.Exit(code=1)
+        # គ្មានពាក្យ (video ស្ងាត់) មិនមែនជាហេតុផលបោះបង់ទេ — render ដោយគ្មាន caption
+        console.print(f"[yellow]⚠ 5/6 captions រំលង:[/yellow] {e}")
+        ass_files = None
 
     # ---------- Step 6: render ----------
     console.print("")

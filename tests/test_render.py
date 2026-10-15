@@ -407,3 +407,31 @@ def test_render_uses_the_selected_encoder(tmp_path, fast_render, monkeypatch):
     monkeypatch.setattr(config, "VIDEO_ENCODER", "x264")
     out = R.render_clip(FIXTURE, sample_clip(), tmp_path / "c.mp4")
     assert out.is_file()
+
+
+def test_long_filtergraph_goes_through_a_script_file(tmp_path, fast_render, monkeypatch):
+    """bug ពិត: 47 នាទី -> 360 shots -> filtergraph 55KB -> WinError 206."""
+    monkeypatch.setattr(R, "FILTER_INLINE_LIMIT", 10)     # បង្ខំផ្លូវ script
+    seen = {}
+    real_run = R._run_ffmpeg
+
+    def spy(cmd, cwd, what):
+        seen["cmd"] = cmd
+        return real_run(cmd, cwd, what)
+
+    monkeypatch.setattr(R, "_run_ffmpeg", spy)
+    out = R.render_clip(FIXTURE, sample_clip(0.0, 5.0), tmp_path / "c.mp4",
+                        segments=two_segments(0.0, 5.0))
+    assert "-/filter_complex" in seen["cmd"]
+    assert out.is_file()
+    assert not list(tmp_path.glob(".*_filter.txt")), "file filtergraph ត្រូវលុបចោល"
+
+
+def test_short_filtergraph_stays_inline(tmp_path, fast_render, monkeypatch):
+    seen = {}
+    real_run = R._run_ffmpeg
+    monkeypatch.setattr(R, "_run_ffmpeg",
+                        lambda cmd, cwd, what: (seen.update(cmd=cmd), real_run(cmd, cwd, what))[1])
+    R.render_clip(FIXTURE, sample_clip(0.0, 5.0), tmp_path / "c.mp4",
+                  segments=two_segments(0.0, 5.0))
+    assert "-filter_complex" in seen["cmd"] and "-/filter_complex" not in seen["cmd"]

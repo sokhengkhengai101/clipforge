@@ -434,3 +434,18 @@ def test_dedupe_still_drops_the_lower_scored_overlap():
     kept = H.dedupe_overlaps([make_clip(0, 30, score=6, title="ទាប"),
                               make_clip(5, 35, score=9, title="ខ្ពស់")])
     assert [c.title for c in kept] == ["ខ្ពស់"]
+
+
+def test_full_video_clip_covers_everything():
+    """`--full` render ទាំង video -> clip តែមួយពីដើមដល់ចប់."""
+    clip = H.full_video_clip(2829.6, "my video")
+    assert (clip.start, clip.end) == (0.0, 2829.6)
+    assert clip.title == "my video"
+
+
+def test_full_video_clip_bypasses_the_duration_limit():
+    """validator កំណត់ 300s ដើម្បីច្រោះចម្លើយ LLM — video ពេញមិនមកពី LLM ទេ."""
+    clip = H.full_video_clip(5000.0)
+    assert clip.duration == 5000.0
+    with pytest.raises(ValidationError):
+        H.Clip(start=0.0, end=5000.0, title="x")      # ផ្លូវធម្មតានៅតែបដិសេធ

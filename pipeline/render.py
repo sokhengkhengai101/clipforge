@@ -188,24 +188,43 @@ def _run_ffmpeg(cmd: list[str], cwd: Path, what: str) -> None:
         raise RenderError(f"FFmpeg បរាជ័យ ({what}):\n{result.stderr.strip()[-800:]}")
 
 
+# Windows កំណត់ command line ត្រឹម 32768 តួ។ Video វែងផ្តល់ filtergraph ធំជាងនោះ
+# (47 នាទី -> 360 shots -> ~55KB) ហើយ FFmpeg ដាច់ដោយ WinError 206។
+FILTER_INLINE_LIMIT = 8000
+
+
 def render_segments(video_path: Path, clip: Clip, segments: list[Segment],
                     out_path: Path, ass_filename: str | None = None) -> Path:
     """Render clip ទាំងមូល (shot ច្រើន) ដោយ FFmpeg **តែម្តង**."""
     require_ffmpeg("ffmpeg")
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    graph = build_segments_filter(segments, clip.start, ass_filename)
+
+    # filtergraph វែង -> សរសេរទៅ file រួចឲ្យ FFmpeg អានពីទីនោះ
+    script = None
+    if len(graph) > FILTER_INLINE_LIMIT:
+        script = out_path.parent / f".{out_path.stem}_filter.txt"
+        script.write_text(graph, encoding="utf-8")
+        filter_args = ["-/filter_complex", script.name]
+    else:
+        filter_args = ["-filter_complex", graph]
 
     cmd = [
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
         "-ss", f"{clip.start:.3f}",
         "-i", str(Path(video_path).resolve()),
         "-t", f"{clip.duration:.3f}",
-        "-filter_complex", build_segments_filter(segments, clip.start, ass_filename),
+        *filter_args,
         "-map", "[v]", "-map", "0:a?",
         *_encode_args(config.VIDEO_CRF, config.VIDEO_PRESET),
         out_path.name,
     ]
-    _run_ffmpeg(cmd, out_path.parent, f"'{clip.title}' ({len(segments)} shots)")
+    try:
+        _run_ffmpeg(cmd, out_path.parent, f"'{clip.title}' ({len(segments)} shots)")
+    finally:
+        if script is not None:
+            script.unlink(missing_ok=True)
     return out_path
 
 
