@@ -350,3 +350,60 @@ def test_render_keeps_cache_when_subtitles_unchanged(tmp_path, fast_render):
     first = out.stat().st_mtime_ns
     again = R.render_clip(FIXTURE, sample_clip(), tmp_path / "c.mp4")
     assert again.stat().st_mtime_ns == first
+
+
+# ---------- ជម្រើស encoder ----------
+
+def test_x264_args():
+    name, args = R.encoder_args("x264")
+    assert name == "x264"
+    assert args[:2] == ["-c:v", "libx264"]
+    assert "-crf" in args
+
+
+def test_nvenc_args_when_gpu_works(monkeypatch):
+    monkeypatch.setattr(R, "nvenc_works", lambda: True)
+    name, args = R.encoder_args("nvenc")
+    assert name == "nvenc"
+    assert args[:2] == ["-c:v", "h264_nvenc"]
+    assert "-cq" in args
+
+
+def test_auto_prefers_gpu(monkeypatch):
+    monkeypatch.setattr(R, "nvenc_works", lambda: True)
+    assert R.encoder_args("auto")[0] == "nvenc"
+
+
+def test_auto_falls_back_to_cpu(monkeypatch):
+    monkeypatch.setattr(R, "nvenc_works", lambda: False)
+    assert R.encoder_args("auto")[0] == "x264"
+
+
+def test_explicit_nvenc_falls_back_when_gpu_missing(monkeypatch):
+    """សុំ GPU តែវាមិនដំណើរការ -> មិនត្រូវដាច់ទេ."""
+    monkeypatch.setattr(R, "nvenc_works", lambda: False)
+    assert R.encoder_args("nvenc")[0] == "x264"
+
+
+def test_nvenc_detection_is_cached(monkeypatch):
+    """ការសាក encode ចំណាយពេល -> ត្រូវធ្វើតែម្តង."""
+    R._nvenc_available.clear()
+    calls = []
+
+    def fake_run(*args, **kwargs):
+        calls.append(1)
+        class Result:
+            returncode = 0
+        return Result()
+
+    monkeypatch.setattr(R.subprocess, "run", fake_run)
+    R.nvenc_works()
+    R.nvenc_works()
+    assert len(calls) == 1
+    R._nvenc_available.clear()
+
+
+def test_render_uses_the_selected_encoder(tmp_path, fast_render, monkeypatch):
+    monkeypatch.setattr(config, "VIDEO_ENCODER", "x264")
+    out = R.render_clip(FIXTURE, sample_clip(), tmp_path / "c.mp4")
+    assert out.is_file()

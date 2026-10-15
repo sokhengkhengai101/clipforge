@@ -100,5 +100,8 @@ clipforge/
   centre crop when no face is found)
 - Captions: `--caption-words 2..8` (default 5) and `--caption-color yellow|green|cyan|orange|white|#RRGGBB`
   (default #FFD23F from the design tokens; OpusClip uses green)
+- Encoder: `--encoder auto|nvenc|x264` (default auto: NVENC when the GPU accepts it).
+  Measured on a 17.5s clip at 1080x1920, VMAF against lossless: libx264 medium 12.6s/6.7MB/97.96,
+  h264_nvenc p5 cq26 2.9s/7.0MB/98.02. Rendering five clips went from 1m25s to 19s.
 - Review output: `python review.py <video name> --frames`
 - Test: `pytest -q`

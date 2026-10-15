@@ -58,8 +58,17 @@ ASPECT_PRESETS = {
 }
 # ទិសដៅដាក់ផ្ទាំងក្នុង split: portrait/square -> ជាន់គ្នាបញ្ឈរ; landscape -> ឆ្វេង/ស្តាំ
 SPLIT_DIRECTION = "vertical"
-VIDEO_CRF = 20             # លេខតូច = គុណភាពល្អ + file ធំ
+VIDEO_CRF = 20             # លេខតូច = គុណភាពល្អ + file ធំ (libx264)
 VIDEO_PRESET = "medium"
+
+# Encoder: "auto" (NVENC បើមាន), "nvenc" (បង្ខំ GPU), "x264" (បង្ខំ CPU)។
+# វាស់លើ clip 17.5s (1080x1920, VMAF ធៀបនឹង lossless):
+#   libx264 medium   12.6s  6.7MB  VMAF 97.96
+#   libx264 veryfast  5.4s  5.9MB  VMAF 96.49
+#   h264_nvenc p5 cq26 2.9s 7.0MB  VMAF 98.02   <- លឿនជាង 4.3x, ទំហំ/គុណភាពដូចគ្នា
+VIDEO_ENCODER = "auto"
+NVENC_PRESET = "p5"
+NVENC_CQ = 26
 AUDIO_BITRATE = "128k"
 
 # ---------- Reframe (split screen / face crop) ----------

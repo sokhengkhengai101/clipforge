@@ -20,8 +20,8 @@ from pipeline.highlights import (HighlightsError, find_highlights, load_clips,
 from pipeline.llm import LLMError
 from pipeline.reframe import (ReframeError, describe, dominant_kind, find_seats,
                              plan_clip)
-from pipeline.render import (RenderError, compute_crop, probe_dimensions,
-                             render_all, verify_clip)
+from pipeline.render import (RenderError, compute_crop, encoder_args,
+                             probe_dimensions, render_all, verify_clip)
 from pipeline.transcribe import TranscribeError, load_transcript, transcribe
 
 config.enable_utf8_output()  # ត្រូវហៅមុន Console() ដើម្បីឲ្យ rich ចាំ encoding ត្រឹមត្រូវ
@@ -100,6 +100,8 @@ def main(
     caption_color: str = typer.Option(config.CAPTION_KEYWORD_COLOR, "--caption-color",
                                       help="ពណ៌ពាក្យសកម្ម: yellow, green, cyan, orange, "
                                            "white ឬ #RRGGBB"),
+    encoder: str = typer.Option(config.VIDEO_ENCODER, "--encoder",
+                                help="auto (GPU បើមាន), nvenc (GPU), x264 (CPU)"),
 ) -> None:
     # --redo ដាច់ជំហាន ដើម្បីកុំឲ្យការកែ prompt បង្ខំ transcribe ៨ នាទីឡើងវិញ
     steps_to_redo = {name.strip().lower() for name in redo.split(",") if name.strip()}
@@ -127,6 +129,11 @@ def main(
         console.print(f"[red]{e}[/red]")
         raise typer.Exit(code=2)
 
+    if encoder not in ("auto", "nvenc", "x264"):
+        console.print(f"[red]--encoder មិនស្គាល់: {encoder}[/red] (auto, nvenc ឬ x264)")
+        raise typer.Exit(code=2)
+    config.VIDEO_ENCODER = encoder
+
     if not 2 <= caption_words <= 8:
         console.print(f"[red]--caption-words ត្រូវនៅចន្លោះ 2-8 (ទទួលបាន {caption_words})[/red]")
         raise typer.Exit(code=2)
@@ -149,6 +156,9 @@ def main(
     console.print(f"  aspect      : {aspect}  ({out_width}x{out_height})")
     console.print(f"  caption     : {caption_words} ពាក្យ/cue, "
                   f"ពណ៌ {config.CAPTION_KEYWORD_COLOR}")
+    chosen_encoder, _ = encoder_args()
+    console.print(f"  encoder     : {chosen_encoder}"
+                  + ("  [dim](GPU)[/dim]" if chosen_encoder == "nvenc" else "  [dim](CPU)[/dim]"))
 
     # ---------- Step 1: audio ----------
     try:

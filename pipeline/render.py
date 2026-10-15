@@ -172,8 +172,9 @@ def build_segments_filter(segments: list[Segment], clip_start: float,
 
 
 def _encode_args(crf: int, preset: str) -> list[str]:
+    _, video = encoder_args()
     return [
-        "-c:v", "libx264", "-preset", preset, "-crf", str(crf), "-pix_fmt", "yuv420p",
+        *video, "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", config.AUDIO_BITRATE,
         "-movflags", "+faststart",      # metadata នៅដើម file -> ចាប់ផ្តើមលេងលឿន
     ]
@@ -305,3 +306,44 @@ def verify_clip(out_path: Path, clip: Clip, tolerance: float = 0.5) -> float:
             f"'{clip.title}': រយៈពេលខុស — សុំ {clip.duration:.1f}s តែបាន {actual:.1f}s"
         )
     return actual
+
+
+# ---------- ជម្រើស encoder ----------
+
+_nvenc_available: list[bool] = []
+
+
+def nvenc_works() -> bool:
+    """សាក encode ១ frame លើ GPU — កុំជឿតែបញ្ជី encoder.
+
+    `ffmpeg -encoders` រាយ h264_nvenc ទោះ driver មានបញ្ហា ឬ GPU រវល់ពេក។
+    លទ្ធផលត្រូវចងចាំ ព្រោះការសាកចំណាយ ~0.3s។
+    """
+    if _nvenc_available:
+        return _nvenc_available[0]
+    result = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin",
+         "-f", "lavfi", "-i", "color=black:s=128x128:d=0.1",
+         "-c:v", "h264_nvenc", "-f", "null", "-"],
+        capture_output=True, text=True,
+    )
+    _nvenc_available.append(result.returncode == 0)
+    return _nvenc_available[0]
+
+
+def encoder_args(encoder: str | None = None) -> tuple[str, list[str]]:
+    """ត្រឡប់ (ឈ្មោះដែលប្រើ, argument សម្រាប់ FFmpeg).
+
+    NVENC លឿនជាង libx264 4.3 ដង ហើយវាស់ឃើញថាទំហំ និង VMAF ដូចគ្នា (cq 26)។
+    """
+    encoder = encoder or config.VIDEO_ENCODER
+    if encoder == "auto":
+        encoder = "nvenc" if nvenc_works() else "x264"
+    if encoder == "nvenc" and not nvenc_works():
+        encoder = "x264"      # បានសុំ GPU តែវាមិនដំណើរការ -> ធ្លាក់ទៅ CPU
+
+    if encoder == "nvenc":
+        return "nvenc", ["-c:v", "h264_nvenc", "-preset", config.NVENC_PRESET,
+                         "-rc", "vbr", "-cq", str(config.NVENC_CQ), "-b:v", "0"]
+    return "x264", ["-c:v", "libx264", "-preset", config.VIDEO_PRESET,
+                    "-crf", str(config.VIDEO_CRF)]
