@@ -46,6 +46,36 @@ VIDEO_CRF = 20             # លេខតូច = គុណភាពល្អ + 
 VIDEO_PRESET = "medium"
 AUDIO_BITRATE = "128k"
 
+# ---------- Reframe (split screen / face crop) ----------
+# ពេល camera កាត់ប្តូរ រូបប្រែខ្លាំង -> scene score ខ្ពស់។ 0.3 ជាតម្លៃដែលវាស់ឃើញថាល្អ
+# លើ podcast ដែលមាន multi-camera (ចាប់ការកាត់ ២២ ដងក្នុង ១២០ វិនាទី)។
+SCENE_THRESHOLD = 0.3
+MIN_SHOT_SEC = 1.0                  # shot ខ្លីជាងនេះ បញ្ចូលទៅ shot មុន
+
+FACE_MODEL_PATH = PROJECT_ROOT / "models" / "face_detection_yunet_2023mar.onnx"
+FACE_MODEL_URL = ("https://github.com/opencv/opencv_zoo/raw/main/models/"
+                  "face_detection_yunet/face_detection_yunet_2023mar.onnx")
+# SFace: ប្រាប់ថា "មុខក្នុង close-up នេះជាអ្នកណា" ដោយប្រៀបធៀបនឹងមុខក្នុងកៅអី។
+# វាស់លើ footage ពិត: ត្រូវគ្នា 0.66-0.72, មិនត្រូវគ្នា 0.11-0.16 -> គម្លាតធំ ជឿទុកចិត្តបាន។
+FACE_RECOGNITION_MODEL_PATH = PROJECT_ROOT / "models" / "face_recognition_sface_2021dec.onnx"
+FACE_RECOGNITION_MODEL_URL = ("https://github.com/opencv/opencv_zoo/raw/main/models/"
+                              "face_recognition_sface/face_recognition_sface_2021dec.onnx")
+FACE_MATCH_THRESHOLD = 0.30         # cosine អប្បបរមាទើបរាប់ថាជាមនុស្សតែម្នាក់
+# វាស់លើ footage ពិត: មុខពិត 0.90-0.94, false positive (ចង្កៀង) 0.53-0.57
+FACE_MIN_SCORE = 0.70
+MIN_FACE_SEPARATION = 0.15          # មុខ ២ ត្រូវឃ្លាតគ្នា >15% នៃទទឹង ទើបរាប់ជា two-shot
+
+SEAT_SAMPLE_FRAMES = 60             # frame ដែលស្កេនទាំង video ដើម្បីរកកៅអី
+MIN_SEAT_SAMPLES = 5                # ត្រូវឃើញ two-shot យ៉ាងតិចប៉ុណ្ណេះ ទើបទុកចិត្ត
+SHOT_SAMPLE_FRAMES = 3              # frame គំរូក្នុងមួយ shot
+
+PANEL_ASPECT = 1080 / 960           # ផ្ទាំងនីមួយៗក្នុង split = 9:8
+# កម្ពស់ប្រអប់ = កម្ពស់មុខ × នេះ។ តូច = ជិតជាង តែពង្រីកខ្លាំងជាង (ព្រិល)។
+# មុខក្នុង wide shot ទទឹង ~100px ដូច្នេះ: 4.5 -> ពង្រីក 1.3x (ច្បាស់ តែឆ្ងាយ),
+# 3.0 -> 1.9x, 2.0 -> 2.9x (ជិតដូច OpusClip តែព្រិល)។
+PANEL_ZOOM = 3.0
+SPLIT_TOP = "auto"                  # "auto" (អ្នកនិយាយលើ), "left", ឬ "right"
+
 # ---------- Captions ----------
 CAPTION_FONT = "Montserrat ExtraBold"
 # បើ font ខាងលើគ្មានលើម៉ាស៊ីន -> សាកតាមលំដាប់នេះ (captions.resolve_font ព្រមានឲ្យដឹង)

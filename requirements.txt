@@ -2,6 +2,7 @@
 # ដំបូងប្រើ ">=" ឲ្យ pip ជ្រើសលេខថ្មីដែលដំណើរការ រួចយើង freeze ទៅ requirements.lock.txt
 faster-whisper>=1.2.1     # Whisper + word-level timestamps
 ctranslate2>=4.8.3        # engine ខាងក្រោម faster-whisper (CPU/GPU)
+opencv-python-headless>=5.0    # face detection + recognition (reframe)
 numpy>=2.0                # អាន WAV ទៅ array (យើង import ផ្ទាល់ ទើបសរសេរវាទីនេះ)
 typer>=0.27               # CLI
 rich>=15.0                # progress / ពណ៌ក្នុង terminal
