@@ -11,7 +11,6 @@
 រួច `concat` ចូលគ្នា រួចទើប burn caption ម្តងលើ clip ពេញ។
 """
 
-import shutil
 import subprocess
 from pathlib import Path
 from typing import Callable
@@ -92,31 +91,79 @@ def build_filter(crop: tuple[int, int, int, int], ass_filename: str | None,
     return ",".join(parts)
 
 
-def build_layout_filter(layout: Layout, ass_filename: str | None = None,
-                        out_width: int | None = None, out_height: int | None = None) -> str:
-    """filtergraph សម្រាប់ layout មួយ — ចេញជា `-filter_complex` ដែលបញ្ចប់ដោយ `[v]`.
+def layout_chain(layout: Layout, index: int, source_label: str, out_label: str,
+                 suffix: str = "", out_width: int | None = None,
+                 out_height: int | None = None) -> str:
+    """ផ្នែក filtergraph ដែលបម្លែង `[source_label]` ទៅ `[out_label]` តាម layout.
 
     Split ត្រូវការ `split` (ចម្លង stream ជាពីរ) រួច crop ខុសគ្នា រួច `vstack`
     (ដាក់ជាន់គ្នាបញ្ឈរ)។ ផ្ទាំងនីមួយៗខ្ពស់ពាក់កណ្តាលលទ្ធផល។
+
+    `index` ធ្វើឲ្យឈ្មោះ label មិនជាន់គ្នាពេលយើងដាក់ chain ច្រើនក្នុង graph តែមួយ។
     """
     out_width = out_width or config.OUT_WIDTH
     out_height = out_height or config.OUT_HEIGHT
-    burn = f",ass={ass_filename}" if ass_filename else ""
 
     if layout.kind == "split" and layout.top and layout.bottom:
         half = out_height // 2
         return (
-            "[0:v]split=2[a][b];"
-            f"[a]{layout.top.as_filter()},scale={out_width}:{half}:flags=lanczos[top];"
-            f"[b]{layout.bottom.as_filter()},scale={out_width}:{half}:flags=lanczos[bot];"
-            f"[top][bot]vstack=inputs=2,setsar=1{burn}[v]"
+            f"[{source_label}]split=2[a{index}][b{index}];"
+            f"[a{index}]{layout.top.as_filter()},"
+            f"scale={out_width}:{half}:flags=lanczos[t{index}];"
+            f"[b{index}]{layout.bottom.as_filter()},"
+            f"scale={out_width}:{half}:flags=lanczos[m{index}];"
+            f"[t{index}][m{index}]vstack=inputs=2,setsar=1{suffix}[{out_label}]"
         )
 
     box = layout.box
     if box is None:
         raise RenderError(f"layout '{layout.kind}' គ្មានប្រអប់ crop")
-    return (f"[0:v]{box.as_filter()},scale={out_width}:{out_height}:flags=lanczos,"
-            f"setsar=1{burn}[v]")
+    return (f"[{source_label}]{box.as_filter()},"
+            f"scale={out_width}:{out_height}:flags=lanczos,setsar=1{suffix}[{out_label}]")
+
+
+def build_layout_filter(layout: Layout, ass_filename: str | None = None,
+                        out_width: int | None = None, out_height: int | None = None) -> str:
+    """filtergraph សម្រាប់ layout តែមួយ (clip ដែលមិនមានការកាត់ camera)."""
+    burn = f",ass={ass_filename}" if ass_filename else ""
+    return layout_chain(layout, 0, "0:v", "v", burn, out_width, out_height)
+
+
+def build_segments_filter(segments: list[Segment], clip_start: float,
+                          ass_filename: str | None = None,
+                          out_width: int | None = None,
+                          out_height: int | None = None) -> str:
+    """filtergraph តែមួយដែលដោះស្រាយ shot ទាំងអស់ក្នុង clip — encode តែម្តង.
+
+    **ហេតុអ្វីមិន render ដាច់ៗរួច concat?** យើងបានសាកវិធីនោះ ហើយរាល់កន្លែងភ្ជាប់
+    បាត់ frame ១ (គម្លាត 83ms ជំនួស 42ms) ព្រោះ timestamp ត្រូវបង្គត់។ ម្យ៉ាងទៀត
+    វា encode ២ ដង (បាត់បង់គុណភាព + យឺត)។
+
+    វិធីនេះ: `split` ចម្លង stream ទៅគ្រប់ shot, `trim` កាត់ចន្លោះពេលរបស់ shot នីមួយៗ,
+    `setpts=PTS-STARTPTS` ចាប់ផ្តើមពេលឡើងវិញពី 0 (បើមិនដូច្នោះ concat នឹងច្រឡំ),
+    រួច `concat` ភ្ជាប់វិញ។ លទ្ធផល: decode ម្តង, encode ម្តង, គ្មាន frame បាត់។
+
+    សំឡេងមិនត្រូវប៉ះទេ — shot តៗគ្នាគ្របដណ្តប់ clip ទាំងមូល ដូច្នេះវានៅ sync ស្រាប់។
+    """
+    if len(segments) == 1:
+        return build_layout_filter(segments[0].layout, ass_filename, out_width, out_height)
+
+    count = len(segments)
+    parts = ["[0:v]split=" + str(count) + "".join(f"[s{i}]" for i in range(count))]
+
+    for index, segment in enumerate(segments):
+        start = max(0.0, segment.start - clip_start)
+        end = max(start, segment.end - clip_start)
+        parts.append(
+            f"[s{index}]trim=start={start:.3f}:end={end:.3f},setpts=PTS-STARTPTS[p{index}]"
+        )
+        parts.append(layout_chain(segment.layout, index, f"p{index}", f"v{index}",
+                                  out_width=out_width, out_height=out_height))
+
+    burn = f",ass={ass_filename}" if ass_filename else ""
+    joined = "".join(f"[v{i}]" for i in range(count))
+    parts.append(f"{joined}concat=n={count}:v=1:a=0{burn}[v]")
+    return ";".join(parts)
 
 
 def _encode_args(crf: int, preset: str) -> list[str]:
@@ -135,66 +182,24 @@ def _run_ffmpeg(cmd: list[str], cwd: Path, what: str) -> None:
         raise RenderError(f"FFmpeg បរាជ័យ ({what}):\n{result.stderr.strip()[-800:]}")
 
 
-def render_segment(video_path: Path, segment: Segment, out_path: Path,
-                   ass_filename: str | None = None,
-                   crf: int | None = None, preset: str | None = None) -> Path:
-    """Render shot មួយ (មួយ layout) ទៅ MP4."""
+def render_segments(video_path: Path, clip: Clip, segments: list[Segment],
+                    out_path: Path, ass_filename: str | None = None) -> Path:
+    """Render clip ទាំងមូល (shot ច្រើន) ដោយ FFmpeg **តែម្តង**."""
     require_ffmpeg("ffmpeg")
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     cmd = [
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
-        "-ss", f"{segment.start:.3f}",
+        "-ss", f"{clip.start:.3f}",
         "-i", str(Path(video_path).resolve()),
-        "-t", f"{segment.duration:.3f}",
-        "-filter_complex", build_layout_filter(segment.layout, ass_filename),
+        "-t", f"{clip.duration:.3f}",
+        "-filter_complex", build_segments_filter(segments, clip.start, ass_filename),
         "-map", "[v]", "-map", "0:a?",
-        *_encode_args(config.VIDEO_CRF if crf is None else crf,
-                      config.VIDEO_PRESET if preset is None else preset),
+        *_encode_args(config.VIDEO_CRF, config.VIDEO_PRESET),
         out_path.name,
     ]
-    _run_ffmpeg(cmd, out_path.parent, f"segment {segment.start:.1f}s")
-    if not out_path.exists() or out_path.stat().st_size == 0:
-        raise RenderError(f"segment {out_path.name} ទទេ")
-    return out_path
-
-
-def concat_segments(paths: list[Path], out_path: Path) -> Path:
-    """ភ្ជាប់ MP4 ច្រើនជាមួយគ្នាដោយ **មិន encode ឡើងវិញ** (`-c copy`).
-
-    Segment ទាំងអស់មក​ពី encode ដូចគ្នា ដូច្នេះការចម្លងផ្ទាល់ដំណើរការ ហើយលឿន
-    និងគ្មានការបាត់បង់គុណភាព។
-    """
-    out_path = Path(out_path)
-    folder = out_path.parent
-    listing = folder / "concat_list.txt"
-    listing.write_text(
-        "".join(f"file '{Path(p).name}'\n" for p in paths), encoding="utf-8"
-    )
-    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
-           "-f", "concat", "-safe", "0", "-i", listing.name, "-c", "copy", out_path.name]
-    _run_ffmpeg(cmd, folder, "concat")
-    listing.unlink(missing_ok=True)
-    return out_path
-
-
-def burn_subtitles(video_in: Path, ass_path: Path, out_path: Path) -> Path:
-    """Burn `.ass` លើ video ដែល render រួច (ជំហានចុងក្រោយ).
-
-    យើង run ក្នុង folder របស់ `.ass` ដូច្នេះ filter ឃើញតែឈ្មោះ file។
-    Audio ចម្លងផ្ទាល់ (`-c:a copy`) — គ្មានហេតុផល encode សំឡេងម្តងទៀត។
-    """
-    out_path = Path(out_path)
-    cmd = [
-        "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
-        "-i", str(Path(video_in).resolve()),
-        "-vf", f"ass={Path(ass_path).name}",
-        "-c:v", "libx264", "-preset", config.VIDEO_PRESET, "-crf", str(config.VIDEO_CRF),
-        "-pix_fmt", "yuv420p", "-c:a", "copy", "-movflags", "+faststart",
-        out_path.name,
-    ]
-    _run_ffmpeg(cmd, Path(ass_path).parent, "burn subtitles")
+    _run_ffmpeg(cmd, out_path.parent, f"'{clip.title}' ({len(segments)} shots)")
     return out_path
 
 
@@ -247,45 +252,12 @@ def render_clip(
                                           box=Box(x=x, y=y, w=crop_w, h=crop_h)))]
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    if len(segments) == 1:
-        # ផ្លូវលឿន: layout តែមួយ -> encode ម្តងគត់ (គុណភាពល្អជាង)
-        render_segment(video_path, segments[0], out_path,
-                       ass_filename=ass_path.name if ass_path else None)
-    else:
-        _render_in_segments(video_path, segments, out_path, ass_path)
+    render_segments(video_path, clip, segments, out_path,
+                    ass_filename=ass_path.name if ass_path else None)
 
     if not out_path.exists() or out_path.stat().st_size == 0:
         raise RenderError(f"FFmpeg រត់ចប់ តែ {out_path.name} ទទេ/គ្មាន។")
     return out_path
-
-
-def _render_in_segments(video_path: Path, segments: list[Segment],
-                        out_path: Path, ass_path: Path | None) -> None:
-    """Render shot នីមួយៗ -> concat -> burn caption ម្តង.
-
-    **ហេតុអ្វីមិន burn caption ក្នុង segment នីមួយៗ?** ពេលវេលាក្នុង `.ass` រាប់ពីដើម
-    clip។ បើ burn ដាច់ៗ យើងត្រូវរំកិលពេលវេលាគ្រប់ segment — ងាយខុស។
-    """
-    work_dir = out_path.parent / f".tmp_{out_path.stem}"
-    if work_dir.exists():
-        shutil.rmtree(work_dir, ignore_errors=True)
-    work_dir.mkdir(parents=True, exist_ok=True)
-
-    try:
-        pieces = [
-            render_segment(video_path, segment, work_dir / f"seg_{index:03d}.mp4",
-                           crf=config.SEGMENT_CRF, preset=config.SEGMENT_PRESET)
-            for index, segment in enumerate(segments)
-        ]
-        joined = concat_segments(pieces, work_dir / "joined.mp4")
-
-        if ass_path is None:
-            shutil.move(str(joined), str(out_path))
-        else:
-            burn_subtitles(joined, ass_path, out_path)
-    finally:
-        shutil.rmtree(work_dir, ignore_errors=True)
 
 
 def render_all(

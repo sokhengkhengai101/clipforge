@@ -44,11 +44,6 @@ OUT_WIDTH = 1080
 OUT_HEIGHT = 1920          # 9:16 vertical
 VIDEO_CRF = 20             # លេខតូច = គុណភាពល្អ + file ធំ
 VIDEO_PRESET = "medium"
-# ពេល layout ប្តូរពាក់កណ្តាល clip យើង render shot នីមួយៗដោយឡែករួច concat។
-# Segment ប្រើ CRF ល្អជាង (18) ព្រោះវាត្រូវ encode ម្តងទៀតពេល burn caption —
-# ការ encode ២ ដងបាត់បង់គុណភាព ដូច្នេះជំហានដំបូងត្រូវច្បាស់ជាង។
-SEGMENT_CRF = 18
-SEGMENT_PRESET = "veryfast"
 AUDIO_BITRATE = "128k"
 
 # ---------- Reframe (split screen / face crop) ----------

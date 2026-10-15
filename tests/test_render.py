@@ -4,6 +4,8 @@ Test ដែល render ពិតប្រើ `tests/fixtures/sample_5s.mp4` ហ�
 preset ultrafast (តាម monkeypatch) ដើម្បីឲ្យវារត់ក្នុងមួយវិនាទី។
 """
 
+import subprocess
+
 import pytest
 
 import config
@@ -201,7 +203,7 @@ def layout_split() -> Layout:
 
 def test_build_layout_filter_split_has_stack():
     f = R.build_layout_filter(layout_split(), out_width=1080, out_height=1920)
-    assert f.startswith("[0:v]split=2[a][b];")
+    assert f.startswith("[0:v]split=2[a0][b0];")      # label មានលេខ ដើម្បីកុំជាន់គ្នា
     assert "crop=600:534:0:0" in f and "crop=600:534:600:0" in f
     assert "scale=1080:960" in f          # ផ្ទាំងនីមួយៗខ្ពស់ពាក់កណ្តាល
     assert "vstack=inputs=2" in f
@@ -250,10 +252,28 @@ def test_render_with_segments_joins_them(tmp_path, fast_render):
     assert abs(probe_duration(out) - 5.0) < 0.6
 
 
-def test_render_with_segments_cleans_up_temp_folder(tmp_path, fast_render):
+def test_render_with_segments_leaves_no_temp_files(tmp_path, fast_render):
+    """encode តែម្តង -> មិនមាន file អន្តរកាលទេ."""
     R.render_clip(FIXTURE, sample_clip(0.0, 5.0), tmp_path / "c.mp4",
                   segments=two_segments(0.0, 5.0))
-    assert not list(tmp_path.glob(".tmp_*")), "folder បណ្ដោះអាសន្នត្រូវលុបចោល"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["c.mp4"]
+
+
+def test_render_with_segments_keeps_every_frame(tmp_path, fast_render):
+    """bug ពិត: ការ concat MP4 ដាច់ៗបាត់ frame ១ ក្នុងមួយកន្លែងភ្ជាប់."""
+    out = R.render_clip(FIXTURE, sample_clip(0.0, 5.0), tmp_path / "c.mp4",
+                        segments=two_segments(0.0, 5.0))
+    result = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+         "frame=pts_time", "-of", "csv=p=0", str(out)],
+        capture_output=True, text=True,
+    )
+    times = sorted(float(line.split(",")[0]) for line in result.stdout.splitlines()
+                   if line.strip() and line.split(",")[0])
+    gaps = [b - a for a, b in zip(times, times[1:])]
+    assert gaps, "ត្រូវមាន frame ច្រើន"
+    normal = min(gaps)
+    assert max(gaps) < normal * 1.6, f"មានគម្លាតធំ (frame បាត់): {max(gaps):.3f}s"
 
 
 def test_render_all_passes_plans_through(tmp_path, fast_render):
@@ -262,16 +282,37 @@ def test_render_all_passes_plans_through(tmp_path, fast_render):
     assert paths[0].is_file()
 
 
-def test_single_segment_uses_fast_path(tmp_path, fast_render, monkeypatch):
-    """layout តែមួយ -> មិនត្រូវ concat (encode ម្តងគត់ = គុណភាពល្អជាង)."""
-    def explode(*args, **kwargs):
-        raise AssertionError("មិនគួរ concat ពេលមាន segment តែមួយ")
-
-    monkeypatch.setattr(R, "concat_segments", explode)
-    segments = [Segment(start=0.0, end=5.0,
+def test_single_segment_filter_has_no_concat():
+    """layout តែមួយ -> graph សាមញ្ញ គ្មាន trim/concat."""
+    segments = [Segment(start=10.0, end=20.0,
                         layout=Layout(kind="center", box=Box(x=40, y=0, w=180, h=240)))]
-    assert R.render_clip(FIXTURE, sample_clip(), tmp_path / "c.mp4",
-                         segments=segments).is_file()
+    f = R.build_segments_filter(segments, 10.0)
+    assert "concat=" not in f and "trim=" not in f
+
+
+def test_segments_filter_trims_relative_to_clip_start():
+    """trim ត្រូវរាប់ពីដើម clip ព្រោះ `-ss` បានរំកិលពេលរួចហើយ."""
+    segments = two_segments(100.0, 110.0)
+    f = R.build_segments_filter(segments, 100.0)
+    assert "trim=start=0.000:end=5.000" in f
+    assert "trim=start=5.000:end=10.000" in f
+    assert "setpts=PTS-STARTPTS" in f
+    assert "concat=n=2:v=1:a=0" in f
+    assert f.endswith("[v]")
+
+
+def test_segments_filter_labels_do_not_collide():
+    """chain ច្រើនក្នុង graph តែមួយ -> label ត្រូវខុសគ្នា."""
+    segments = two_segments(0.0, 10.0)
+    f = R.build_segments_filter(segments, 0.0)
+    for label in ("[s0]", "[s1]", "[p0]", "[p1]", "[v0]", "[v1]", "[a1]", "[b1]"):
+        assert f.count(label) >= 1
+
+
+def test_segments_filter_burns_subtitles_after_concat():
+    f = R.build_segments_filter(two_segments(0.0, 10.0), 0.0, "clip_01.ass")
+    assert ",ass=clip_01.ass[v]" in f
+    assert f.index("concat=") < f.index("ass=clip_01.ass")
 
 
 def test_render_reruns_when_subtitles_are_newer(tmp_path, fast_render):
