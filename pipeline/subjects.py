@@ -171,3 +171,60 @@ def detect_subjects_in_frame(frame, size: tuple[int, int],
 def detect_subjects(video_path: Path, timestamp: float,
                     size: tuple[int, int]) -> list[Subject]:
     return detect_subjects_in_frame(grab_frame(video_path, timestamp, size), size)
+
+
+# ---------- ចលនា (ពេលគ្មានមុខ គ្មានវត្ថុ) ----------
+
+def motion_centre(video_path: Path, start: float, end: float, size: tuple[int, int],
+                  samples: int | None = None) -> tuple[float, float] | None:
+    """(cx, cy) នៃតំបន់ដែលមានចលនាច្រើនបំផុតក្នុង shot — ឬ `None`.
+
+    **ហេតុអ្វីត្រូវការ?** ក្នុងវីដេអូសត្វព្រៃ ២០% នៃ frame គ្មានទាំងមុខទាំងវត្ថុ
+    ដែលស្គាល់បាន (ធូលី, ចលនាព្រិលពេលរមាសរត់)។ តែ **ចលនា** ប្រាប់យើងបានថា
+    គួរមើលទីណា។
+
+    របៀប: យក frame តូចៗ រួចដក frame ជាប់គ្នា (frame differencing) បូកបញ្ចូលគ្នា
+    ជាផែនទីចលនា រួចយកចំណុចកណ្តាលទម្ងន់នៃកន្លែងដែលចលនាខ្លាំងជាងធម្មតា។
+    """
+    import cv2
+    import numpy as np
+
+    samples = config.MOTION_SAMPLES if samples is None else samples
+    frame_w, frame_h = size
+    small_w = config.MOTION_WIDTH
+    small_h = max(2, int(small_w * frame_h / frame_w))
+
+    moments = [start + (end - start) * (i + 0.5) / samples for i in range(samples)]
+    greys = []
+    for moment in moments:
+        frame = grab_frame(video_path, moment, size)
+        if frame is None:
+            continue
+        small = cv2.resize(frame, (small_w, small_h), interpolation=cv2.INTER_AREA)
+        greys.append(cv2.cvtColor(small, cv2.COLOR_BGR2GRAY).astype(np.int16))
+
+    if len(greys) < 2:
+        return None
+
+    motion = np.zeros((small_h, small_w), dtype=np.float32)
+    for before, after in zip(greys, greys[1:]):
+        motion += np.abs(after - before)
+
+    # ចលនាទូទាំងរូប (camera pan) ផ្តល់តម្លៃស្មើៗគ្នា -> កណ្តាលទម្ងន់ជិតកណ្តាលរូប
+    # ដែលជាចម្លើយសុវត្ថិភាពរួចទៅហើយ។ យើងយកតែកន្លែងដែលលើសមធ្យម + 1 SD។
+    threshold = motion.mean() + motion.std()
+    hot = motion >= max(threshold, 1.0)
+    if hot.sum() < config.MOTION_MIN_PIXELS:
+        return None
+    peak = float(motion.max())
+    if peak <= 0 or motion.mean() / peak > config.MOTION_MAX_UNIFORMITY:
+        return None            # ចលនាស្មើពេញរូប = កាមេរ៉ាបង្វិល -> ចម្លើយគ្មានន័យ
+
+    weights = motion * hot
+    total = weights.sum()
+    if total <= 0:
+        return None
+    ys, xs = np.nonzero(hot)
+    cx = float((xs * weights[ys, xs]).sum() / total) * frame_w / small_w
+    cy = float((ys * weights[ys, xs]).sum() / total) * frame_h / small_h
+    return cx, cy

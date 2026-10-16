@@ -118,6 +118,20 @@ only needs "a large subject is here". YOLOX is anchor-free, so decoding is
 `(prediction + grid) * stride`, then NMS; it costs about 175 ms per frame on the CPU, and we sample
 a few frames per shot. The model is 34 MB: `python check_env.py` prints the curl command for it.
 
+`motion_centre()` is the last resort when neither a face nor a subject is found -- dust, a blurred
+animal running. It diffs six small frames across the shot and takes the weighted centre of the
+pixels that move most. A panning camera moves every pixel, which makes that centre meaningless, so
+it is rejected when the motion map is too uniform: measured `mean/max` is 0.90 for a synthetic pan
+and 0.54 for a real one, against 0.21-0.32 where something in the frame moves.
+
+Signals together, on 40 sampled frames (face first, then subject, then motion):
+
+| video | face | subject | motion | nothing |
+|---|---|---|---|---|
+| wildlife | 18 | 12 | 9 | **1** (97% covered, was 47%) |
+| podcast | 40 | 0 | 0 | 0 |
+| interview | 38 | 2 | 0 | 0 |
+
 ## Project layout
 
 ```

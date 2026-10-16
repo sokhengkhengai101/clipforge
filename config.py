@@ -136,6 +136,15 @@ SUBJECT_MODEL_URL = ("https://github.com/opencv/opencv_zoo/raw/main/models/"
                      "object_detection_yolox/object_detection_yolox_2022nov.onnx")
 SUBJECT_MIN_SCORE = 0.45
 SUBJECT_INPUT = 640                 # YOLOX រៀននៅ 640x640
+# ចលនា: ប្រើពេលគ្មានទាំងមុខទាំងវត្ថុ (ធូលី, សត្វរត់ព្រិល)។ រូបតូចល្មមសម្រាប់
+# ដក frame — យើងត្រូវការត្រឹម "មើលទៅណា" មិនមែនព័ត៌មានលម្អិតទេ។
+MOTION_SAMPLES = 6
+MOTION_WIDTH = 160
+MOTION_MIN_PIXELS = 20
+# ចលនាស្មើៗគ្នាពេញរូប = **កាមេរ៉ាបង្វិល** មិនមែនវត្ថុផ្លាស់ទីទេ ហើយចម្លើយនឹងចៃដន្យ។
+# វាស់ពី mean/max នៃផែនទីចលនា: pan លឿន 0.54, រមាសក្នុងធូលី 0.32,
+# មនុស្សលើកកាមេរ៉ា 0.21។ លើស 0.45 -> ត្រឡប់ None រួចប្រើ center crop។
+MOTION_MAX_UNIFORMITY = 0.45
 
 FACE_MATCH_THRESHOLD = 0.30         # cosine អប្បបរមាទើបរាប់ថាជាមនុស្សតែម្នាក់
 # វាស់លើ footage ពិត: មុខពិត 0.90-0.94, false positive (ចង្កៀង) 0.53-0.57

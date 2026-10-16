@@ -106,3 +106,54 @@ def test_biggest_subject_comes_first(monkeypatch):
     found = S.detect_subjects_in_frame(frame, SIZE)
     assert len(found) == 2
     assert found[0].area > found[1].area
+
+
+# ---------- ចលនា ----------
+
+def moving_square(frames: int, step: int, size=(720, 1280)):
+    """រូបខ្មៅដែលមានការ៉េសដែលរំកិលទៅស្តាំ — ចលនាច្បាស់នៅកន្លែងតែមួយ."""
+    made = []
+    for index in range(frames):
+        frame = np.zeros((*size, 3), dtype=np.uint8)
+        x = 200 + index * step
+        frame[300:400, x:x + 100] = 255
+        made.append(frame)
+    return made
+
+
+def test_motion_finds_the_moving_thing(monkeypatch):
+    frames = moving_square(6, step=40)
+    monkeypatch.setattr(S, "grab_frame",
+                        lambda path, t, size: frames[min(int(t), len(frames) - 1)])
+    centre = S.motion_centre(None, 0.0, 6.0, (1280, 720))
+    assert centre is not None
+    cx, cy = centre
+    assert 200 < cx < 800          # ការ៉េរំកិលក្នុងដែននេះ
+    assert 280 < cy < 420
+
+
+def test_a_still_shot_has_no_motion(monkeypatch):
+    frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+    frame[300:400, 200:300] = 255
+    monkeypatch.setattr(S, "grab_frame", lambda path, t, size: frame)
+    assert S.motion_centre(None, 0.0, 6.0, (1280, 720)) is None
+
+
+def test_a_camera_pan_is_rejected(monkeypatch):
+    """កាមេរ៉ាបង្វិល -> រូបទាំងមូលរំកិល -> ចលនាស្មើពេញរូប -> គ្មានចម្លើយដែលមានន័យ.
+
+    វាស់ពីភាពស្មើគ្នានៃផែនទីចលនា (mean/max): pan សង្រែះ 0.90,
+    សត្វផ្លាស់ទីពិត 0.21-0.32។
+    """
+    base = np.zeros((720, 1280, 3), dtype=np.uint8)
+    for column in range(0, 1280, 40):
+        base[:, column:column + 20] = 200
+    frames = [np.roll(base, step * 25, axis=1) for step in range(6)]
+    monkeypatch.setattr(S, "grab_frame",
+                        lambda path, t, size: frames[min(int(t), len(frames) - 1)])
+    assert S.motion_centre(None, 0.0, 6.0, (1280, 720)) is None
+
+
+def test_motion_needs_two_frames(monkeypatch):
+    monkeypatch.setattr(S, "grab_frame", lambda path, t, size: None)
+    assert S.motion_centre(None, 0.0, 6.0, (1280, 720)) is None
