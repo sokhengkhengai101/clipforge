@@ -67,10 +67,12 @@ Known limits to judge clips against:
 - Short sources are a poor fit for clip-finding. A 56 s wildlife video gave one 7 s candidate that
   boundary-snapping stretched to 42 s, crossing a 26.5 s silence to reach `MIN_CLIP_SEC`. Use
   `--full` for anything near clip length.
-- `SCENE_THRESHOLD = 0.3` misses real cuts. At 33.78-40.46s of the 47-min interview it reports no
-  cut, while 0.2 finds three (34.33, 35.91, 39.29) that match what the frames show. A montage then
-  lands in one "shot" and gets one crop box. Moving crop hides most of it; lowering the threshold
-  is untested and would change every clip, so it is a separate step.
+- `SCENE_THRESHOLD` is 0.2. At 0.3 it missed real cuts twice: the montage at 33.78-40.46s of the
+  47-min interview (0.2 finds 34.33, 35.91, 39.29) and a cut at 50.76 s in the wildlife clip, where
+  one shot held both a centred presenter and a two-shot, so the panel boxes from one framing showed
+  bushes in the other. Measured when lowering it: the podcast plans identically, the interview
+  moves 3 s between layouts, the wildlife clip loses a bogus split, and planning takes the same
+  time.
 
 Out of scope for Phase 0: per-frame MediaPipe tracking, diarization, Khmer
 translation, UI, batch. (Sampled face tracking inside a shot is in, see Layout below.)
