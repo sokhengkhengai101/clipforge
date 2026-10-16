@@ -720,8 +720,9 @@ def test_single_layout_picks_the_biggest_face(monkeypatch):
 def test_parse_layouts_knows_three_and_four():
     assert R.parse_layouts("fill,split,three") == frozenset({"single", "split", "three"})
     assert R.parse_layouts("four") == frozenset({"four"})
-    # `auto` មិនរួមវាទេ — វាជា opt-in
-    assert "three" not in R.parse_layouts("auto")
+    # `auto` = អនុញ្ញាតទាំងអស់ ហើយ planner រើសក្នុងមួយ shot
+    assert R.parse_layouts("auto") == R.ALL_LAYOUTS
+    assert {"three", "four"} <= R.parse_layouts("auto")
 
 
 def test_panel_rects_split_is_two_equal_halves():

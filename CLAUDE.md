@@ -127,9 +127,12 @@ clipforge/
   (`clips/`, `clips_4x5/`, ...). Portrait and square stack split panels vertically; 16:9 puts
   them side by side, since a 1920x540 panel is too shallow to frame a face.
 - Layout: `--layout` takes a comma-separated list of the layouts the planner may use, and it
-  picks one per shot: `auto`, `fill`/`face` (crop to the face), `split`, `three`, `four`,
-  `center`. `three` and `four` are **not** in `auto` -- they change the picture a lot, so they are
-  opt-in (`--layout fill,split,three`). The planner tries the widest grid first (four, then three,
+  picks one per shot, the shots coming from scene detection: `auto` (every layout), `fill`/`face`
+  (crop to the face), `split`, `three`, `four`, `center`. You choose what the planner *may* use and
+  it chooses what *fits*, which is how OpusClip's reframe dialog works. Before putting three and
+  four into `auto`: the three-person podcast moved 34 s from split to three (correct -- three
+  people are on screen) and the two-person interview did not change at all.
+  The planner tries the widest grid first (four, then three,
   then split) and takes the biggest N faces sorted left to right, provided neighbours are at least
   `MIN_FACE_SEPARATION` apart and no panel exceeds `PANEL_MAX_UPSCALE`. `panel_rects()` owns the
   geometry: split is two halves, `three` is **one big panel over two small ones** (1080x1280 plus

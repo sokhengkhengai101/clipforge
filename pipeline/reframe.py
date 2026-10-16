@@ -755,9 +755,10 @@ LAYOUT_ALIASES = {
     "single": "single", "face": "single", "fill": "single",
     "center": "center", "centre": "center",
 }
-# `auto` = ឥរិយាបថដែលអ្នកប្រើបានអនុម័តរួច។ `three`/`four` ជា **opt-in** ព្រោះវា
-# ប្តូររូបភាពច្រើន (`--layout fill,split,three`)។
-ALL_LAYOUTS = frozenset({"split", "single", "center"})
+# `auto` = អនុញ្ញាតទាំងអស់ ហើយ planner រើសក្នុងមួយ shot (shot មកពី scene detection)។
+# វាស់មុនបើក three/four ក្នុង auto: podcast ៣ នាក់ប្តូរ 34s ពី split ទៅ three
+# (ត្រឹមត្រូវ — មានមនុស្ស ៣ នាក់ក្នុងរូប) ហើយបទសម្ភាសន៍ ២ នាក់មិនប្តូរសោះ។
+ALL_LAYOUTS = frozenset({"split", "three", "four", "single", "center"})
 MULTI_PANEL = ("four", "three", "split")
 
 
