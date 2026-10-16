@@ -20,7 +20,12 @@ Pipeline (one module per step, in `pipeline/`):
 1. `audio.py` — extract audio with FFmpeg → WAV 16 kHz mono
 2. `transcribe.py` — faster-whisper → segments + **word-level timestamps** → cache to `output/<name>/transcript.json` (skip if cache exists)
 3. `highlights.py` — chunk transcript (~5 min, 30 s overlap) → LLM → JSON clips `{start, end, title, hook, type, score, reason}` → validate with pydantic → dedupe overlaps → top N by score
-4. `boundaries.py` — snap start/end to nearest sentence boundary, add 0.3 s padding, keep 15–90 s
+4. `boundaries.py` — snap start/end to nearest sentence boundary, add 0.3 s padding, keep 15–90 s.
+   A "sentence" also ends at a pause over 1 s, because Whisper drops punctuation; those ends are
+   marked `hard=False` and the end-snapping prefers a real `.?!` within `SNAP_HARD_END_SEC` (4 s)
+   so a clip stops on a finished thought. Measured on a 70-min podcast: 97 of 868 sentences (11%)
+   end on a pause, and the rule took clips ending on punctuation from 12/15 to 13/15 with no
+   change on the 47-min interview (14/14 before and after).
 5. `captions.py` — build `.ass` subtitle file per clip (≤ 2 lines, ≤ 32 chars/line, keyword highlight in #FFD23F)
 6. `render.py` — FFmpeg: trim → center-crop 9:16 → scale 1080×1920 → burn ASS → H.264 MP4
 

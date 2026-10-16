@@ -289,3 +289,84 @@ def test_clip_text_falls_back_to_segments():
     transcript = Transcript(language="en", language_probability=1.0, duration=10.0,
                             model="t", device="cpu", segments=segments)
     assert B.clip_text(Clip(start=0.0, end=10.0, title="x"), transcript) == "segment text"
+
+
+# ---------- ចុងប្រយោគពិត ទល់នឹង ការឈប់ដកដង្ហើម ----------
+
+def pause_transcript() -> Transcript:
+    """ប្រយោគ ១ ចប់ពិត រួចការឈប់ ១.៥ វិនាទីកាត់ប្រយោគទី ២ ជាពីរកំណាត់.
+
+    0-5s   "a b c d e."        <- hard (ចប់ដោយ .)
+    6-9s   "f g h i"           <- soft (កាត់ដោយការឈប់)
+    11-15s "j k l m n."        <- hard
+    """
+    spec = [("a", 0.0, 1.0), ("b", 1.0, 2.0), ("c", 2.0, 3.0), ("d", 3.0, 4.0), ("e.", 4.0, 5.0),
+            ("f", 6.0, 7.0), ("g", 7.0, 8.0), ("h", 8.0, 9.0), ("i", 9.0, 9.5),
+            ("j", 11.0, 12.0), ("k", 12.0, 13.0), ("l", 13.0, 14.0), ("m", 14.0, 15.0),
+            ("n.", 15.0, 16.0)]
+    return transcript_from_words(words_from(spec), duration=20.0)
+
+
+def test_build_sentences_marks_real_endings():
+    sentences = B.build_sentences(pause_transcript())
+    assert [s.hard for s in sentences] == [True, False, True]
+    assert sentences[1].text == "f g h i"       # គំនិតមិនទាន់ចប់
+
+
+def test_nearest_end_prefers_a_real_ending():
+    """ចុង "ឈប់ដកដង្ហើម" នៅ 9.5s ជិតជាង តែ 5.0s ជាចុងពិត -> យក 5.0s."""
+    sentences = B.build_sentences(pause_transcript())
+    assert B._nearest_end(sentences, 9.0, tolerance=5.0) == 5.0
+
+
+def test_nearest_end_falls_back_when_no_real_ending_is_near():
+    """កុំឲ្យ clip លោតឆ្ងាយដើម្បីរកចុងពិត — បើវាឆ្ងាយពេក យកចុងដែលមាន."""
+    sentences = B.build_sentences(pause_transcript())
+    assert B._nearest_end(sentences, 9.0, tolerance=1.0) == 9.5
+
+
+def test_snap_clip_ends_on_a_complete_thought():
+    """ករណីពិតពី podcast: clip ចប់ត្រង់ "This was like" មុនពេលកែ."""
+    transcript = pause_transcript()
+    sentences = B.build_sentences(transcript)
+    # 8.5s អយូយពីចុងពិត 5.0s ដោយ 3.5s (តិចជាង SNAP_HARD_END_SEC)
+    clip = Clip(start=0.0, end=8.5, title="t", hook="h", type="story", score=8.0, reason="r")
+    snapped = B.snap_clip(clip, sentences, video_duration=20.0, min_sec=4.0, max_sec=30.0)
+    assert snapped is not None
+    assert snapped.end == pytest.approx(5.0 + config.PADDING_SEC, abs=0.01)
+
+
+def test_snap_clip_keeps_a_far_soft_ending():
+    """កុំរុញ clip ថយក្រោយឈ្ងាយពេកដើម្បីរកចុងពិត — មាតិកានោះបាត់ខ្លឹមសារ."""
+    transcript = pause_transcript()
+    sentences = B.build_sentences(transcript)
+    clip = Clip(start=0.0, end=9.4, title="t", hook="h", type="story", score=8.0, reason="r")
+    snapped = B.snap_clip(clip, sentences, video_duration=20.0, min_sec=4.0, max_sec=30.0)
+    assert snapped is not None
+    assert snapped.end == pytest.approx(9.5 + config.PADDING_SEC, abs=0.01)
+
+
+def test_extend_to_min_reaches_a_real_ending():
+    """clip ខ្លីត្រូវពន្លាត — វាគួរឈប់ត្រង់ចុងពិត មិនមែនចុងឈប់ដកដង្ហើម."""
+    spec = [("a", 0.0, 1.0), ("b", 1.0, 2.0), ("c", 2.0, 3.0), ("d", 3.0, 4.0), ("e.", 4.0, 5.0),
+            ("f", 6.0, 7.0), ("g", 7.0, 8.0), ("h", 8.0, 9.0), ("i", 9.0, 9.5),
+            ("j", 11.0, 11.5), ("k.", 11.5, 12.0)]
+    sentences = B.build_sentences(transcript_from_words(words_from(spec), duration=20.0))
+    start, end = B._extend_to_min(0.0, 5.0, sentences, min_sec=8.0)
+    assert end == 12.0          # រំលង 9.5 (soft) ទៅ 12.0 (hard, នៅក្នុងថវិកា)
+
+
+def test_extend_to_min_does_not_overshoot_for_a_far_ending():
+    """បើចុងពិតនៅឆ្ងាយជាង SNAP_HARD_END_SEC យើងទទួលយកចុងដែលមាន."""
+    spec = [("a", 0.0, 1.0), ("b", 1.0, 2.0)]
+    spec += [(f"w{i}", 3.0 + i, 4.0 + i) for i in range(30)]      # soft, វែង
+    spec += [("end.", 40.0, 41.0)]
+    sentences = B.build_sentences(transcript_from_words(words_from(spec), duration=50.0))
+    start, end = B._extend_to_min(0.0, 2.0, sentences, min_sec=5.0)
+    assert end < 41.0
+
+
+def test_trim_to_max_prefers_a_real_ending():
+    sentences = B.build_sentences(pause_transcript())
+    start, end = B._trim_to_max(0.0, 20.0, sentences, max_sec=10.0, min_sec=3.0)
+    assert end == 5.0           # 9.5 សមក្នុង max តែវាជា soft

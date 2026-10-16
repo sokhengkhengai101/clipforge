@@ -30,12 +30,18 @@ SENTENCE_ENDINGS = (".", "?", "!", "…")
 
 @dataclass
 class Sentence:
-    """ប្រយោគមួយ + ពេលវេលាពិតរបស់វា (គណនាពី word timestamps)."""
+    """ប្រយោគមួយ + ពេលវេលាពិតរបស់វា (គណនាពី word timestamps).
+
+    `hard` = ប្រយោគនេះចប់ដោយ `.` `?` `!` ពិតៗ។ បើ `False` វាចប់ត្រឹមការឈប់ដកដង្ហើម
+    ហើយ**គំនិតមិនទាន់ចប់ទេ** (ឧ. "This was like")។ ក្នុង podcast ពិតមួយ 11% នៃ
+    ប្រយោគជាប្រភេទនេះ ហើយការបញ្ចប់ clip ត្រង់ពួកវាធ្វើឲ្យ clip ដាច់កណ្តាលគំនិត។
+    """
 
     start: float
     end: float
     text: str
     words: list[Word] = field(default_factory=list)
+    hard: bool = True
 
 
 def ends_sentence(word_text: str) -> bool:
@@ -68,10 +74,12 @@ def build_sentences(transcript: Transcript) -> list[Sentence]:
         next_word = all_words[i + 1] if i + 1 < len(all_words) else None
         long_pause = next_word is not None and (next_word.start - word.end) > PAUSE_SEC
 
-        if ends_sentence(word.word) or long_pause or next_word is None:
+        closed_by_punctuation = ends_sentence(word.word)
+        if closed_by_punctuation or long_pause or next_word is None:
             text = " ".join(w.word.strip() for w in current).strip()
             sentences.append(Sentence(
                 start=current[0].start, end=current[-1].end, text=text, words=list(current),
+                hard=closed_by_punctuation,
             ))
             current = []
 
@@ -88,21 +96,40 @@ def _nearest_start(sentences: list[Sentence], time: float) -> float:
     return min(candidates, key=lambda t: abs(t - time))
 
 
-def _nearest_end(sentences: list[Sentence], time: float) -> float:
-    """ចុងប្រយោគជិតបំផុតនឹង `time`."""
-    candidates = [s.end for s in sentences]
-    return min(candidates, key=lambda t: abs(t - time))
+def _nearest_end(sentences: list[Sentence], time: float,
+                 tolerance: float | None = None) -> float:
+    """ចុងប្រយោគជិតបំផុតនឹង `time` — **ចូលចិត្តប្រយោគដែលចប់ពិត**.
+
+    បើមានចុងប្រយោគពិត (`.?!`) ក្នុងចម្ងាយ `tolerance` យើងយកវា ទោះមានចុងប្រភេទ
+    "ឈប់ដកដង្ហើម" ជិតជាង។ បើគ្មាន យើងត្រឡប់ទៅយកជិតបំផុតគ្រប់ប្រភេទ (កុំឲ្យ
+    clip លោតទៅឆ្ងាយ ៣០ វិនាទីដើម្បីរកចំណុច)។
+    """
+    tolerance = config.SNAP_HARD_END_SEC if tolerance is None else tolerance
+
+    hard = [s.end for s in sentences if s.hard and abs(s.end - time) <= tolerance]
+    if hard:
+        return min(hard, key=lambda t: abs(t - time))
+    return min((s.end for s in sentences), key=lambda t: abs(t - time))
+
+
+def _is_hard_end(sentences: list[Sentence], time: float) -> bool:
+    """ពេលនេះជាចុងប្រយោគពិតឬអត់ (ក្នុងល្អៀង 10ms)?"""
+    return any(s.hard and abs(s.end - time) < 0.01 for s in sentences)
 
 
 def _extend_to_min(start: float, end: float, sentences: list[Sentence],
                    min_sec: float) -> tuple[float, float]:
     """ពន្លាត clip ខ្លីពេកដោយបន្ថែមប្រយោគ — ទៅមុខជាមុន រួចទៅក្រោយ."""
-    # ទៅមុខ: យកចុងប្រយោគបន្ទាប់ៗ
+    # ទៅមុខ: យកចុងប្រយោគបន្ទាប់ៗ — ហើយបើដល់ប្រវែងហើយតែគំនិតមិនទាន់ចប់
+    # (`hard=False`) បន្តទៅចុងពិតបន្ទាប់ ក្នុងដែន `extra`។
+    extra = config.SNAP_HARD_END_SEC
     for sentence in sentences:
-        if end - start >= min_sec:
+        if sentence.end <= end:
+            continue
+        long_enough = end - start >= min_sec
+        if long_enough and (_is_hard_end(sentences, end) or sentence.end - start > min_sec + extra):
             break
-        if sentence.end > end:
-            end = sentence.end
+        end = sentence.end
 
     # បើនៅខ្លី: ទៅក្រោយ (តាមលំដាប់បញ្ច្រាស)
     for sentence in reversed(sentences):
@@ -120,8 +147,12 @@ def _trim_to_max(start: float, end: float, sentences: list[Sentence],
     if end - start <= max_sec:
         return start, end
 
-    # ចុងប្រយោគធំបំផុតដែលនៅក្នុងដែន max
+    # ចុងប្រយោគធំបំផុតដែលនៅក្នុងដែន max — ចុងពិតមានអាទិភាព
     fits = [s.end for s in sentences if start < s.end <= start + max_sec]
+    hard_fits = [s.end for s in sentences
+                 if s.hard and start < s.end <= start + max_sec and s.end - start >= min_sec]
+    if hard_fits:
+        return start, max(hard_fits)
     if fits and max(fits) - start >= min_sec:
         return start, max(fits)
 
