@@ -141,8 +141,12 @@ clipforge/
   segments in those five clips move enough to trigger it.
 - Split-panel sharpness. Three things decided how soft a panel looks, all measured on a 1280x720
   podcast whose panels are 1080x960: (1) a framed photo on the wall was detected as a face 29 px
-  tall and blown up 16.9x for 16 s of a clip, so a detection under `FACE_MIN_HEIGHT_RATIO` (5% of
-  frame height) is dropped; (2) a shot whose panel would need more than `PANEL_MAX_UPSCALE` (3x)
+  tall and blown up 16.9x for 16 s of a clip, so a detection under `FACE_MIN_HEIGHT_RATIO` (8% of
+  frame height) is dropped. 8% comes from sampling 40 frames of each test video: the fakes sit at
+  2-5% of frame height and never move (cx range 0-88 px over 70 minutes), real faces start at 10%
+  (interview: 14%) and move across hundreds of pixels. A second photo at 5% was still passing the
+  old threshold and took the crop onto a shelf for 17 s of a clip, with no person on screen. The
+  subject of a single-face layout is the **biggest** face, not the leftmost, for the same reason; (2) a shot whose panel would need more than `PANEL_MAX_UPSCALE` (3x)
   now renders as a single face instead - one sharp person beats two blurry ones; (3) `PANEL_ZOOM`
   2.0 -> 3.0 takes the upscale from 2.84x to 1.90x, and `PANEL_ZOOM_MIN` keeps the box no wider
   than the room on either side of the face, since a clamped box pushes the face to the panel edge.

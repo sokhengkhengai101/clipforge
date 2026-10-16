@@ -739,15 +739,18 @@ def plan_shot(video_path: Path, start: float, end: float, size: tuple[int, int],
                       top=panel_box(seats.left, frame_w, frame_h),
                       bottom=panel_box(seats.right, frame_w, frame_h))
 
+    # មុខ **ធំជាងគេ** ជាប្រធានបទ មិនមែនមុខឆ្វេងបំផុតទេ — ក្នុង frame ដែលមានទាំង
+    # មនុស្ស ទាំងរូបថតលើជញ្ជាំង ការយកឆ្វេងបំផុតអាចដាក់ crop លើធ្នើរ។
     if best and "single" in allowed:
+        subject = max(best, key=lambda f: f.w)
         # បើ frame គំរូបង្ហាញថាមុខផ្លាស់ទី ប្រអប់ថេរនឹងកាត់មុខចេញ។
         # ពេលនោះ យើងយក frame បន្ថែម រួចធ្វើ crop ដែលរំកិលតាមមុខ។
         if face_movement(seen, frame_w) > config.TRACK_MOVE_THRESHOLD:
-            box = tracked_box(video_path, start, end, size, best[0])
+            box = tracked_box(video_path, start, end, size, subject)
         else:
-            box = single_box(best[0], frame_w, frame_h)
+            box = single_box(subject, frame_w, frame_h)
         return Layout(kind="single", box=box,
-                      person=identify(best_frame, best[0], seats))
+                      person=identify(best_frame, subject, seats))
 
     return Layout(kind="center", box=center_box(frame_w, frame_h))
 

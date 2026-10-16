@@ -687,3 +687,28 @@ def test_split_only_forces_split_from_seats(monkeypatch):
     layout = R.plan_shot(None, 10.0, 16.0, SIZE, seats=seats,
                          allowed=frozenset({"split"}))
     assert layout.kind == "split"
+
+
+def test_detector_drops_a_picture_on_the_wall(monkeypatch):
+    """វាស់ពិត: រូបថតកុមារក្នុងស៊ុម h=36px (5%) លើរូប 720 -> crop ទៅលើធ្នើរ ១៧ វិនាទី."""
+    import numpy as np
+    monkeypatch.setattr(R, "_get_detector",
+                        lambda w, h: StubDetector([(100, 100, 133, 180), (135, 60, 30, 36),
+                                                   (900, 200, 40, 50)]))
+    frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+    faces = R.detect_faces_in_frame(frame, (1280, 720))
+    # 36px = 5% និង 50px = 7% ទាបជាងដែន 8% -> នៅសល់តែមុខពិត
+    assert [f.h for f in faces] == [180]
+
+
+def test_single_layout_picks_the_biggest_face(monkeypatch):
+    """មុខឆ្វេងបំផុតអាចជារូបថត — ប្រធានបទគឺមុខធំជាងគេ."""
+    monkeypatch.setattr(R, "grab_frame", lambda path, t, size: t)
+    monkeypatch.setattr(R, "detect_faces_in_frame", lambda frame, size: [
+        face(cx=150, w=70, h=110),       # តូច (ឆ្វេងបំផុត)
+        face(cx=660, w=200, h=260),      # អ្នកនិយាយពិត
+    ])
+    layout = R.plan_shot(None, 10.0, 16.0, SIZE, allowed=frozenset({"single"}))
+    assert layout.kind == "single"
+    centre = layout.box.x + layout.box.w / 2
+    assert abs(centre - 660) < 40, f"crop centred at {centre}, not on the speaker"
