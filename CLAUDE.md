@@ -146,7 +146,15 @@ clipforge/
   Measured on the 70-min podcast, which is a three-person show (3 faces in 35 of 60 sampled
   frames): the shot at 478 s renders three panels at 2.98x, and clip 4 is three panels end to end.
   Captions move to the seam between the last two panels for any multi-panel layout
-  (`caption_margin_for`), which is the only band that covers nobody's face. So
+  (`caption_margin_for`), which is the only band that covers nobody's face.
+  Multi-panel layouts are drawn as cards: `PANEL_GAP` (24 px) shrinks each panel's image and
+  `pad` fills the gap with `PANEL_BACKGROUND`, so the sharpness maths uses `panel_inner()`, not the
+  panel rect. `PANEL_CORNER_RADIUS` (28 px) rounds the corners through a mask PNG that
+  `corner_mask()` builds once per layout kind and overlays before the captions are burned -- `geq`
+  would evaluate a per-pixel expression on every frame (1080x1920 x 780 frames for a 26 s clip),
+  while the mask costs one extra input and about 15% of render time. A mask input can only be
+  consumed once, so it is `split` per segment that uses it, and the inputs go before `-t` or ffmpeg
+  reads `-t` as an option for the mask. So
   `--layout fill,split` allows both and `--layout fill` forbids split entirely. `center` is always
   the last resort, because a shot with no face still has to render. `--layout split` on its own
   keeps the old forced behaviour: a one-face shot is still split, using the global seats.

@@ -12,7 +12,7 @@ import config
 from pipeline import render as R
 from pipeline.audio import FFmpegError
 from pipeline.highlights import Clip
-from pipeline.reframe import Box, Layout, Segment
+from pipeline.reframe import Box, Layout, Segment, panel_inner
 from tests.test_audio import FIXTURE
 
 
@@ -205,7 +205,8 @@ def test_build_layout_filter_split_has_stack():
     f = R.build_layout_filter(layout_split(), out_width=1080, out_height=1920)
     assert f.startswith("[0:v]split=2[p0_0][p0_1];")      # label មានលេខ ដើម្បីកុំជាន់គ្នា
     assert "crop=600:534:0:0" in f and "crop=600:534:600:0" in f
-    assert "scale=1080:960" in f          # ផ្ទាំងនីមួយៗខ្ពស់ពាក់កណ្តាល
+    inner_w, inner_h = panel_inner((0, 0, 1080, 960))
+    assert f"scale={inner_w}:{inner_h}" in f   # ផ្ទាំងនីមួយៗខ្ពស់ពាក់កណ្តាល
     assert "vstack=inputs=2" in f
     assert f.endswith("[v]")
 
@@ -471,8 +472,10 @@ def test_three_panels_are_one_big_and_two_small():
     layout = Layout(kind="three", panels=[Box(x=i * 100, y=0, w=300, h=200) for i in range(3)])
     f = R.build_layout_filter(layout)
     assert "[0:v]split=3" in f
-    assert "scale=1080:1280" in f            # ផ្ទាំងធំខាងលើ
-    assert f.count("scale=540:640") == 2     # ពីរតូចខាងក្រោម
+    big_w, big_h = panel_inner((0, 0, 1080, 1280))
+    small_w, small_h = panel_inner((0, 0, 540, 640))
+    assert f"scale={big_w}:{big_h}" in f           # ផ្ទាំងធំខាងលើ
+    assert f.count(f"scale={small_w}:{small_h}") == 2   # ពីរតូចខាងក្រោម
     assert "xstack=inputs=3:layout=0_0|0_1280|540_1280" in f
 
 
@@ -480,4 +483,78 @@ def test_four_panels_use_a_grid():
     layout = Layout(kind="four", panels=[Box(x=i * 100, y=0, w=300, h=200) for i in range(4)])
     f = R.build_layout_filter(layout)
     assert "xstack=inputs=4:layout=0_0|540_0|0_960|540_960" in f
-    assert f.count("scale=540:960") == 4
+    inner_w, inner_h = panel_inner((0, 0, 540, 960))
+    assert f.count(f"scale={inner_w}:{inner_h}") == 4
+
+
+def test_panel_gap_leaves_a_background_border(monkeypatch):
+    """រចនា card: រូបតូចជាងផ្ទាំង ហើយ `pad` បំពេញគម្លាត."""
+    monkeypatch.setattr(config, "PANEL_GAP", 24)
+    monkeypatch.setattr(config, "PANEL_BACKGROUND", "white")
+    layout = Layout(kind="split", panels=[Box(x=0, y=0, w=600, h=534),
+                                          Box(x=600, y=0, w=600, h=534)])
+    f = R.build_layout_filter(layout, out_width=1080, out_height=1920)
+    assert "scale=1056:936" in f
+    assert f.count("pad=1080:960:12:12:color=white") == 2
+
+
+def test_no_gap_means_no_padding(monkeypatch):
+    monkeypatch.setattr(config, "PANEL_GAP", 0)
+    layout = Layout(kind="split", panels=[Box(x=0, y=0, w=600, h=534),
+                                          Box(x=600, y=0, w=600, h=534)])
+    f = R.build_layout_filter(layout, out_width=1080, out_height=1920)
+    assert "pad=" not in f
+    assert "scale=1080:960" in f
+
+
+# ---------- ជ្រុងមូល (card style) ----------
+
+def test_background_rgb_names_and_hex():
+    assert R.background_rgb("white") == (255, 255, 255)
+    assert R.background_rgb("#1A2B3C") == (0x1A, 0x2B, 0x3C)
+    assert R.background_rgb("0xff0000") == (255, 0, 0)
+
+
+def test_corner_mask_is_skipped_without_a_radius(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "PANEL_CORNER_RADIUS", 0)
+    assert R.corner_mask("three", tmp_path / "m.png") is None
+
+
+def test_corner_mask_rounds_the_panel_corners(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "PANEL_CORNER_RADIUS", 28)
+    monkeypatch.setattr(config, "PANEL_GAP", 24)
+    path = R.corner_mask("split", tmp_path / "m.png")
+    assert path is not None and path.stat().st_size > 0
+
+    import numpy as np
+    raw = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(path),
+         "-pix_fmt", "rgba", "-f", "rawvideo", "-"], capture_output=True).stdout
+    mask = np.frombuffer(raw, dtype=np.uint8).reshape(config.OUT_HEIGHT, config.OUT_WIDTH, 4)
+    # ជ្រុងផ្ទាំង = ស្រទាប់ស (លាប), កណ្តាលផ្ទាំង = ថ្លា (មិនប៉ះរូប)
+    assert mask[12, 12, 3] == 255
+    assert mask[480, 540, 3] == 0
+
+
+def test_mask_kinds_needs_both_gap_and_radius(monkeypatch):
+    segments = [Segment(start=0, end=5, layout=Layout(
+        kind="three", panels=[Box(x=0, y=0, w=300, h=200)] * 3))]
+    monkeypatch.setattr(config, "PANEL_CORNER_RADIUS", 28)
+    monkeypatch.setattr(config, "PANEL_GAP", 24)
+    assert R.mask_kinds(segments) == ["three"]
+    monkeypatch.setattr(config, "PANEL_GAP", 0)
+    assert R.mask_kinds(segments) == []
+
+
+def test_mask_input_is_split_per_segment_that_uses_it():
+    """input មួយប្រើបានតែម្តងក្នុង filtergraph -> ត្រូវ `split` តាមចំនួនប្រើ."""
+    panels = [Box(x=0, y=0, w=300, h=200)] * 3
+    segments = [Segment(start=0, end=5, layout=Layout(kind="three", panels=panels)),
+                Segment(start=5, end=10, layout=Layout(kind="single",
+                                                       box=Box(x=0, y=0, w=300, h=500))),
+                Segment(start=10, end=15, layout=Layout(kind="three", panels=panels))]
+    f = R.build_segments_filter(segments, 0.0, "c.ass", masks={"three": 1})
+    assert "[1:v]split=2" in f
+    assert f.count("overlay=0:0") == 2
+    # caption ត្រូវដុតក្រោយ overlay ដើម្បីកុំឲ្យ mask កាត់អក្សរ
+    assert f.index("overlay=0:0") < f.index("ass=c.ass")

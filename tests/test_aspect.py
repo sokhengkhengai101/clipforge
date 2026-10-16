@@ -94,14 +94,17 @@ def test_filter_uses_vstack_for_portrait():
     config.apply_aspect("9:16")
     f = Rn.build_layout_filter(split_layout())
     assert "vstack=inputs=2" in f
-    assert "scale=1080:960" in f
+    inner_w, inner_h = R.panel_inner((0, 0, 1080, 960))
+    assert f"scale={inner_w}:{inner_h}" in f
+    assert "pad=1080:960" in f
 
 
 def test_filter_uses_hstack_for_landscape():
     config.apply_aspect("16:9")
     f = Rn.build_layout_filter(split_layout())
     assert "hstack=inputs=2" in f
-    assert "scale=960:1080" in f
+    inner_w, inner_h = R.panel_inner((0, 0, 960, 1080))
+    assert f"scale={inner_w}:{inner_h}" in f
 
 
 def test_center_box_follows_aspect():

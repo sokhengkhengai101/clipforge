@@ -593,8 +593,9 @@ def test_detector_keeps_a_normal_face(monkeypatch):
 
 
 def test_panel_upscale_math():
-    """ផ្ទាំង 1080x960 ពី box 404x360 = ពង្រីក 2.67x (ជាប់ដោយទទឹង)."""
-    assert R.panel_upscale(R.Box(x=0, y=0, w=404, h=360)) == pytest.approx(1080 / 404, abs=0.01)
+    """ការពង្រីកវាស់ទៀបនឹង **ទំហំខាងក្នុង** ផ្ទាំង (ផ្ទាំងដកគម្លាត)."""
+    inner_w, _ = R.panel_inner((0, 0, 1080, 960))
+    assert R.panel_upscale(R.Box(x=0, y=0, w=404, h=360)) == pytest.approx(inner_w / 404, abs=0.01)
     assert R.panel_upscale(R.Box(x=0, y=0, w=64, h=58)) > 16
 
 

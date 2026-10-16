@@ -18,7 +18,7 @@ from typing import Callable
 import config
 from pipeline.audio import FFmpegError, probe_duration, require_ffmpeg
 from pipeline.highlights import Clip
-from pipeline.reframe import Box, Layout, Segment, panel_rects
+from pipeline.reframe import Box, Layout, Segment, panel_inner, panel_rects
 
 
 class RenderError(RuntimeError):
@@ -93,7 +93,7 @@ def build_filter(crop: tuple[int, int, int, int], ass_filename: str | None,
 
 def layout_chain(layout: Layout, index: int, source_label: str, out_label: str,
                  suffix: str = "", out_width: int | None = None,
-                 out_height: int | None = None) -> str:
+                 out_height: int | None = None, mask_label: str | None = None) -> str:
     """ផ្នែក filtergraph ដែលបម្លែង `[source_label]` ទៅ `[out_label]` តាម layout.
 
     Split ត្រូវការ `split` (ចម្លង stream ជាពីរ) រួច crop ខុសគ្នា រួច `vstack`
@@ -113,9 +113,16 @@ def layout_chain(layout: Layout, index: int, source_label: str, out_label: str,
 
         parts = [f"[{source_label}]split={count}" +
                  "".join(f"[p{index}_{i}]" for i in range(count))]
-        for i, (box, (_, _, panel_w, panel_h)) in enumerate(zip(layout.panels, rects)):
+        gap = max(0, config.PANEL_GAP)
+        for i, (box, rect) in enumerate(zip(layout.panels, rects)):
+            _, _, panel_w, panel_h = rect
+            inner_w, inner_h = panel_inner(rect)
+            # រូបតូចជាងផ្ទាំង រួច `pad` បំពេញគម្លាតដោយពណ៌ផ្ទៃខាងក្រោយ (card)
+            frame = (f",pad={panel_w}:{panel_h}:{(panel_w - inner_w) // 2}:"
+                     f"{(panel_h - inner_h) // 2}:color={config.PANEL_BACKGROUND}"
+                     if gap else "")
             parts.append(f"[p{index}_{i}]{box.as_filter()},"
-                         f"scale={panel_w}:{panel_h}:flags=lanczos[q{index}_{i}]")
+                         f"scale={inner_w}:{inner_h}:flags=lanczos{frame}[q{index}_{i}]")
 
         joined = "".join(f"[q{index}_{i}]" for i in range(count))
         columns = {x for x, _, _, _ in rects[:count]}
@@ -128,7 +135,12 @@ def layout_chain(layout: Layout, index: int, source_label: str, out_label: str,
             # ទំហំផ្ទាំងមិនស្មើគ្នា (ឧ. three = ធំ ១ + តូច ២) -> ដាក់តាម pixel
             spots = "|".join(f"{x}_{y}" for x, y, _, _ in rects[:count])
             stack = f"xstack=inputs={count}:layout={spots}"
-        parts.append(f"{joined}{stack},setsar=1{suffix}[{out_label}]")
+        if mask_label:
+            # mask លាបជ្រុងមូល — ដាក់ **មុន** caption ដើម្បីកុំកាត់អក្សរ
+            parts.append(f"{joined}{stack},setsar=1[k{index}]")
+            parts.append(f"[k{index}][{mask_label}]overlay=0:0{suffix}[{out_label}]")
+        else:
+            parts.append(f"{joined}{stack},setsar=1{suffix}[{out_label}]")
         return ";".join(parts)
 
     box = layout.box
@@ -149,17 +161,31 @@ def sharpen_suffix() -> str:
 
 
 def build_layout_filter(layout: Layout, ass_filename: str | None = None,
-                        out_width: int | None = None, out_height: int | None = None) -> str:
+                        out_width: int | None = None, out_height: int | None = None,
+                        mask_label: str | None = None) -> str:
     """filtergraph សម្រាប់ layout តែមួយ (clip ដែលមិនមានការកាត់ camera)."""
     burn = f",ass={ass_filename}" if ass_filename else ""
     return layout_chain(layout, 0, "0:v", "v", sharpen_suffix() + burn,
-                        out_width, out_height)
+                        out_width, out_height, mask_label)
+
+
+def mask_kinds(segments: list[Segment]) -> list[str]:
+    """ប្រភេទ layout ដែលត្រូវការ mask ជ្រុងមូល (តាមលំដាប់ស្ថិរ)."""
+    if config.PANEL_CORNER_RADIUS <= 0 or config.PANEL_GAP <= 0:
+        return []
+    seen = []
+    for segment in segments:
+        kind = segment.layout.kind
+        if segment.layout.panels and kind not in seen:
+            seen.append(kind)
+    return seen
 
 
 def build_segments_filter(segments: list[Segment], clip_start: float,
                           ass_filename: str | None = None,
                           out_width: int | None = None,
-                          out_height: int | None = None) -> str:
+                          out_height: int | None = None,
+                          masks: dict[str, int] | None = None) -> str:
     """filtergraph តែមួយដែលដោះស្រាយ shot ទាំងអស់ក្នុង clip — encode តែម្តង.
 
     **ហេតុអ្វីមិន render ដាច់ៗរួច concat?** យើងបានសាកវិធីនោះ ហើយរាល់កន្លែងភ្ជាប់
@@ -172,11 +198,28 @@ def build_segments_filter(segments: list[Segment], clip_start: float,
 
     សំឡេងមិនត្រូវប៉ះទេ — shot តៗគ្នាគ្របដណ្តប់ clip ទាំងមូល ដូច្នេះវានៅ sync ស្រាប់។
     """
+    masks = masks or {}
     if len(segments) == 1:
-        return build_layout_filter(segments[0].layout, ass_filename, out_width, out_height)
+        label = f"{masks[segments[0].layout.kind]}:v" if segments[0].layout.kind in masks else None
+        return build_layout_filter(segments[0].layout, ass_filename,
+                                   out_width, out_height, label)
 
     count = len(segments)
     parts = ["[0:v]split=" + str(count) + "".join(f"[s{i}]" for i in range(count))]
+
+    # mask មួយអាចប្រើបានតែម្តង -> `split` តាមចំនួន segment ដែលត្រូវការវា
+    mask_labels: dict[str, list[str]] = {}
+    for kind, input_index in masks.items():
+        uses = sum(1 for s in segments if s.layout.kind == kind and s.layout.panels)
+        if uses <= 0:
+            continue
+        if uses == 1:
+            mask_labels[kind] = [f"{input_index}:v"]
+        else:
+            labels = [f"m{input_index}_{i}" for i in range(uses)]
+            parts.append(f"[{input_index}:v]split={uses}" +
+                         "".join(f"[{label}]" for label in labels))
+            mask_labels[kind] = labels
 
     for index, segment in enumerate(segments):
         start = max(0.0, segment.start - clip_start)
@@ -184,14 +227,83 @@ def build_segments_filter(segments: list[Segment], clip_start: float,
         parts.append(
             f"[s{index}]trim=start={start:.3f}:end={end:.3f},setpts=PTS-STARTPTS[p{index}]"
         )
+        label = None
+        if segment.layout.panels and segment.layout.kind in mask_labels:
+            label = mask_labels[segment.layout.kind].pop(0)
         parts.append(layout_chain(segment.layout, index, f"p{index}", f"v{index}",
-                                  out_width=out_width, out_height=out_height))
+                                  out_width=out_width, out_height=out_height,
+                                  mask_label=label))
 
     burn = f",ass={ass_filename}" if ass_filename else ""
     joined = "".join(f"[v{i}]" for i in range(count))
     # សម្អិតម្តងក្រោយ concat (មិនមែនក្នុងមួយ shot) — លទ្ធផលដូចគ្នា តែលឿនជាង
     parts.append(f"{joined}concat=n={count}:v=1:a=0{sharpen_suffix()}{burn}[v]")
     return ";".join(parts)
+
+
+# ---------- ជ្រុងមូលរបស់ផ្ទាំង (card style) ----------
+
+NAMED_COLOURS = {"white": (255, 255, 255), "black": (0, 0, 0),
+                 "gray": (128, 128, 128), "grey": (128, 128, 128)}
+
+
+def background_rgb(colour: str | None = None) -> tuple[int, int, int]:
+    """បម្លែងឈ្មោះពណ៌ ឬ #RRGGBB ទៅជា (r, g, b)."""
+    text = (colour or config.PANEL_BACKGROUND or "white").strip().lower()
+    if text in NAMED_COLOURS:
+        return NAMED_COLOURS[text]
+    text = text.lstrip("#").removeprefix("0x")
+    if len(text) == 6:
+        return tuple(int(text[i:i + 2], 16) for i in (0, 2, 4))
+    return (255, 255, 255)
+
+
+def corner_mask(kind: str, path: Path, radius: int | None = None) -> Path | None:
+    """សរសេរ PNG ដែលមាន **តែជ្រុង** នៃផ្ទាំងនីមួយៗ (នៅសល់ថ្លា).
+
+    ហេតុអ្វីជា mask? `geq` គណនាកន្សោមក្នុង **មួយ pixel មួយ frame** — លើ
+    1080×1920 × 780 frame វាយឺតខ្លាំង។ Mask គណនាម្តង រួច `overlay` ថោក។
+    គម្លាតរវាងផ្ទាំងត្រូវបានលាបដោយ `pad` រួចហើយ ដូច្នេះ mask គ្រាន់តែបំពេញជ្រុង។
+    """
+    radius = config.PANEL_CORNER_RADIUS if radius is None else radius
+    rects = panel_rects(kind)
+    if radius <= 0 or not rects:
+        return None
+
+    import numpy as np
+
+    width, height = config.OUT_WIDTH, config.OUT_HEIGHT
+    red, green, blue = background_rgb()
+    canvas = np.zeros((height, width, 4), dtype=np.uint8)
+    canvas[:, :, 0], canvas[:, :, 1], canvas[:, :, 2] = red, green, blue
+
+    ys, xs = np.ogrid[0:height, 0:width]
+    for rect in rects:
+        panel_x, panel_y, panel_w, panel_h = rect
+        inner_w, inner_h = panel_inner(rect)
+        x0 = panel_x + (panel_w - inner_w) // 2
+        y0 = panel_y + (panel_h - inner_h) // 2
+        x1, y1 = x0 + inner_w, y0 + inner_h
+        r = min(radius, inner_w // 2, inner_h // 2)
+
+        inside = (xs >= x0) & (xs < x1) & (ys >= y0) & (ys < y1)
+        rounded = inside.copy()
+        for corner_x, corner_y in ((x0 + r, y0 + r), (x1 - r - 1, y0 + r),
+                                   (x0 + r, y1 - r - 1), (x1 - r - 1, y1 - r - 1)):
+            near_x = (xs < x0 + r) if corner_x == x0 + r else (xs > x1 - r - 1)
+            near_y = (ys < y0 + r) if corner_y == y0 + r else (ys > y1 - r - 1)
+            outside_circle = (xs - corner_x) ** 2 + (ys - corner_y) ** 2 > r * r
+            rounded &= ~(near_x & near_y & outside_circle)
+        canvas[:, :, 3] = np.where(inside & ~rounded, 255, canvas[:, :, 3])
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+         "-f", "rawvideo", "-pix_fmt", "rgba", "-s", f"{width}x{height}", "-i", "-",
+         "-frames:v", "1", str(path)],
+        input=canvas.tobytes(), check=True,
+    )
+    return path
 
 
 def _encode_args(crf: int, preset: str) -> list[str]:
@@ -222,7 +334,17 @@ def render_segments(video_path: Path, clip: Clip, segments: list[Segment],
     require_ffmpeg("ffmpeg")
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    graph = build_segments_filter(segments, clip.start, ass_filename)
+
+    # mask ជ្រុងមូល: ១ file ក្នុងមួយប្រភេទ layout, ជា input បន្ថែមរបស់ FFmpeg
+    mask_files: list[Path] = []
+    masks: dict[str, int] = {}
+    for kind in mask_kinds(segments):
+        path = corner_mask(kind, out_path.parent / f".mask_{kind}.png")
+        if path is not None:
+            masks[kind] = len(mask_files) + 1      # [0:v] ជា video ដើម
+            mask_files.append(path)
+
+    graph = build_segments_filter(segments, clip.start, ass_filename, masks=masks)
 
     # filtergraph វែង -> សរសេរទៅ file រួចឲ្យ FFmpeg អានពីទីនោះ
     script = None
@@ -237,6 +359,8 @@ def render_segments(video_path: Path, clip: Clip, segments: list[Segment],
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
         "-ss", f"{clip.start:.3f}",
         "-i", str(Path(video_path).resolve()),
+        # mask ត្រូវមក **មុន** `-t` បើមិនដូច្នោះ `-t` ក្លាយជា option របស់ mask
+        *[arg for path in mask_files for arg in ("-i", path.name)],
         "-t", f"{clip.duration:.3f}",
         *filter_args,
         "-map", "[v]", "-map", "0:a?",
@@ -248,6 +372,8 @@ def render_segments(video_path: Path, clip: Clip, segments: list[Segment],
     finally:
         if script is not None:
             script.unlink(missing_ok=True)
+        for path in mask_files:
+            path.unlink(missing_ok=True)
     return out_path
 
 

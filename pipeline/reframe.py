@@ -410,7 +410,7 @@ def panel_box(face: Face, frame_w: int, frame_h: int,
     if aspect is None:
         rects = panel_rects(kind) if kind else []
         if rects:
-            _, _, panel_w, panel_h = rects[min(index, len(rects) - 1)]
+            panel_w, panel_h = panel_inner(rects[min(index, len(rects) - 1)])
             aspect = panel_w / panel_h
         else:
             aspect = config.PANEL_ASPECT
@@ -432,7 +432,7 @@ def panel_box(face: Face, frame_w: int, frame_h: int,
     if kind is not None:
         rects = panel_rects(kind)
         if rects:
-            _, _, panel_w, panel_h = rects[min(index, len(rects) - 1)]
+            panel_w, panel_h = panel_inner(rects[min(index, len(rects) - 1)])
             grow = max(panel_w / config.PANEL_MAX_UPSCALE / max(1.0, width),
                        panel_h / config.PANEL_MAX_UPSCALE / max(1.0, height))
             if grow > 1.0:
@@ -457,12 +457,19 @@ def panel_box(face: Face, frame_w: int, frame_h: int,
     return _clamp_box(x, y, width, height, frame_w, frame_h)
 
 
+def panel_inner(rect: tuple[int, int, int, int]) -> tuple[int, int]:
+    """ទំហំ **រូបភាព** ក្នុងផ្ទាំង — ផ្ទាំងដកគម្លាត (card style)."""
+    _, _, panel_w, panel_h = rect
+    gap = max(0, config.PANEL_GAP)
+    return _even(max(2, panel_w - gap)), _even(max(2, panel_h - gap))
+
+
 def panel_upscale(box: Box, kind: str = "split", index: int = 0) -> float:
     """ត្រូវពង្រីកប្រអប់នេះប៉ុន្មានដងទើបពេញផ្ទាំងទី `index` នៃ layout នោះ?"""
     rects = panel_rects(kind)
     if not rects:
         return 1.0
-    _, _, panel_w, panel_h = rects[min(index, len(rects) - 1)]
+    panel_w, panel_h = panel_inner(rects[min(index, len(rects) - 1)])
     return max(panel_w / max(1, box.w), panel_h / max(1, box.h))
 
 
