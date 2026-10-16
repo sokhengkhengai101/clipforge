@@ -16,6 +16,10 @@ Goal: `python make_clips.py podcast.mp4` → 5 vertical clips with burned-in cap
 
 Gate to move to Phase 1: the script reliably produces 5 clips I would actually post.
 
+**Gate met (2026-10-17)**, judged on three sources: a 35-min 640x360 podcast, a 47-min 1080p
+interview ("1: can post all"), and a 70-min 1280x720 two-person podcast ("clip 5 is good"). Not
+yet tested on screen-share, webinar or gaming footage. Phase 1 has not started -- ask first.
+
 Pipeline (one module per step, in `pipeline/`):
 1. `audio.py` — extract audio with FFmpeg → WAV 16 kHz mono
 2. `transcribe.py` — faster-whisper → segments + **word-level timestamps** → cache to `output/<name>/transcript.json` (skip if cache exists)
