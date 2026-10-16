@@ -86,8 +86,8 @@ def test_split_caption_uses_normal_margin_for_landscape():
 
 def split_layout() -> R.Layout:
     return R.Layout(kind="split",
-                    top=R.Box(x=0, y=0, w=400, h=400),
-                    bottom=R.Box(x=500, y=0, w=400, h=400))
+                    panels=[R.Box(x=0, y=0, w=400, h=400),
+                            R.Box(x=500, y=0, w=400, h=400)])
 
 
 def test_filter_uses_vstack_for_portrait():

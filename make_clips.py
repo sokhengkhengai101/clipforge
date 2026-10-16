@@ -19,8 +19,8 @@ from pipeline.captions import (CaptionError, build_all_captions, build_ass,
 from pipeline.highlights import (HighlightsError, find_highlights, full_video_clip,
                                  load_clips, rank_clips, save_clips)
 from pipeline.llm import LLMError
-from pipeline.reframe import (ReframeError, describe, dominant_kind, find_seats,
-                             parse_layouts, plan_clip)
+from pipeline.reframe import (ReframeError, caption_margin_for, describe,
+                             dominant_kind, find_seats, parse_layouts, plan_clip)
 from pipeline.render import (RenderError, compute_crop, encoder_args,
                              probe_dimensions, render_all, render_clip, verify_clip)
 from pipeline.transcribe import TranscribeError, load_transcript, transcribe
@@ -350,8 +350,7 @@ def main(
             for index, (clip, segments) in enumerate(zip(final, plans), start=1):
                 console.print(f"[dim]  #{index} {len(segments):2} shots — "
                               f"{describe(segments)}[/dim]")
-                if dominant_kind(segments) == "split":
-                    margins[index - 1] = config.CAPTION_MARGIN_V_SPLIT
+                margins[index - 1] = caption_margin_for(dominant_kind(segments))
         except ReframeError as e:
             console.print(f"[yellow]⚠ reframe បរាជ័យ:[/yellow] {e}")
             console.print("[yellow]  -> ប្រើ center-crop ជំនួស[/yellow]")

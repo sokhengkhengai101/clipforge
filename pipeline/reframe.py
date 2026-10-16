@@ -96,13 +96,24 @@ class Box:
 
 @dataclass
 class Layout:
-    """របៀបដែល shot មួយត្រូវបម្លែងទៅ 9:16."""
+    """របៀបដែល shot មួយត្រូវបម្លែងទៅទម្រង់បញ្ឈរ.
 
-    kind: str                      # "split" | "single" | "center"
-    top: Box | None = None         # split តែប៉ុណ្ណោះ
-    bottom: Box | None = None      # split តែប៉ុណ្ណោះ
-    box: Box | None = None         # single / center
+    `panels` ជាបញ្ជី (ពី ២ ដល់ ៤ ផ្ទាំង) តាមលំដាប់បង្ហាញ។ `top`/`bottom` នៅរក្សា
+    ទុកជាឈ្មោះងាយស្រួលសម្រាប់ករណី split ដែលមានតែ ២ ផ្ទាំង។
+    """
+
+    kind: str                      # "split" | "three" | "four" | "single" | "center"
+    panels: list[Box] = field(default_factory=list)
+    box: Box | None = None         # single / center (និងប្រអប់បម្រុងរបស់ split)
     person: str | None = None      # single: "left" / "right" / None (អ្នកណាក្នុង close-up)
+
+    @property
+    def top(self) -> Box | None:
+        return self.panels[0] if self.panels else None
+
+    @property
+    def bottom(self) -> Box | None:
+        return self.panels[1] if len(self.panels) > 1 else None
 
 
 @dataclass
@@ -329,14 +340,56 @@ def _clamp_box(x: float, y: float, w: float, h: float,
     return Box(x=x, y=y, w=w, h=h)
 
 
+PANEL_GRIDS = {"split": 2, "three": 3, "four": 4}
+
+
+def panel_geometry(kind: str) -> tuple[int, int, int, int]:
+    """(ជួរឈរ, ជួរដេក, ទទឹងផ្ទាំង, កម្ពស់ផ្ទាំង) សម្រាប់ layout ច្រើនផ្ទាំង.
+
+    ៤ ផ្ទាំងជាក្រឡា 2×2 ជានិច្ច ព្រោះ ៤ ជួរដេកលើ 1080×1920 ផ្តល់ផ្ទាំង 1080×480
+    ដែលរាក់ពេកសម្រាប់ដាក់មុខ (បញ្ហាដូច 16:9 ក្នុងចំណាំ `--aspect`)។
+    """
+    out_w, out_h = config.OUT_WIDTH, config.OUT_HEIGHT
+    count = PANEL_GRIDS.get(kind, 1)
+    if count == 4:
+        cols, rows = 2, 2
+    elif config.SPLIT_DIRECTION == "horizontal":
+        cols, rows = count, 1
+    else:
+        cols, rows = 1, count
+    return cols, rows, out_w // cols, out_h // rows
+
+
+def caption_margin_for(kind: str) -> int | None:
+    """MarginV ដែលដាក់ប្លុកអក្សរកណ្តាលលើ **ស្នាមចុងក្រោយ** នៃ layout ច្រើនផ្ទាំង.
+
+    `None` = ប្រើទីតាំងធម្មតា (lower third)។ ស្នាមជាកន្លែងតែមួយដែលអក្សរមិនបាំង
+    មុខអ្នកណាម្នាក់ — OpusClip ធ្វើដូចគ្នាលើ split។
+    """
+    if kind not in PANEL_GRIDS or config.SPLIT_DIRECTION != "vertical":
+        return None
+    _, rows, _, _ = panel_geometry(kind)
+    if rows < 2:
+        return None
+    seam = config.OUT_HEIGHT * (rows - 1) / rows
+    block = config.CAPTION_MAX_LINES * config.CAPTION_FONT_SIZE * 1.1
+    return max(0, int(config.OUT_HEIGHT - seam - block / 2))
+
+
 def panel_box(face: Face, frame_w: int, frame_h: int,
-              aspect: float | None = None, zoom: float | None = None) -> Box:
+              aspect: float | None = None, zoom: float | None = None,
+              kind: str | None = None) -> Box:
     """ប្រអប់សម្រាប់ផ្ទាំងមួយក្នុង split (សមាមាត្រ 9:8 = 1.125).
 
     កម្ពស់ = កម្ពស់មុខ × `zoom` ដូច្នេះមុខមិនពេញអេក្រង់ពេក ហើយនៅមានបរិបទ។
     មុខត្រូវដាក់នៅ ~40% ពីលើ ដែលជាទម្រង់ធម្មតានៃ portrait។
     """
-    aspect = config.PANEL_ASPECT if aspect is None else aspect
+    if aspect is None:
+        if kind is None:
+            aspect = config.PANEL_ASPECT
+        else:
+            _, _, panel_w, panel_h = panel_geometry(kind)
+            aspect = panel_w / panel_h
     zoom = config.PANEL_ZOOM if zoom is None else zoom
 
     height = min(frame_h, face.h * zoom)
@@ -358,18 +411,32 @@ def panel_box(face: Face, frame_w: int, frame_h: int,
     return _clamp_box(x, y, width, height, frame_w, frame_h)
 
 
-def panel_upscale(box: Box) -> float:
-    """ត្រូវពង្រីកប្រអប់នេះប៉ុន្មានដងទើបពេញផ្ទាំង split?"""
-    horizontal = config.SPLIT_DIRECTION == "horizontal"
-    panel_w = config.OUT_WIDTH // 2 if horizontal else config.OUT_WIDTH
-    panel_h = config.OUT_HEIGHT if horizontal else config.OUT_HEIGHT // 2
+def panel_upscale(box: Box, kind: str = "split") -> float:
+    """ត្រូវពង្រីកប្រអប់នេះប៉ុន្មានដងទើបពេញផ្ទាំងរបស់ layout នោះ?"""
+    _, _, panel_w, panel_h = panel_geometry(kind)
     return max(panel_w / max(1, box.w), panel_h / max(1, box.h))
 
 
-def panels_sharp_enough(*boxes: Box, limit: float | None = None) -> bool:
+def panels_sharp_enough(*boxes: Box, kind: str = "split",
+                        limit: float | None = None) -> bool:
     """ផ្ទាំងទាំងអស់នៅក្នុងដែនពង្រីកដែលទទួលយកបានឬទេ?"""
     limit = config.PANEL_MAX_UPSCALE if limit is None else limit
-    return all(panel_upscale(box) <= limit for box in boxes)
+    return all(panel_upscale(box, kind) <= limit for box in boxes)
+
+
+def pick_panel_faces(faces: list[Face], count: int, frame_w: int) -> list[Face] | None:
+    """យកមុខ `count` សម្រាប់ផ្ទាំង — ធំជាងគេមុន រួចតម្រៀបពីឆ្វេងទៅស្តាំ.
+
+    `None` បើមុខជិតគ្នាពេក (មុខជាន់គ្នាក្នុងផ្ទាំងពីរ មើលទៅចម្លែក)។
+    """
+    if len(faces) < count:
+        return None
+    chosen = sorted(sorted(faces, key=lambda f: f.w, reverse=True)[:count],
+                    key=lambda f: f.cx)
+    gaps = [b.cx - a.cx for a, b in zip(chosen, chosen[1:])]
+    if any(gap < frame_w * config.MIN_FACE_SEPARATION for gap in gaps):
+        return None
+    return chosen
 
 
 def single_box(face: Face, frame_w: int, frame_h: int,
@@ -626,11 +693,15 @@ def _median_face(faces: list[Face]) -> Face:
 # ឈ្មោះខាងក្នុង: "split" (ពីរផ្ទាំង), "single" (crop តាមមុខ), "center" (crop កណ្តាល)។
 # យើងទទួលឈ្មោះក្រៅផងដែរ ព្រោះ tool ផ្សេង (OpusClip) ហៅ "single" ថា "fill"។
 LAYOUT_ALIASES = {
-    "split": "split",
+    "split": "split", "two": "split",
+    "three": "three", "four": "four",
     "single": "single", "face": "single", "fill": "single",
     "center": "center", "centre": "center",
 }
+# `auto` = ឥរិយាបថដែលអ្នកប្រើបានអនុម័តរួច។ `three`/`four` ជា **opt-in** ព្រោះវា
+# ប្តូររូបភាពច្រើន (`--layout fill,split,three`)។
 ALL_LAYOUTS = frozenset({"split", "single", "center"})
+MULTI_PANEL = ("four", "three", "split")
 
 
 def parse_layouts(value: str) -> frozenset[str]:
@@ -709,35 +780,43 @@ def plan_shot(video_path: Path, start: float, end: float, size: tuple[int, int],
         if len(best) >= 2:
             break      # ឃើញពីរនាក់រួចហើយ — គ្រប់គ្រាន់
 
-    if len(best) >= 2 and "split" in allowed:
-        left, right = best[0], best[-1]
-        if right.cx - left.cx >= frame_w * config.MIN_FACE_SEPARATION:
-            # ប្រអប់គណនាពីមុខ **ក្នុង shot នេះ** មិនមែនពីកៅអីសកលទេ។ កៅអីជាមធ្យម
-            # លើទាំង video ដែលលាយ framing ច្រើន — វាស់ពិត: មុខកៅអី h=108 ខណៈមុខ
-            # ពិតក្នុង shot h=182 ហើយប្រអប់តូចនោះដាក់មុខជាប់គែមផ្ទាំង។
-            # កៅអីនៅប្រើសម្រាប់ **សម្គាល់អ្នកណា** (`identify`) ដែលជាកន្លែងវាល្អជាង។
-            biggest = max(best, key=lambda f: f.w)
-            top = panel_box(left, frame_w, frame_h)
-            bottom = panel_box(right, frame_w, frame_h)
-            if not panels_sharp_enough(top, bottom) and "single" in allowed:
-                # ផ្ទាំងមួយត្រូវពង្រីកខ្លាំងពេក -> ម្នាក់ច្បាស់ ជាជាងពីរនាក់ព្រិល
-                # (តែបើអ្នកប្រើអនុញ្ញាតតែ split យើងគោរពការជ្រើសរបស់គាត់)
-                return Layout(kind="single", box=single_box(biggest, frame_w, frame_h),
-                              person=identify(best_frame, biggest, seats))
-            return Layout(
-                kind="split",
-                top=top,
-                bottom=bottom,
-                # box បម្រុង: បើ split ខ្លីពេក យើងប្តូរទៅ single ដោយប្រើប្រអប់នេះ
-                # ដែលគណនាពី frame របស់ shot នេះផ្ទាល់ (មិនមែនខ្ចីពី shot ផ្សេង)។
-                box=single_box(biggest, frame_w, frame_h),
-            )
+    biggest = max(best, key=lambda f: f.w) if best else None
 
-    # អនុញ្ញាតតែ split -> បង្ខំ split ទោះឃើញមុខតែមួយ (ប្រើកៅអីសកល)
-    if allowed == frozenset({"split"}) and seats:
-        return Layout(kind="split",
-                      top=panel_box(seats.left, frame_w, frame_h),
-                      bottom=panel_box(seats.right, frame_w, frame_h))
+    # ផ្ទាំងច្រើន: សាកចំនួនផ្ទាំងច្រើនជាងគេមុន (four -> three -> split)
+    # ប្រអប់គណនាពីមុខ **ក្នុង shot នេះ** មិនមែនពីកៅអីសកលទេ។ កៅអីជាមធ្យមលើទាំង
+    # video ដែលលាយ framing ច្រើន — វាស់ពិត: មុខកៅអី h=108 ខណៈមុខពិតក្នុង shot
+    # h=182 ហើយប្រអប់តូចនោះដាក់មុខជាប់គែមផ្ទាំង។ កៅអីនៅប្រើសម្រាប់
+    # **សម្គាល់អ្នកណា** (`identify`) ដែលជាកន្លែងវាល្អជាង។
+    for kind in MULTI_PANEL:
+        count = PANEL_GRIDS[kind]
+        if kind not in allowed or len(best) < count:
+            continue
+        # split រក្សាឥរិយាបថចាស់: មុខឆ្វេងបំផុត + ស្តាំបំផុត (លទ្ធផលដែលអនុម័តរួច)
+        chosen = ([best[0], best[-1]] if kind == "split"
+                  else pick_panel_faces(best, count, frame_w))
+        if chosen is None:
+            continue
+        if kind == "split" and chosen[1].cx - chosen[0].cx < frame_w * config.MIN_FACE_SEPARATION:
+            continue
+        boxes = [panel_box(f, frame_w, frame_h, kind=kind) for f in chosen]
+        if not panels_sharp_enough(*boxes, kind=kind):
+            continue          # ព្រិលពេក -> សាកផ្ទាំងតិចជាង រួចទើប single
+        # box បម្រុង: បើ layout នេះខ្លីពេក `smooth_segments` ប្តូរទៅ single
+        # ដោយប្រើប្រអប់នេះ ដែលគណនាពី frame របស់ shot នេះផ្ទាល់។
+        return Layout(kind=kind, panels=boxes,
+                      box=single_box(biggest, frame_w, frame_h))
+
+    # អនុញ្ញាតតែផ្ទាំងច្រើន (គ្មាន single/center) -> បង្ខំវា ទោះមុខតិច ឬព្រិល
+    forced = [k for k in MULTI_PANEL if k in allowed]
+    if forced and not ({"single", "center"} & allowed):
+        kind = forced[0]
+        chosen = pick_panel_faces(best, PANEL_GRIDS[kind], frame_w)
+        if chosen is None and seats and kind == "split":
+            chosen = [seats.left, seats.right]
+        if chosen:
+            return Layout(kind=kind,
+                          panels=[panel_box(f, frame_w, frame_h, kind=kind) for f in chosen],
+                          box=single_box(biggest, frame_w, frame_h) if biggest else None)
 
     # មុខ **ធំជាងគេ** ជាប្រធានបទ មិនមែនមុខឆ្វេងបំផុតទេ — ក្នុង frame ដែលមានទាំង
     # មនុស្ស ទាំងរូបថតលើជញ្ជាំង ការយកឆ្វេងបំផុតអាចដាក់ crop លើធ្នើរ។
@@ -768,7 +847,7 @@ def smooth_segments(segments: list[Segment],
     cleaned: list[Segment] = []
     for segment in segments:
         layout = segment.layout
-        if (layout.kind == "split" and segment.duration < min_split_sec
+        if (layout.kind in PANEL_GRIDS and segment.duration < min_split_sec
                 and layout.box is not None):
             layout = Layout(kind="single", box=layout.box, person=layout.person)
         cleaned.append(Segment(start=segment.start, end=segment.end, layout=layout))
@@ -784,8 +863,7 @@ def smooth_segments(segments: list[Segment],
 
 
 def _same_layout(a: Layout, b: Layout) -> bool:
-    return (a.kind == b.kind and a.top == b.top and a.bottom == b.bottom
-            and a.box == b.box)
+    return a.kind == b.kind and a.panels == b.panels and a.box == b.box
 
 
 def plan_clip(video_path: Path, clip: Clip, size: tuple[int, int],
@@ -851,8 +929,8 @@ def _swap_panels(segment: Segment) -> Segment:
         return segment
     layout = segment.layout
     return Segment(start=segment.start, end=segment.end,
-                   layout=Layout(kind="split", top=layout.bottom, bottom=layout.top,
-                                 person=layout.person))
+                   layout=Layout(kind="split", panels=[layout.bottom, layout.top],
+                                 box=layout.box, person=layout.person))
 
 
 def describe(segments: list[Segment]) -> str:

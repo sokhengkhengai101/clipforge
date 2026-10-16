@@ -198,8 +198,8 @@ def test_plan_shot_force_center_skips_detection(monkeypatch):
 def segment(start, end, kind, person=None) -> R.Segment:
     layout = R.Layout(kind=kind, person=person)
     if kind == "split":
-        layout.top = R.panel_box(face(cx=430), *SIZE)
-        layout.bottom = R.panel_box(face(cx=1430), *SIZE)
+        layout.panels = [R.panel_box(face(cx=430), *SIZE),
+                         R.panel_box(face(cx=1430), *SIZE)]
     else:
         layout.box = R.center_box(*SIZE)
     return R.Segment(start=start, end=end, layout=layout)
@@ -307,8 +307,8 @@ def test_plan_clip_center_mode_skips_detection(monkeypatch):
 
 def split_segment(start, end, with_fallback=True) -> R.Segment:
     layout = R.Layout(kind="split",
-                      top=R.panel_box(face(cx=430), *SIZE),
-                      bottom=R.panel_box(face(cx=1430), *SIZE))
+                      panels=[R.panel_box(face(cx=430), *SIZE),
+                              R.panel_box(face(cx=1430), *SIZE)])
     if with_fallback:
         layout.box = R.single_box(face(cx=430), *SIZE)
     return R.Segment(start=start, end=end, layout=layout)
@@ -712,3 +712,67 @@ def test_single_layout_picks_the_biggest_face(monkeypatch):
     assert layout.kind == "single"
     centre = layout.box.x + layout.box.w / 2
     assert abs(centre - 660) < 40, f"crop centred at {centre}, not on the speaker"
+
+
+# ---------- ផ្ទាំង ៣ និង ៤ ----------
+
+def test_parse_layouts_knows_three_and_four():
+    assert R.parse_layouts("fill,split,three") == frozenset({"single", "split", "three"})
+    assert R.parse_layouts("four") == frozenset({"four"})
+    # `auto` មិនរួមវាទេ — វាជា opt-in
+    assert "three" not in R.parse_layouts("auto")
+
+
+def test_panel_geometry_grids():
+    assert R.panel_geometry("split") == (1, 2, 1080, 960)
+    assert R.panel_geometry("three") == (1, 3, 1080, 640)
+    # ៤ ជួរដេកនឹងផ្តល់ផ្ទាំង 1080x480 ដែលរាក់ពេក -> ក្រឡា 2×2
+    assert R.panel_geometry("four") == (2, 2, 540, 960)
+
+
+def test_pick_panel_faces_takes_the_biggest_sorted_left_to_right():
+    faces = [face(cx=1500, w=200), face(cx=300, w=260), face(cx=900, w=240),
+             face(cx=1700, w=80)]
+    chosen = R.pick_panel_faces(faces, 3, 1920)
+    assert [round(f.cx) for f in chosen] == [300, 900, 1500]
+
+
+def test_pick_panel_faces_refuses_faces_that_are_too_close():
+    faces = [face(cx=900, w=200), face(cx=960, w=200), face(cx=1020, w=200)]
+    assert R.pick_panel_faces(faces, 3, 1920) is None
+
+
+def test_three_faces_make_three_panels(monkeypatch):
+    monkeypatch.setattr(R, "grab_frame", lambda path, t, size: t)
+    monkeypatch.setattr(R, "detect_faces_in_frame", lambda frame, size: [
+        face(cx=300, w=200, h=260), face(cx=960, w=200, h=260), face(cx=1600, w=200, h=260),
+    ])
+    layout = R.plan_shot(None, 10.0, 16.0, SIZE, allowed=R.parse_layouts("three,split"))
+    assert layout.kind == "three"
+    assert len(layout.panels) == 3
+
+
+def test_three_faces_fall_back_to_split_when_three_not_allowed(monkeypatch):
+    monkeypatch.setattr(R, "grab_frame", lambda path, t, size: t)
+    monkeypatch.setattr(R, "detect_faces_in_frame", lambda frame, size: [
+        face(cx=300, w=200, h=260), face(cx=960, w=200, h=260), face(cx=1600, w=200, h=260),
+    ])
+    layout = R.plan_shot(None, 10.0, 16.0, SIZE, allowed=R.parse_layouts("split"))
+    assert layout.kind == "split"
+    assert len(layout.panels) == 2
+
+
+def test_two_faces_cannot_fill_three_panels(monkeypatch):
+    monkeypatch.setattr(R, "grab_frame", lambda path, t, size: t)
+    monkeypatch.setattr(R, "detect_faces_in_frame", lambda frame, size: [
+        face(cx=400, w=200, h=260), face(cx=1500, w=200, h=260),
+    ])
+    assert R.plan_shot(None, 10.0, 16.0, SIZE,
+                       allowed=R.parse_layouts("three,split")).kind == "split"
+
+
+def test_caption_sits_on_the_last_seam():
+    assert R.caption_margin_for("single") is None
+    assert R.caption_margin_for("split") == config.CAPTION_MARGIN_V_SPLIT
+    # ៣ ផ្ទាំង: ស្នាមចុងក្រោយនៅ 2/3 នៃកម្ពស់ -> margin តូចជាង split
+    assert R.caption_margin_for("three") < R.caption_margin_for("split")

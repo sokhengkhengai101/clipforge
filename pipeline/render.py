@@ -18,7 +18,7 @@ from typing import Callable
 import config
 from pipeline.audio import FFmpegError, probe_duration, require_ffmpeg
 from pipeline.highlights import Clip
-from pipeline.reframe import Box, Layout, Segment
+from pipeline.reframe import Box, Layout, Segment, panel_geometry
 
 
 class RenderError(RuntimeError):
@@ -104,21 +104,33 @@ def layout_chain(layout: Layout, index: int, source_label: str, out_label: str,
     out_width = out_width or config.OUT_WIDTH
     out_height = out_height or config.OUT_HEIGHT
 
-    if layout.kind == "split" and layout.top and layout.bottom:
-        # output បញ្ឈរ/ការ៉េ -> ជាន់គ្នាបញ្ឈរ (vstack); output ផ្ដេក -> ឆ្វេង/ស្តាំ (hstack)។
-        # ផ្ទាំង 1920×540 នៅលើ 16:9 នឹងវែងនិងរាក់ពេក ដូច្នេះទិសត្រូវប្តូរតាម output។
-        horizontal = config.SPLIT_DIRECTION == "horizontal"
-        panel_w = out_width // 2 if horizontal else out_width
-        panel_h = out_height if horizontal else out_height // 2
-        stack = "hstack" if horizontal else "vstack"
-        return (
-            f"[{source_label}]split=2[a{index}][b{index}];"
-            f"[a{index}]{layout.top.as_filter()},"
-            f"scale={panel_w}:{panel_h}:flags=lanczos[t{index}];"
-            f"[b{index}]{layout.bottom.as_filter()},"
-            f"scale={panel_w}:{panel_h}:flags=lanczos[m{index}];"
-            f"[t{index}][m{index}]{stack}=inputs=2,setsar=1{suffix}[{out_label}]"
-        )
+    if layout.panels:
+        # output បញ្ឈរ/ការ៉េ -> ជាន់គ្នាបញ្ឈរ (vstack); output ផ្ដេក -> ឆ្វេង/ស្តាំ (hstack);
+        # ៤ ផ្ទាំង -> ក្រឡា 2×2 (`xstack`)។ ផ្ទាំង 1920×540 នៅលើ 16:9 រាក់ពេក
+        # ដូច្នេះទិសត្រូវប្តូរតាម output។
+        cols, rows, panel_w, panel_h = panel_geometry(layout.kind)
+        count = len(layout.panels)
+
+        parts = [f"[{source_label}]split={count}" +
+                 "".join(f"[p{index}_{i}]" for i in range(count))]
+        for i, box in enumerate(layout.panels):
+            parts.append(f"[p{index}_{i}]{box.as_filter()},"
+                         f"scale={panel_w}:{panel_h}:flags=lanczos[q{index}_{i}]")
+
+        joined = "".join(f"[q{index}_{i}]" for i in range(count))
+        if cols == 1:
+            stack = f"vstack=inputs={count}"
+        elif rows == 1:
+            stack = f"hstack=inputs={count}"
+        else:
+            # xstack ត្រូវការទីតាំងនីមួយៗ: 0_0|w0_0|0_h0|w0_h0
+            spots = []
+            for i in range(count):
+                column, row = i % cols, i // cols
+                spots.append(f"{'0' if column == 0 else 'w0'}_{'0' if row == 0 else 'h0'}")
+            stack = f"xstack=inputs={count}:layout={'|'.join(spots)}"
+        parts.append(f"{joined}{stack},setsar=1{suffix}[{out_label}]")
+        return ";".join(parts)
 
     box = layout.box
     if box is None:

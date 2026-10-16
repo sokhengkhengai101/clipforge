@@ -127,7 +127,17 @@ clipforge/
   (`clips/`, `clips_4x5/`, ...). Portrait and square stack split panels vertically; 16:9 puts
   them side by side, since a 1920x540 panel is too shallow to frame a face.
 - Layout: `--layout` takes a comma-separated list of the layouts the planner may use, and it
-  picks one per shot: `auto` (all), `fill`/`face` (crop to the face), `split`, `center`. So
+  picks one per shot: `auto`, `fill`/`face` (crop to the face), `split`, `three`, `four`,
+  `center`. `three` and `four` are **not** in `auto` -- they change the picture a lot, so they are
+  opt-in (`--layout fill,split,three`). The planner tries the widest grid first (four, then three,
+  then split) and takes the biggest N faces sorted left to right, provided neighbours are at least
+  `MIN_FACE_SEPARATION` apart and no panel exceeds `PANEL_MAX_UPSCALE`. Panels are 1080x960 for
+  split, 1080x640 for three, and a 2x2 grid of 540x960 for four -- four stacked rows would be
+  1080x480, too shallow for a face, the same reason 16:9 stacks side by side. Measured on the
+  70-min podcast, which is a three-person show (3 faces in 35 of 60 sampled frames): the shot at
+  478 s renders at 2.44x upscale as three panels against 3.42x as a split, because the wider panel
+  needs a wider crop. Captions move to the seam between the last two panels for any multi-panel
+  layout (`caption_margin_for`), which is the only band that covers nobody's face. So
   `--layout fill,split` allows both and `--layout fill` forbids split entirely. `center` is always
   the last resort, because a shot with no face still has to render. `--layout split` on its own
   keeps the old forced behaviour: a one-face shot is still split, using the global seats.

@@ -197,13 +197,13 @@ def test_verify_clip_raises_on_mismatch(tmp_path, fast_render):
 
 def layout_split() -> Layout:
     return Layout(kind="split",
-                  top=Box(x=0, y=0, w=600, h=534),
-                  bottom=Box(x=600, y=0, w=600, h=534))
+                  panels=[Box(x=0, y=0, w=600, h=534),
+                          Box(x=600, y=0, w=600, h=534)])
 
 
 def test_build_layout_filter_split_has_stack():
     f = R.build_layout_filter(layout_split(), out_width=1080, out_height=1920)
-    assert f.startswith("[0:v]split=2[a0][b0];")      # label មានលេខ ដើម្បីកុំជាន់គ្នា
+    assert f.startswith("[0:v]split=2[p0_0][p0_1];")      # label មានលេខ ដើម្បីកុំជាន់គ្នា
     assert "crop=600:534:0:0" in f and "crop=600:534:600:0" in f
     assert "scale=1080:960" in f          # ផ្ទាំងនីមួយៗខ្ពស់ពាក់កណ្តាល
     assert "vstack=inputs=2" in f
@@ -237,8 +237,8 @@ def two_segments(start: float, end: float) -> list[Segment]:
                 layout=Layout(kind="center", box=Box(x=40, y=0, w=180, h=240))),
         Segment(start=middle, end=end, layout=Layout(
             kind="split",
-            top=Box(x=0, y=0, w=160, h=142),
-            bottom=Box(x=160, y=0, w=160, h=142))),
+            panels=[Box(x=0, y=0, w=160, h=142),
+                    Box(x=160, y=0, w=160, h=142)])),
     ]
 
 
@@ -305,7 +305,7 @@ def test_segments_filter_labels_do_not_collide():
     """chain ច្រើនក្នុង graph តែមួយ -> label ត្រូវខុសគ្នា."""
     segments = two_segments(0.0, 10.0)
     f = R.build_segments_filter(segments, 0.0)
-    for label in ("[s0]", "[s1]", "[p0]", "[p1]", "[v0]", "[v1]", "[a1]", "[b1]"):
+    for label in ("[s0]", "[s1]", "[p0]", "[p1]", "[v0]", "[v1]", "[p1_0]", "[q1_1]"):
         assert f.count(label) >= 1
 
 
@@ -465,3 +465,18 @@ def test_sharpen_can_be_turned_off(monkeypatch):
     monkeypatch.setattr(config, "SHARPEN", "")
     layout = Layout(kind="center", box=Box(x=0, y=0, w=180, h=240))
     assert "unsharp" not in R.build_layout_filter(layout, "c.ass")
+
+
+def test_three_panels_stack_vertically():
+    layout = Layout(kind="three", panels=[Box(x=i * 100, y=0, w=300, h=200) for i in range(3)])
+    f = R.build_layout_filter(layout)
+    assert "[0:v]split=3" in f
+    assert "vstack=inputs=3" in f
+    assert f.count("scale=1080:640") == 3
+
+
+def test_four_panels_use_a_grid():
+    layout = Layout(kind="four", panels=[Box(x=i * 100, y=0, w=300, h=200) for i in range(4)])
+    f = R.build_layout_filter(layout)
+    assert "xstack=inputs=4:layout=0_0|w0_0|0_h0|w0_h0" in f
+    assert f.count("scale=540:960") == 4

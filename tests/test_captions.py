@@ -425,8 +425,7 @@ def segment(start, end, kind):
     from pipeline.reframe import Box, Layout, Segment
     layout = Layout(kind=kind)
     if kind == "split":
-        layout.top = Box(x=0, y=0, w=400, h=400)
-        layout.bottom = Box(x=500, y=0, w=400, h=400)
+        layout.panels = [Box(x=0, y=0, w=400, h=400), Box(x=500, y=0, w=400, h=400)]
     else:
         layout.box = Box(x=0, y=0, w=606, h=1080)
     return Segment(start=start, end=end, layout=layout)
