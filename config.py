@@ -135,6 +135,9 @@ SUBJECT_MODEL_PATH = PROJECT_ROOT / "models" / "object_detection_yolox_2022nov.o
 SUBJECT_MODEL_URL = ("https://github.com/opencv/opencv_zoo/raw/main/models/"
                      "object_detection_yolox/object_detection_yolox_2022nov.onnx")
 SUBJECT_MIN_SCORE = 0.45
+# ប្រអប់រូបកាយយកកណ្តាល -> crop ធ្លាក់លើទ្រូង។ យើងយកត្រឹមប៉ុណ្ណេះខាងលើជា "ក្បាល"។
+SUBJECT_HEAD_RATIO = 0.25
+USE_SUBJECTS = True                 # False = ឥរិយាបថចាស់ (មុខ ឬ center តែប៉ុណ្ណោះ)
 SUBJECT_INPUT = 640                 # YOLOX រៀននៅ 640x640
 # ចលនា: ប្រើពេលគ្មានទាំងមុខទាំងវត្ថុ (ធូលី, សត្វរត់ព្រិល)។ រូបតូចល្មមសម្រាប់
 # ដក frame — យើងត្រូវការត្រឹម "មើលទៅណា" មិនមែនព័ត៌មានលម្អិតទេ។

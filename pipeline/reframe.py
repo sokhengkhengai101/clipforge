@@ -786,6 +786,50 @@ def parse_layouts(value: str) -> frozenset[str]:
     return frozenset(allowed)
 
 
+
+# ---------- ពេលគ្មានមុខ: រូបកាយ / សត្វ / ចលនា ----------
+
+def head_of(subject) -> Face:
+    """បម្លែងប្រអប់ **រូបកាយ** ទៅជា `Face` ក្លែងក្លាយនៅត្រង់ក្បាល.
+
+    ហេតុអ្វី? កូដទាំងអស់ខាងក្រោម (`single_box`, `panel_box`, ការតាមដាន) និយាយ
+    ភាសា `Face` រួចហើយ។ ប្រអប់រូបកាយ 574×663 ដែលយកកណ្តាលនឹងដាក់ crop លើ
+    **ទ្រូង** ដូច្នេះយើងយកត្រឹម ២៥% ខាងលើជា "ក្បាល"។
+    """
+    height = max(2, int(subject.h * config.SUBJECT_HEAD_RATIO))
+    width = max(2, int(height * 0.75))
+    return Face(x=int(subject.cx - width / 2), y=subject.y,
+                w=width, h=height, score=subject.score)
+
+
+def fallback_face(video_path: Path, start: float, end: float, size: tuple[int, int],
+                  frames: list, sampled: int) -> Face | None:
+    """រក "មុខ" ជំនួសពី subject ឬចលនា — `None` បើគ្មានអ្វីទាល់តែសោះ.
+
+    `frames` ជា frame ដែល `plan_shot` ទាញរួចហើយ — យើងប្រើឡើងវិញ ព្រោះការទាញ
+    frame ជាផ្នែកដែលថ្លៃបំផុត (ការចាប់វត្ថុខ្លួនឯងត្រឹម ~175ms)។
+    """
+    from pipeline.subjects import detect_subjects_in_frame, motion_centre
+
+    frame_w, frame_h = size
+    seen: list = []
+    for frame in frames:
+        found = detect_subjects_in_frame(frame, size)
+        if found:
+            seen.append(max(found, key=lambda s: s.area))
+
+    # ដែនវត្តមានដូចមុខដែរ: វត្ថុដែលលេចតែម្តងមិនគួរគ្រប់គ្រង shot ទាំងមូលទេ
+    if seen and len(seen) >= sampled * config.FACE_PRESENCE_MIN:
+        return head_of(max(seen, key=lambda s: s.area))
+
+    centre = motion_centre(video_path, start, end, size)
+    if centre is None:
+        return None
+    cx, cy = centre
+    height = max(2, int(frame_h * 0.15))
+    return Face(x=int(cx - height * 0.375), y=int(cy - height / 2),
+                w=int(height * 0.75), h=height, score=0.0)
+
 # ---------- ផែនការ layout ----------
 
 def identify(frame, face: Face, seats: Seats | None) -> str | None:
@@ -829,9 +873,12 @@ def plan_shot(video_path: Path, start: float, end: float, size: tuple[int, int],
     best_frame = None
     seen: list[Face] = []          # មុខធំបំផុតក្នុង frame គំរូនីមួយៗ — ប្រើធៀបចលនា
     sampled = 0
+    frames = []                    # ប្រើឡើងវិញសម្រាប់ការរក subject (ការទាញ frame ថ្លៃជាងគេ)
     for moment in sample_times(start, end, config.SHOT_SAMPLE_FRAMES):
         sampled += 1
         frame = grab_frame(video_path, moment, size)
+        if frame is not None:
+            frames.append(frame)
         faces = detect_faces_in_frame(frame, size)
         if faces:
             seen.append(max(faces, key=lambda f: f.w))
@@ -901,6 +948,12 @@ def plan_shot(video_path: Path, start: float, end: float, size: tuple[int, int],
             box = single_box(subject, frame_w, frame_h)
         return Layout(kind="single", box=box,
                       person=identify(best_frame, subject, seats))
+
+    # គ្មានមុខដែលទុកចិត្តបាន -> រូបកាយ/សត្វ រួចចលនា។ center ជាទីពឹងចុងក្រោយ។
+    if "single" in allowed and config.USE_SUBJECTS:
+        stand_in = fallback_face(video_path, start, end, size, frames, sampled)
+        if stand_in is not None:
+            return Layout(kind="single", box=single_box(stand_in, frame_w, frame_h))
 
     return Layout(kind="center", box=center_box(frame_w, frame_h))
 

@@ -15,6 +15,20 @@ from pipeline.highlights import Clip
 SIZE = (1920, 1080)
 
 
+@pytest.fixture(autouse=True)
+def no_subject_detector(monkeypatch):
+    """Test ភាគច្រើននិយាយអំពី **មុខ** — កុំឲ្យ planner ហៅ YOLOX ពិត.
+
+    `plan_shot` ធ្លាក់ទៅ subject/ចលនាពេលគ្មានមុខ ហើយនោះនឹងផ្ទុក model 34MB
+    រួចបរាជ័យលើ frame ក្លែងក្លាយ។ Test ដែល *ចង់* សាក subject patch វាឡើងវិញ។
+    """
+    import pipeline.subjects as subjects_module
+
+    monkeypatch.setattr(subjects_module, "detect_subjects_in_frame",
+                        lambda frame, size: [])
+    monkeypatch.setattr(subjects_module, "motion_centre", lambda *a, **k: None)
+
+
 def face(cx: float, cy: float = 400, w: int = 100, h: int = 170, score: float = 0.9) -> R.Face:
     """មុខនៅទីតាំងកណ្តាល (cx, cy) — ងាយសរសេរជាង x/y."""
     return R.Face(x=int(cx - w / 2), y=int(cy - h / 2), w=w, h=h, score=score,
@@ -804,3 +818,88 @@ def test_single_is_kept_when_the_face_stays(monkeypatch):
     monkeypatch.setattr(R, "detect_faces_in_frame",
                         lambda frame, size: [face(cx=900, w=200, h=260)])
     assert R.plan_shot(None, 10.0, 25.0, SIZE).kind == "single"
+
+
+# ---------- ពេលគ្មានមុខ: រូបកាយ / សត្វ / ចលនា ----------
+
+class FakeSubject:
+    """ប្រអប់រូបកាយបែប `subjects.Subject` (យើងមិនផ្ទុក YOLOX ក្នុង test ទេ)."""
+
+    def __init__(self, x, y, w, h, label="person", score=0.9):
+        self.x, self.y, self.w, self.h = x, y, w, h
+        self.label, self.score = label, score
+
+    @property
+    def cx(self):
+        return self.x + self.w / 2
+
+    @property
+    def area(self):
+        return self.w * self.h
+
+
+def test_head_sits_at_the_top_of_the_body(monkeypatch):
+    """ប្រអប់រូបកាយយកកណ្តាល -> crop លើទ្រូង។ ក្បាលនៅ ២៥% ខាងលើ."""
+    body = FakeSubject(x=900, y=100, w=200, h=600)
+    head = R.head_of(body)
+    assert head.y == 100                       # ចាប់ពីលើប្រអប់
+    assert head.h == 150                       # 25% នៃ 600
+    assert head.cx == pytest.approx(body.cx, abs=2)
+    assert head.cy < body.y + body.h / 2       # នៅលើកណ្តាលរូបកាយ
+
+
+def test_fallback_uses_the_biggest_subject(monkeypatch):
+    import pipeline.subjects as S
+    monkeypatch.setattr(S, "detect_subjects_in_frame", lambda frame, size: [
+        FakeSubject(x=100, y=200, w=80, h=200),
+        FakeSubject(x=900, y=100, w=200, h=600),
+    ])
+    frames = [object(), object(), object()]
+    head = R.fallback_face(None, 0.0, 6.0, SIZE, frames, sampled=3)
+    assert head is not None
+    assert head.cx == pytest.approx(1000, abs=3)
+
+
+def test_fallback_ignores_a_subject_seen_once(monkeypatch):
+    """ដែនវត្តមានដូចមុខដែរ — វត្ថុមួយ frame មិនគ្រប់គ្រង shot ទាំងមូលទេ."""
+    import pipeline.subjects as S
+    calls = {"n": 0}
+
+    def detect(frame, size):
+        calls["n"] += 1
+        return [FakeSubject(x=900, y=100, w=200, h=600)] if calls["n"] == 1 else []
+
+    monkeypatch.setattr(S, "detect_subjects_in_frame", detect)
+    monkeypatch.setattr(S, "motion_centre", lambda *a, **k: None)
+    assert R.fallback_face(None, 0.0, 6.0, SIZE, [object()] * 3, sampled=3) is None
+
+
+def test_fallback_falls_through_to_motion(monkeypatch):
+    import pipeline.subjects as S
+    monkeypatch.setattr(S, "detect_subjects_in_frame", lambda frame, size: [])
+    monkeypatch.setattr(S, "motion_centre", lambda *a, **k: (1500.0, 400.0))
+    head = R.fallback_face(None, 0.0, 6.0, SIZE, [object()] * 3, sampled=3)
+    assert head is not None
+    assert head.cx == pytest.approx(1500, abs=3)
+
+
+def test_plan_shot_crops_to_a_body_when_no_face(monkeypatch):
+    import pipeline.subjects as S
+    monkeypatch.setattr(R, "grab_frame", lambda path, t, size: t)
+    monkeypatch.setattr(R, "detect_faces_in_frame", lambda frame, size: [])
+    monkeypatch.setattr(S, "detect_subjects_in_frame",
+                        lambda frame, size: [FakeSubject(x=1400, y=100, w=200, h=600)])
+    layout = R.plan_shot(None, 10.0, 16.0, SIZE)
+    assert layout.kind == "single"
+    centre = layout.box.x + layout.box.w / 2
+    assert abs(centre - 1500) < 60             # crop តាមរូបកាយ មិនមែនកណ្តាលរូប
+
+
+def test_subjects_can_be_turned_off(monkeypatch):
+    import pipeline.subjects as S
+    monkeypatch.setattr(config, "USE_SUBJECTS", False)
+    monkeypatch.setattr(R, "grab_frame", lambda path, t, size: t)
+    monkeypatch.setattr(R, "detect_faces_in_frame", lambda frame, size: [])
+    monkeypatch.setattr(S, "detect_subjects_in_frame",
+                        lambda frame, size: [FakeSubject(x=1400, y=100, w=200, h=600)])
+    assert R.plan_shot(None, 10.0, 16.0, SIZE).kind == "center"

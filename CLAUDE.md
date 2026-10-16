@@ -99,10 +99,11 @@ translation, UI, batch. (Sampled face tracking inside a shot is in, see Layout b
 - `pydantic` for validating LLM JSON, `typer` for the CLI, `rich` for progress output
 - Tests: `pytest` with a short sample clip in `tests/fixtures/`
 
-## Subject detection (step 1 of reframing any video, not just podcasts)
+## Subject detection (reframing any video, not just podcasts)
 
 `pipeline/subjects.py` runs YOLOX-S (COCO, 80 classes) from opencv_zoo through `cv2.dnn` and keeps
-the people and animals. It is **measured but not yet wired into the planner**.
+the people and animals. `plan_shot` uses it **after faces**: face -> body/animal -> motion ->
+centre crop, controlled by `USE_SUBJECTS`.
 
 Why: the face detector covers a podcast completely and a wildlife video barely half the time.
 Sampling 40 frames of each test video, frames with any usable subject:
@@ -131,6 +132,25 @@ Signals together, on 40 sampled frames (face first, then subject, then motion):
 | wildlife | 18 | 12 | 9 | **1** (97% covered, was 47%) |
 | podcast | 40 | 0 | 0 | 0 |
 | interview | 38 | 2 | 0 | 0 |
+
+A body box centred would frame the chest, so `head_of()` turns it into a `Face` covering the top
+`SUBJECT_HEAD_RATIO` (25%) of the box; everything downstream already speaks `Face`. The same
+presence rule applies as for faces -- a subject seen in one sample frame does not get the shot.
+Subjects feed single crops only, never split, since a body box carries no identity.
+
+What it changed, measuring whether the subject's centre falls inside the crop the planner chose:
+
+| video | before | after |
+|---|---|---|
+| wildlife | 59% | **81%** |
+| interview | 94% | 97% |
+| podcast | identical plan (faces answer every frame) | |
+
+It costs YOLOX inference only on shots with no face: the wildlife clip plans in 10.9 s instead of
+7.3 s, the interview 41 s instead of 30 s, the podcast unchanged. Where the crop still misses, the
+subject moved inside a shot whose box is static, or the person's head is outside the source frame
+(at 19.2 s the presenter is cut by the frame edge, so the crop shows his torso -- OpusClip's own
+reframe of that moment does the same).
 
 ## Project layout
 
