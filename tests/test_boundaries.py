@@ -370,3 +370,109 @@ def test_trim_to_max_prefers_a_real_ending():
     sentences = B.build_sentences(pause_transcript())
     start, end = B._trim_to_max(0.0, 20.0, sentences, max_sec=10.0, min_sec=3.0)
     assert end == 5.0           # 9.5 សមក្នុង max តែវាជា soft
+
+
+# ---------- ការផ្សាយពាណិជ្ជកម្ម ----------
+
+def speech(text: str, start: float, step: float = 0.5) -> list[Word]:
+    """បម្លែងឃ្លាជាពាក្យៗដែលមានពេល (ពាក្យនីមួយៗ `step` វិនាទី)."""
+    return [Word(word=token, start=start + i * step, end=start + (i + 1) * step,
+                 probability=0.9)
+            for i, token in enumerate(text.split())]
+
+
+def ad_transcript() -> Transcript:
+    """រឿងល្អ រួចការផ្សាយ រួចរឿងល្អវិញ.
+
+    0.0-3.5   "I was gonna be a teacher. Wow."     <- ល្អ
+    4.0-...   "This episode is sponsored by acme."  <- ការផ្សាយចាប់ផ្តើម
+    ...       "use code garbage for 20% off."
+    60.0-     "Anyway where were we."               <- ល្អវិញ
+    """
+    words = (speech("I was gonna be a teacher. Wow.", 0.0)
+             + speech("This episode is sponsored by acme.", 4.0)
+             + speech("Acme makes the best widgets anywhere.", 8.0)
+             + speech("Just use code garbage for 20% off.", 12.0)
+             + speech("Anyway where were we.", 60.0))
+    return transcript_from_words(words, duration=90.0)
+
+
+def test_find_ad_spans_starts_at_the_phrase_not_the_sentence():
+    """ប្រយោគអាចចាប់ផ្តើមមុនការផ្សាយ — span ត្រូវចាប់ត្រង់ពាក្យ "This"."""
+    transcript = ad_transcript()
+    spans = B.find_ad_spans(B.build_sentences(transcript), transcript.duration)
+    assert len(spans) == 1
+    assert spans[0].start == pytest.approx(4.0 - 0.5, abs=0.01)
+
+
+def test_find_ad_spans_reaches_back_from_a_call_to_action():
+    """ឃ្លា "use code" នៅចុងការអាន -> span ត្រូវថយក្រោយ."""
+    words = speech("great chat.", 0.0) + speech("Just use code garbage today.", 100.0)
+    transcript = transcript_from_words(words, duration=200.0)
+    spans = B.find_ad_spans(B.build_sentences(transcript), transcript.duration)
+    assert len(spans) == 1
+    assert spans[0].start == pytest.approx(100.0 - config.AD_CTA_LEAD_SEC, abs=0.01)
+
+
+def test_find_ad_spans_merges_two_ads_in_a_row():
+    """ផ្សាយ ២ ជាប់គ្នា (វាស់ពិត: ចន្លោះ 81s) = block តែមួយ."""
+    words = (speech("This episode is sponsored by acme.", 10.0)
+             + speech("Now a word from beta use code beta.", 80.0))
+    transcript = transcript_from_words(words, duration=200.0)
+    spans = B.find_ad_spans(B.build_sentences(transcript), transcript.duration)
+    assert len(spans) == 1
+    assert spans[0].end > 83.0
+
+
+def test_find_ad_spans_keeps_distant_ads_apart():
+    words = (speech("This episode is sponsored by acme.", 10.0)
+             + speech("This episode is sponsored by beta.", 400.0))
+    transcript = transcript_from_words(words, duration=600.0)
+    spans = B.find_ad_spans(B.build_sentences(transcript), transcript.duration)
+    assert len(spans) == 2
+
+
+def test_no_ad_phrases_means_no_spans():
+    transcript = simple_transcript(3)
+    assert B.find_ad_spans(B.build_sentences(transcript), transcript.duration) == []
+
+
+def test_snap_clip_stops_before_an_ad():
+    """clip ល្អដែលប៉ះការផ្សាយខាងចុង -> ឈប់មុនវា មិនមែនបោះចោល."""
+    transcript = ad_transcript()
+    sentences = B.build_sentences(transcript)
+    spans = B.find_ad_spans(sentences, transcript.duration)
+    clip = Clip(start=0.0, end=10.0, title="t", hook="h", type="story", score=8.0, reason="r")
+    snapped = B.snap_clip(clip, sentences, 90.0, min_sec=3.0, max_sec=60.0, ad_spans=spans)
+    assert snapped is not None
+    assert snapped.end <= spans[0].start + 0.01
+
+
+def test_snap_clip_drops_a_clip_inside_an_ad():
+    transcript = ad_transcript()
+    sentences = B.build_sentences(transcript)
+    spans = B.find_ad_spans(sentences, transcript.duration)
+    warnings: list[str] = []
+    clip = Clip(start=8.0, end=15.0, title="ad", hook="h", type="story", score=8.0, reason="r")
+    assert B.snap_clip(clip, sentences, 90.0, min_sec=3.0, max_sec=60.0,
+                       ad_spans=spans, on_warning=warnings.append) is None
+    assert any("ផ្សាយ" in w for w in warnings)
+
+
+def test_snap_clip_starts_after_an_ad():
+    """clip ដែលចាប់ផ្តើមក្នុងការផ្សាយ តែបន្តទៅខ្លឹមសារល្អ -> រុញដើមទៅមុខ."""
+    transcript = ad_transcript()
+    sentences = B.build_sentences(transcript)
+    spans = B.find_ad_spans(sentences, transcript.duration)
+    clip = Clip(start=12.0, end=62.0, title="t", hook="h", type="story", score=8.0, reason="r")
+    snapped = B.snap_clip(clip, sentences, 90.0, min_sec=1.0, max_sec=90.0, ad_spans=spans)
+    assert snapped is not None
+    assert snapped.start >= spans[0].end - 0.01
+
+
+def test_extend_to_min_will_not_grow_into_an_ad():
+    transcript = ad_transcript()
+    sentences = B.build_sentences(transcript)
+    spans = B.find_ad_spans(sentences, transcript.duration)
+    start, end = B._extend_to_min(0.0, 3.5, sentences, min_sec=30.0, ad_spans=spans)
+    assert end <= spans[0].start + 0.01

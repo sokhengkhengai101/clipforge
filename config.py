@@ -21,6 +21,25 @@ MAX_CLIP_SEC = 90.0        # clip វែងជាងនេះ = មិនយក
 SNAP_HARD_END_SEC = 4.0
 PADDING_SEC = 0.3          # បន្ថែមខាងដើម/ចុង ឲ្យកុំកាត់ពាក្យ
 
+# ---------- ការផ្សាយពាណិជ្ជកម្ម (sponsor read) ----------
+# Clip ដែលមានការផ្សាយ = clip ដែលបង្ហោះមិនបាន។ យើងរកវាដោយឃ្លា រួចដកចន្លោះនោះចេញ។
+# វាស់លើ podcast ៧០ នាទី: ប៉ះ ៧ កន្លែង (ផ្សាយពិត ៣) ហើយលើបទសម្ភាសន៍ ៤៧ នាទី ប៉ះ ០។
+# ឃ្លា "ដើម" — ការអានចាប់ផ្តើមត្រង់ពាក្យនេះ
+AD_START_PHRASES = (
+    "sponsored by", "brought to you by", "this episode is sponsored",
+    "today's sponsor", "our sponsor is", "sponsor of this",
+)
+# ឃ្លា "ហៅឲ្យទិញ" (CTA) — វានៅ *ចុង* ការអាន ដូច្នេះការផ្សាយចាប់ផ្តើម**មុន**វាឆ្ងាយ
+# (វាស់ពិត: GLD អានចាប់ពី 1258s តែឃ្លា "40% off ... com" នៅ 1314.8s = យឺត 57s)
+AD_CTA_PHRASES = (
+    "promo code", "use code", "with code", "discount code", "% off", "percent off",
+    "com slash", ".com slash", "sign up today", "free shipping",
+    "link in the description", "link in the bio",
+)
+AD_MERGE_SEC = 90.0        # seed ក្នុងចម្ងាយនេះ = ការផ្សាយតែមួយ (ផ្សាយ ២ ជាប់គ្នាមានចន្លោះ 81s)
+AD_CTA_LEAD_SEC = 90.0     # ថយក្រោយពី CTA ដើម្បីចាប់ដើមការអាន
+AD_TAIL_SEC = 15.0         # ក្រោយ CTA ចុងក្រោយ (វាស់: ការនិយាយធម្មតាវិលមកក្នុង 0.6s)
+
 # ---------- LLM chunking ----------
 CHUNK_SEC = 300.0          # ចែក transcript ជាផ្នែក ~5 នាទី
 CHUNK_OVERLAP_SEC = 30.0   # ត្រួតគ្នា 30 វិនាទី ដើម្បីកុំកាត់ idea ពាក់កណ្តាល

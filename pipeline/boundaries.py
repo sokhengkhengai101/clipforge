@@ -86,6 +86,115 @@ def build_sentences(transcript: Transcript) -> list[Sentence]:
     return sentences
 
 
+# ---------- ការផ្សាយពាណិជ្ជកម្ម ----------
+
+@dataclass
+class AdSpan:
+    """ចន្លោះពេលដែលជាការផ្សាយពាណិជ្ជកម្ម (មិនត្រូវដាក់ក្នុង clip)."""
+
+    start: float
+    end: float
+    reason: str = ""
+
+    def overlaps(self, start: float, end: float) -> bool:
+        return start < self.end and end > self.start
+
+
+def _matching_phrases(text: str, phrases: tuple[str, ...]) -> list[str]:
+    low = text.lower()
+    return [p for p in phrases if p in low]
+
+
+def _phrase_start_time(sentence: Sentence, phrase: str) -> float | None:
+    """ពេលនៃ**ពាក្យទីមួយ**នៃឃ្លានោះ (មិនមែនដើមប្រយោគ).
+
+    ត្រូវការព្រោះប្រយោគមួយអាចផ្ទុកទាំងរឿងល្អ ទាំងដើមការផ្សាយ៖
+    "...before stand-up Wow This episode is sponsored by..." — យើងចង់កាត់ត្រង់
+    "This" មិនមែនត្រង់ដើមប្រយោគទេ។
+    """
+    tokens = phrase.split()
+    words = [w.word.strip().lower().strip(".,!?…") for w in sentence.words]
+    for index in range(len(words) - len(tokens) + 1):
+        if words[index:index + len(tokens)] == tokens:
+            return sentence.words[index].start
+    return None
+
+
+def find_ad_spans(sentences: list[Sentence],
+                  video_duration: float) -> list[AdSpan]:
+    """រកចន្លោះការផ្សាយក្នុង transcript.
+
+    ឃ្លា "ដើម" (`sponsored by`) ជាពាក្យ**ទីមួយ**នៃការអាន ចំណែកឃ្លា CTA
+    (`40% off`, `com slash`) នៅ**ចុង** — ដូច្នេះយើងថយក្រោយពី CTA តែប៉ុណ្ណោះ។
+    បើចង្កោមមានឃ្លា "ដើម" យើងជឿវាជាងការប៉ាន់ថយក្រោយ។
+    """
+    seeds = []
+    for sentence in sentences:
+        starts = _matching_phrases(sentence.text, config.AD_START_PHRASES)
+        ctas = _matching_phrases(sentence.text, config.AD_CTA_PHRASES)
+        if starts or ctas:
+            seeds.append((sentence, starts, (starts + ctas)[0]))
+
+    if not seeds:
+        return []
+
+    # ដាក់ seed ជិតគ្នាជាចង្កោមតែមួយ (ការផ្សាយ ២ ជាប់គ្នាក៏ជា block តែមួយដែរ)
+    clusters: list[list[tuple[Sentence, list[str], str]]] = [[seeds[0]]]
+    for seed in seeds[1:]:
+        if seed[0].start - clusters[-1][-1][0].end <= config.AD_MERGE_SEC:
+            clusters[-1].append(seed)
+        else:
+            clusters.append([seed])
+
+    spans: list[AdSpan] = []
+    for cluster in clusters:
+        # ឃ្លាជាច្រើនអាចប៉ះប្រយោគតែមួយ ("this episode is sponsored" និង
+        # "sponsored by") — យកមួយដែលចាប់ផ្តើម**មុនគេ** បើមិនដូច្នោះពាក្យដំបូងនៃ
+        # ការផ្សាយ ("This episode") នៅសល់ក្នុង clip។
+        hard_starts = [
+            min((_phrase_start_time(s, phrase) or s.start) for phrase in starts)
+            for s, starts, _ in cluster if starts
+        ]
+        if hard_starts:
+            start = min(hard_starts) - 0.5      # ការអានចាប់ផ្តើមត្រង់ឃ្លានោះ
+        else:
+            start = cluster[0][0].start - config.AD_CTA_LEAD_SEC
+        end = cluster[-1][0].end + config.AD_TAIL_SEC
+        spans.append(AdSpan(
+            start=max(0.0, start), end=min(video_duration, end),
+            reason=", ".join(sorted({phrase for _, _, phrase in cluster})),
+        ))
+    return spans
+
+
+def _avoid_ads(start: float, end: float, sentences: list[Sentence],
+               ad_spans: list[AdSpan]) -> tuple[float, float] | None:
+    """រុញព្រំដែនឲ្យផុតពីការផ្សាយ. `None` = clip ស្ថិតក្នុងការផ្សាយទាំងស្រុង."""
+    for span in ad_spans:
+        if not span.overlaps(start, end):
+            continue
+        if span.start <= start and span.end >= end:
+            return None                       # ទាំង clip ជាការផ្សាយ
+        # ចំណាំ: ប្រយោគមួយអាចឆ្លងពីខ្លឹមសារល្អចូលការផ្សាយ (ឧ. "...before stand-up
+        # Wow This episode is sponsored by...")។ ពេលនោះព្រំដែនប្រយោគជិតបំផុតនៅ
+        # ឆ្ងាយដល់ ១២ វិនាទី ហើយការកាត់ត្រង់នោះបោះខ្លឹមសារល្អចោល — យើងកាត់ត្រង់
+        # ដើមការផ្សាយផ្ទាល់វិញ។
+        limit = config.SNAP_HARD_END_SEC
+        if span.start > start:
+            # ការផ្សាយនៅខាងចុង -> ឈប់មុនវា
+            fits = [s.end for s in sentences if start < s.end <= span.start]
+            best = max(fits) if fits else span.start
+            end = best if span.start - best <= limit else span.start
+        else:
+            # ការផ្សាយនៅខាងដើម -> ចាប់ផ្តើមក្រោយវា
+            fits = [s.start for s in sentences if span.end <= s.start < end]
+            best = min(fits) if fits else span.end
+            start = best if best - span.end <= limit else span.end
+        if end <= start:
+            return None
+    return start, end
+
+
 def _nearest_start(sentences: list[Sentence], time: float) -> float:
     """ដើមប្រយោគជិតបំផុតនឹង `time` (ដើម្បីកុំចាប់ផ្តើមពាក់កណ្តាលប្រយោគ).
 
@@ -118,14 +227,24 @@ def _is_hard_end(sentences: list[Sentence], time: float) -> bool:
 
 
 def _extend_to_min(start: float, end: float, sentences: list[Sentence],
-                   min_sec: float) -> tuple[float, float]:
-    """ពន្លាត clip ខ្លីពេកដោយបន្ថែមប្រយោគ — ទៅមុខជាមុន រួចទៅក្រោយ."""
+                   min_sec: float,
+                   ad_spans: list[AdSpan] | None = None) -> tuple[float, float]:
+    """ពន្លាត clip ខ្លីពេកដោយបន្ថែមប្រយោគ — ទៅមុខជាមុន រួចទៅក្រោយ.
+
+    ការពន្លាតមិនត្រូវឆ្លងចូលការផ្សាយពាណិជ្ជកម្មទេ។ បើខាងមុខជាប់ការផ្សាយ យើងឈប់
+    ហើយទៅយកប្រយោគខាងក្រោយវិញ (បើមិនដូច្នោះ clip ល្អនឹងត្រូវកាត់ខ្លី រួចបោះចោល)។
+    """
     # ទៅមុខ: យកចុងប្រយោគបន្ទាប់ៗ — ហើយបើដល់ប្រវែងហើយតែគំនិតមិនទាន់ចប់
     # (`hard=False`) បន្តទៅចុងពិតបន្ទាប់ ក្នុងដែន `extra`។
+    def in_ad(moment: float) -> bool:
+        return any(s.start < moment <= s.end for s in (ad_spans or []))
+
     extra = config.SNAP_HARD_END_SEC
     for sentence in sentences:
         if sentence.end <= end:
             continue
+        if in_ad(sentence.end):
+            break                   # ខាងមុខជាការផ្សាយ -> ឈប់
         long_enough = end - start >= min_sec
         if long_enough and (_is_hard_end(sentences, end) or sentence.end - start > min_sec + extra):
             break
@@ -135,8 +254,11 @@ def _extend_to_min(start: float, end: float, sentences: list[Sentence],
     for sentence in reversed(sentences):
         if end - start >= min_sec:
             break
-        if sentence.start < start:
-            start = sentence.start
+        if sentence.start >= start:
+            continue
+        if in_ad(sentence.start):
+            break
+        start = sentence.start
 
     return start, end
 
@@ -190,6 +312,7 @@ def snap_clip(
     min_sec: float | None = None,
     max_sec: float | None = None,
     padding: float | None = None,
+    ad_spans: list[AdSpan] | None = None,
     on_warning: Callable[[str], None] | None = None,
 ) -> Clip | None:
     """កែព្រំដែន clip មួយ. ត្រឡប់ `None` បើវាមិនអាចសង្គ្រោះបាន."""
@@ -212,9 +335,29 @@ def snap_clip(
             return None
         end = covering[0].end
 
-    start, end = _extend_to_min(start, end, sentences, min_sec)
+    # ការផ្សាយពាណិជ្ជកម្មៈ រុញព្រំដែនឲ្យផុត **មុន** ពន្លាត (បើមិនដូច្នោះ ការពន្លាត
+    # នឹងអូសវាចូលវិញ) ហើយ**ក្រោយ** padding ម្តងទៀត។
+    if ad_spans:
+        avoided = _avoid_ads(start, end, sentences, ad_spans)
+        if avoided is None:
+            if on_warning:
+                on_warning(f"'{clip.title}' ត្រូវបោះ: ស្ថិតក្នុងការផ្សាយពាណិជ្ជកម្ម")
+            return None
+        start, end = avoided
+
+    start, end = _extend_to_min(start, end, sentences, min_sec, ad_spans)
     start, end = _trim_to_max(start, end, sentences, max_sec, min_sec)
     start, end = _pad(start, end, sentences, video_duration, padding)
+
+    if ad_spans:
+        avoided = _avoid_ads(start, end, sentences, ad_spans)
+        if avoided is None:
+            if on_warning:
+                on_warning(f"'{clip.title}' ត្រូវបោះ: ស្ថិតក្នុងការផ្សាយពាណិជ្ជកម្ម")
+            return None
+        if avoided != (start, end) and on_warning:
+            on_warning(f"'{clip.title}' ត្រូវកាត់ឲ្យផុតការផ្សាយពាណិជ្ជកម្ម")
+        start, end = avoided
 
     duration = end - start
     if duration < min_sec:
@@ -238,10 +381,16 @@ def snap_boundaries(
     """
     sentences = build_sentences(transcript)
     video_duration = transcript.duration
+    ad_spans = find_ad_spans(sentences, video_duration)
+    if ad_spans and on_warning:
+        total = sum(s.end - s.start for s in ad_spans)
+        on_warning(f"ការផ្សាយពាណិជ្ជកម្ម {len(ad_spans)} កន្លែង ({total:.0f}s) "
+                   f"ត្រូវដកចេញពី clip")
 
     snapped: list[Clip] = []
     for clip in clips:
-        result = snap_clip(clip, sentences, video_duration, on_warning=on_warning)
+        result = snap_clip(clip, sentences, video_duration,
+                           ad_spans=ad_spans, on_warning=on_warning)
         if result is not None:
             snapped.append(result)
 

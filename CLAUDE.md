@@ -26,6 +26,13 @@ Pipeline (one module per step, in `pipeline/`):
    so a clip stops on a finished thought. Measured on a 70-min podcast: 97 of 868 sentences (11%)
    end on a pause, and the rule took clips ending on punctuation from 12/15 to 13/15 with no
    change on the 47-min interview (14/14 before and after).
+   It also drops sponsor reads: `find_ad_spans()` looks for start phrases ("sponsored by") and
+   call-to-action phrases ("use code", "% off", "com slash"). A CTA sits at the *end* of a read, so
+   it reaches back `AD_CTA_LEAD_SEC` (90 s), while a start phrase is cut at its own first word.
+   Seeds within 90 s merge, because two sponsor reads run back to back (measured gap: 81 s).
+   Measured on the 70-min podcast: 2 spans, 304 s (7.5%), clips touching an ad 2 -> 0, one pure-ad
+   clip dropped and one trimmed from 23 s to 28 s of real story. The 47-min interview has 0 spans
+   and is unchanged.
 5. `captions.py` — build `.ass` subtitle file per clip (≤ 2 lines, ≤ 32 chars/line, keyword highlight in #FFD23F)
 6. `render.py` — FFmpeg: trim → center-crop 9:16 → scale 1080×1920 → burn ASS → H.264 MP4
 
