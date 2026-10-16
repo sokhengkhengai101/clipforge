@@ -149,6 +149,24 @@ def check_ollama() -> None:
              f"ollama pull {wanted}")
 
 
+
+def check_models() -> None:
+    """ONNX model សម្រាប់ reframe — ចាប់មុខ, សម្គាល់មុខ, និងចាប់ subject."""
+    import config
+
+    wanted = [
+        ("face detect", config.FACE_MODEL_PATH, config.FACE_MODEL_URL),
+        ("face match", config.FACE_RECOGNITION_MODEL_PATH, config.FACE_RECOGNITION_MODEL_URL),
+        ("subject", config.SUBJECT_MODEL_PATH, config.SUBJECT_MODEL_URL),
+    ]
+    for label, path, url in wanted:
+        path = Path(path)
+        if path.is_file():
+            line(OK, f"model ({label})", f"{path.name} ({path.stat().st_size // (1024 * 1024)} MB)")
+        else:
+            line(BAD, f"model ({label})", f"ខ្វះ {path.name}",
+                 f"curl -L -o {path} {url}")
+
 def check_folders() -> None:
     root = Path(__file__).parent
     needed = ["pipeline", "prompts", "tests/fixtures", "output"]
@@ -168,6 +186,7 @@ def main() -> int:
     check_gpu()
     check_cuda_dlls()
     check_ollama()
+    check_models()
     check_folders()
 
     try:

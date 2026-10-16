@@ -128,6 +128,15 @@ FACE_MODEL_URL = ("https://github.com/opencv/opencv_zoo/raw/main/models/"
 FACE_RECOGNITION_MODEL_PATH = PROJECT_ROOT / "models" / "face_recognition_sface_2021dec.onnx"
 FACE_RECOGNITION_MODEL_URL = ("https://github.com/opencv/opencv_zoo/raw/main/models/"
                               "face_recognition_sface/face_recognition_sface_2021dec.onnx")
+# ---------- Subject detector (មនុស្ស + សត្វ) ----------
+# Face detector គ្របដណ្តប់ podcast 100% តែវីដេអូសត្វព្រៃតែ 47% — YOLOX ចាប់
+# រូបកាយមនុស្ស និងសត្វ (COCO 80 class) ទៅវិញ។ ពី opencv_zoo ដូច YuNet/SFace។
+SUBJECT_MODEL_PATH = PROJECT_ROOT / "models" / "object_detection_yolox_2022nov.onnx"
+SUBJECT_MODEL_URL = ("https://github.com/opencv/opencv_zoo/raw/main/models/"
+                     "object_detection_yolox/object_detection_yolox_2022nov.onnx")
+SUBJECT_MIN_SCORE = 0.45
+SUBJECT_INPUT = 640                 # YOLOX រៀននៅ 640x640
+
 FACE_MATCH_THRESHOLD = 0.30         # cosine អប្បបរមាទើបរាប់ថាជាមនុស្សតែម្នាក់
 # វាស់លើ footage ពិត: មុខពិត 0.90-0.94, false positive (ចង្កៀង) 0.53-0.57
 FACE_MIN_SCORE = 0.70

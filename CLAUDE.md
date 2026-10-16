@@ -99,6 +99,25 @@ translation, UI, batch. (Sampled face tracking inside a shot is in, see Layout b
 - `pydantic` for validating LLM JSON, `typer` for the CLI, `rich` for progress output
 - Tests: `pytest` with a short sample clip in `tests/fixtures/`
 
+## Subject detection (step 1 of reframing any video, not just podcasts)
+
+`pipeline/subjects.py` runs YOLOX-S (COCO, 80 classes) from opencv_zoo through `cv2.dnn` and keeps
+the people and animals. It is **measured but not yet wired into the planner**.
+
+Why: the face detector covers a podcast completely and a wildlife video barely half the time.
+Sampling 40 frames of each test video, frames with any usable subject:
+
+| video | face only | + YOLOX |
+|---|---|---|
+| wildlife, 56 s | 47% | **80%** |
+| three-person podcast | 100% | 100% (`person` x3 per frame) |
+| interview | 95% | 100% |
+
+A rhino comes back as `sheep` or `bear` -- COCO has no rhino -- which is enough, since the planner
+only needs "a large subject is here". YOLOX is anchor-free, so decoding is
+`(prediction + grid) * stride`, then NMS; it costs about 175 ms per frame on the CPU, and we sample
+a few frames per shot. The model is 34 MB: `python check_env.py` prints the curl command for it.
+
 ## Project layout
 
 ```
