@@ -20,7 +20,7 @@ from pipeline.highlights import (HighlightsError, find_highlights, full_video_cl
                                  load_clips, rank_clips, save_clips)
 from pipeline.llm import LLMError
 from pipeline.reframe import (ReframeError, describe, dominant_kind, find_seats,
-                             plan_clip)
+                             parse_layouts, plan_clip)
 from pipeline.render import (RenderError, compute_crop, encoder_args,
                              probe_dimensions, render_all, render_clip, verify_clip)
 from pipeline.transcribe import TranscribeError, load_transcript, transcribe
@@ -97,7 +97,8 @@ def main(
     redo: str = typer.Option("", "--redo",
                              help="ជំហានដែលត្រូវធ្វើថ្មី: audio, transcribe, highlights, render, all"),
     layout: str = typer.Option("auto", "--layout",
-                               help="auto (split/មុខ/center តាម shot), center (ចាស់), split"),
+                               help="layout ដែលអនុញ្ញាត (បញ្ជីបំបែកដោយ ,): "
+                                    "auto | fill/face | split | center — ឧ. --layout fill,split"),
     aspect: str = typer.Option("9:16", "--aspect",
                                help="សមាមាត្រ output: 9:16, 4:5, 1:1, 16:9"),
     caption_words: int = typer.Option(config.CAPTION_MAX_WORDS_PER_CUE, "--caption-words",
@@ -124,8 +125,10 @@ def main(
     redo_highlights = "highlights" in steps_to_redo
     redo_render = "render" in steps_to_redo
 
-    if layout not in ("auto", "center", "split"):
-        console.print(f"[red]--layout មិនស្គាល់: {layout}[/red] (auto, center ឬ split)")
+    try:
+        allowed_layouts = parse_layouts(layout)
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
         raise typer.Exit(code=2)
 
     # ត្រូវហៅមុនគេ — ទំហំ font, margin និងសមាមាត្រផ្ទាំងទាំងអស់គណនាពីវា
@@ -163,7 +166,7 @@ def main(
     console.print(f"  max clips   : {max_clips}")
     console.print(f"  whisper     : {whisper_model} on {device} ({compute})")
     console.print(f"  llm         : {model}")
-    console.print(f"  layout      : {layout}")
+    console.print(f"  layout      : {layout} ({', '.join(sorted(allowed_layouts))})")
     console.print(f"  aspect      : {aspect}  ({out_width}x{out_height})")
     console.print(f"  caption     : {caption_words} ពាក្យ/cue, "
                   f"ពណ៌ {config.CAPTION_KEYWORD_COLOR}")
@@ -296,14 +299,19 @@ def main(
             final = rank_clips(final, transcript, model=model,
                                on_warning=snap_warnings.append)
         console.print(f"[dim]  តម្រៀប {len(final)} candidate -> យក {max_clips} ល្អបំផុត[/dim]")
+    ranked = final                 # បញ្ជីពេញតាមលំដាប់ — cache ត្រូវរក្សាវា
     final = final[:max_clips]
 
     # `--full` មិនត្រូវសរសេរ clips.json ទេ — មិនមានការជ្រើសអ្វីទាំងអស់
     # ហើយបើសរសេរ នោះ run ធម្មតាបន្ទាប់នឹងអាន cache នោះ រួច render វីដៀអូពេញជា "clip" ។
+    # យើងសរសេរ **បញ្ជីពេញ** មិនមែនបញ្ជីដែលកាត់តាម `--max-clips` ទេ ហើយសរសេរតែ
+    # ពេលទើបគណនាថ្មី។ បើមិនដូច្នោះ `--max-clips 2` លុបជម្រើសដែលអ្នកអនុម័ត ហើយ
+    # run បន្ទាប់ទទួលបានត្រឹម ២ clip ដោយមិនដឹងខ្លួន (យើងធ្វើវាពិត ២ ដង)។
     clips_file = out_dir / "clips.json"
-    if not full:
-        clips_file = save_clips(final, clips_file, model=model,
+    if not full and cached_final is None:
+        clips_file = save_clips(ranked, clips_file, model=model,
                                 prompt=config.HIGHLIGHT_PROMPT)
+    if not full:
         console.print(f"[green]✔ 4/6 boundaries[/green]  {short_path(clips_file)}  "
                       f"({len(final)} clips)")
     for warning in snap_warnings:
@@ -323,13 +331,13 @@ def main(
     plans: list[list] | None = None
     margins: list[int | None] = [None] * len(final)
 
-    if layout != "center":
+    if allowed_layouts != frozenset({"center"}):
         try:
             seats = find_seats(video, source_size, duration,
                                cache_path=out_dir / "seats.json")
             if seats is None:
                 console.print("[yellow]⚠ រកកៅអីមិនឃើញ (មិនមែន two-shot?)[/yellow] "
-                              "-> split នឹងមិនកើតទេ")
+                              "-> split នៅដំណើរការតាម shot តែយើងមិនដឹងថាអ្នកណាគួរនៅលើ")
             else:
                 console.print(f"[dim]  កៅអី: ឆ្វេង x={seats.left.x} ស្តាំ x={seats.right.x}"
                               f"[/dim]")
@@ -338,7 +346,7 @@ def main(
             with console.status("[cyan]reframe[/cyan] — វិភាគ shot និងមុខ..."):
                 for clip in final:
                     plans.append(plan_clip(video, clip, source_size, seats,
-                                           layout_mode=layout))
+                                           allowed=allowed_layouts))
             for index, (clip, segments) in enumerate(zip(final, plans), start=1):
                 console.print(f"[dim]  #{index} {len(segments):2} shots — "
                               f"{describe(segments)}[/dim]")

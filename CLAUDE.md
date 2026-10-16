@@ -55,6 +55,9 @@ Known limits to judge clips against:
   640×360 source upscaled to 1080×1920 is visibly soft. Use a 1080p source for clips worth posting.
 - `--redo <step>` re-runs one step (audio, transcribe, highlights, render, or all); `--force` is
   the same as `--redo all`.
+- `clips.json` holds the whole ranked list and is written only when the ranking actually ran.
+  It used to store the list already cut to `--max-clips`, so `--max-clips 2` silently threw away
+  the approved selection and every later run rendered two clips.
 - `.ass` and `.mp4` for a clip must share a folder: render runs FFmpeg with `cwd` set to that
   folder so the `ass=` filter never sees a Windows path (`:` and `\` are filtergraph syntax).
 - `SCENE_THRESHOLD = 0.3` misses real cuts. At 33.78-40.46s of the 47-min interview it reports no
@@ -123,8 +126,12 @@ clipforge/
 - Aspect: `--aspect 9:16|4:5|1:1|16:9` (default 9:16). Each writes to its own folder
   (`clips/`, `clips_4x5/`, ...). Portrait and square stack split panels vertically; 16:9 puts
   them side by side, since a 1920x540 panel is too shallow to frame a face.
-- Layout: `--layout auto|center|split` (default auto: split on two-shots, face crop on close-ups,
-  centre crop when no face is found). On a close-up where the face moves more than 8% of the frame
+- Layout: `--layout` takes a comma-separated list of the layouts the planner may use, and it
+  picks one per shot: `auto` (all), `fill`/`face` (crop to the face), `split`, `center`. So
+  `--layout fill,split` allows both and `--layout fill` forbids split entirely. `center` is always
+  the last resort, because a shot with no face still has to render. `--layout split` on its own
+  keeps the old forced behaviour: a one-face shot is still split, using the global seats.
+  (Default auto: split on two-shots, face crop on close-ups, centre crop when no face is found.) On a close-up where the face moves more than 8% of the frame
   width across the shot's sample frames, the crop follows it: `reframe` samples the shot every 1 s
   (40 points max), smooths the path (moving average + 2% deadzone) and emits one FFmpeg
   `crop=...:x='if(lt(t,..),..)'` expression, so FFmpeg recomputes x every frame. Measured on the

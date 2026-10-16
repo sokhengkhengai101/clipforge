@@ -621,6 +621,42 @@ def _median_face(faces: list[Face]) -> Face:
     )
 
 
+# ---------- ឈ្មោះ layout ដែលអ្នកប្រើជ្រើសបាន ----------
+
+# ឈ្មោះខាងក្នុង: "split" (ពីរផ្ទាំង), "single" (crop តាមមុខ), "center" (crop កណ្តាល)។
+# យើងទទួលឈ្មោះក្រៅផងដែរ ព្រោះ tool ផ្សេង (OpusClip) ហៅ "single" ថា "fill"។
+LAYOUT_ALIASES = {
+    "split": "split",
+    "single": "single", "face": "single", "fill": "single",
+    "center": "center", "centre": "center",
+}
+ALL_LAYOUTS = frozenset({"split", "single", "center"})
+
+
+def parse_layouts(value: str) -> frozenset[str]:
+    """បម្លែង `--layout` ទៅជាសំណុំ layout ដែលអនុញ្ញាត.
+
+    `"auto"` ឬទទេ = ទាំងអស់។ `"fill,split"` = តែពីរនោះ។ Planner រើសក្នុងចំណោម
+    ទាំងនេះក្នុងមួយ shot — ដូច្នេះអ្នកកំណត់ *អ្វីដែលអាច* ហើយវារើស *អ្វីដែលសម*។
+    """
+    text = (value or "auto").strip().lower()
+    if text in ("", "auto"):
+        return ALL_LAYOUTS
+
+    allowed = set()
+    for part in text.split(","):
+        name = part.strip()
+        if not name:
+            continue
+        if name not in LAYOUT_ALIASES:
+            known = ", ".join(sorted(LAYOUT_ALIASES))
+            raise ValueError(f"layout មិនស្គាល់: {part.strip()!r} (ត្រូវជា auto, {known})")
+        allowed.add(LAYOUT_ALIASES[name])
+    if not allowed:
+        raise ValueError("--layout ទទេ")
+    return frozenset(allowed)
+
+
 # ---------- ផែនការ layout ----------
 
 def identify(frame, face: Face, seats: Seats | None) -> str | None:
@@ -647,11 +683,17 @@ def identify(frame, face: Face, seats: Seats | None) -> str | None:
 
 
 def plan_shot(video_path: Path, start: float, end: float, size: tuple[int, int],
-              seats: Seats | None = None, force: str | None = None) -> Layout:
-    """សម្រេច layout សម្រាប់ shot មួយ ដោយមើល frame គំរូពីរបី."""
-    frame_w, frame_h = size
+              seats: Seats | None = None,
+              allowed: frozenset[str] | None = None) -> Layout:
+    """សម្រេច layout សម្រាប់ shot មួយ ដោយមើល frame គំរូពីរបី.
 
-    if force == "center":
+    `allowed` = layout ដែលអ្នកប្រើអនុញ្ញាត។ `center` ជាទីពឹងចុងក្រោយជានិច្ច —
+    បើគ្មានមុខ ហើយគ្មាន layout ណាសម យើងនៅតែត្រូវបញ្ចេញរូបមួយ។
+    """
+    frame_w, frame_h = size
+    allowed = ALL_LAYOUTS if allowed is None else allowed
+
+    if allowed == frozenset({"center"}):
         return Layout(kind="center", box=center_box(frame_w, frame_h))
 
     best: list[Face] = []
@@ -667,7 +709,7 @@ def plan_shot(video_path: Path, start: float, end: float, size: tuple[int, int],
         if len(best) >= 2:
             break      # ឃើញពីរនាក់រួចហើយ — គ្រប់គ្រាន់
 
-    if len(best) >= 2:
+    if len(best) >= 2 and "split" in allowed:
         left, right = best[0], best[-1]
         if right.cx - left.cx >= frame_w * config.MIN_FACE_SEPARATION:
             # ប្រអប់គណនាពីមុខ **ក្នុង shot នេះ** មិនមែនពីកៅអីសកលទេ។ កៅអីជាមធ្យម
@@ -677,8 +719,9 @@ def plan_shot(video_path: Path, start: float, end: float, size: tuple[int, int],
             biggest = max(best, key=lambda f: f.w)
             top = panel_box(left, frame_w, frame_h)
             bottom = panel_box(right, frame_w, frame_h)
-            if not panels_sharp_enough(top, bottom):
+            if not panels_sharp_enough(top, bottom) and "single" in allowed:
                 # ផ្ទាំងមួយត្រូវពង្រីកខ្លាំងពេក -> ម្នាក់ច្បាស់ ជាជាងពីរនាក់ព្រិល
+                # (តែបើអ្នកប្រើអនុញ្ញាតតែ split យើងគោរពការជ្រើសរបស់គាត់)
                 return Layout(kind="single", box=single_box(biggest, frame_w, frame_h),
                               person=identify(best_frame, biggest, seats))
             return Layout(
@@ -690,12 +733,13 @@ def plan_shot(video_path: Path, start: float, end: float, size: tuple[int, int],
                 box=single_box(biggest, frame_w, frame_h),
             )
 
-    if force == "split" and seats:
+    # អនុញ្ញាតតែ split -> បង្ខំ split ទោះឃើញមុខតែមួយ (ប្រើកៅអីសកល)
+    if allowed == frozenset({"split"}) and seats:
         return Layout(kind="split",
                       top=panel_box(seats.left, frame_w, frame_h),
                       bottom=panel_box(seats.right, frame_w, frame_h))
 
-    if best:
+    if best and "single" in allowed:
         # បើ frame គំរូបង្ហាញថាមុខផ្លាស់ទី ប្រអប់ថេរនឹងកាត់មុខចេញ។
         # ពេលនោះ យើងយក frame បន្ថែម រួចធ្វើ crop ដែលរំកិលតាមមុខ។
         if face_movement(seen, frame_w) > config.TRACK_MOVE_THRESHOLD:
@@ -743,29 +787,30 @@ def _same_layout(a: Layout, b: Layout) -> bool:
 
 def plan_clip(video_path: Path, clip: Clip, size: tuple[int, int],
               seats: Seats | None = None,
-              layout_mode: str = "auto") -> list[Segment]:
+              allowed: frozenset[str] | None = None) -> list[Segment]:
     """ចែក clip ជា shot រួចសម្រេច layout ក្នុងមួយ shot.
 
-    `layout_mode`: "auto" (តាម detection), "center" (ឥរិយាបថចាស់), "split" (បង្ខំ).
+    `allowed` = សំណុំពី `parse_layouts()`។ `None` = ទាំងអស់។
     """
-    if layout_mode == "center":
+    allowed = ALL_LAYOUTS if allowed is None else allowed
+
+    if allowed == frozenset({"center"}):
+        # center តែមួយ -> មិនបាច់រកការកាត់ camera ឬមុខទេ (លឿន)
         frame_w, frame_h = size
         return [Segment(start=clip.start, end=clip.end,
                         layout=Layout(kind="center", box=center_box(frame_w, frame_h)))]
 
     cuts = detect_cuts(video_path, clip.start, clip.end)
     shots = split_into_shots(clip.start, clip.end, cuts)
-
-    force = layout_mode if layout_mode in ("split", "center") else None
     # shot នីមួយៗឯករាជ្យ ហើយពេលភាគច្រើនចំណាយលើការរង់ចាំ FFmpeg ទាញ frame ->
     # thread ជួយបានច្រើន (ការវិភាគ 47 នាទីធ្លាក់ពី ~8 នាទីមកតិចជាង)។
     workers = max(1, min(config.PLAN_WORKERS, len(shots)))
     if workers == 1:
-        layouts = [plan_shot(video_path, a, b, size, seats, force) for a, b in shots]
+        layouts = [plan_shot(video_path, a, b, size, seats, allowed) for a, b in shots]
     else:
         with ThreadPoolExecutor(max_workers=workers) as pool:
             layouts = list(pool.map(
-                lambda shot: plan_shot(video_path, shot[0], shot[1], size, seats, force),
+                lambda shot: plan_shot(video_path, shot[0], shot[1], size, seats, allowed),
                 shots,
             ))
     segments = [Segment(start=a, end=b, layout=layout)

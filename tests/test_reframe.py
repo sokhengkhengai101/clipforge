@@ -189,7 +189,8 @@ def test_plan_shot_force_center_skips_detection(monkeypatch):
         raise AssertionError("មិនត្រូវចាប់មុខពេល force=center")
 
     monkeypatch.setattr(R, "grab_frame", explode)
-    assert R.plan_shot("v.mp4", 0.0, 5.0, SIZE, force="center").kind == "center"
+    assert R.plan_shot("v.mp4", 0.0, 5.0, SIZE,
+                       allowed=frozenset({"center"})).kind == "center"
 
 
 # ---------- លំដាប់ផ្ទាំង ----------
@@ -294,11 +295,11 @@ def test_detect_cuts_empty_on_static_video(three_shot_video):
 
 def test_plan_clip_center_mode_skips_detection(monkeypatch):
     def explode(*args, **kwargs):
-        raise AssertionError("layout_mode=center មិនត្រូវចាប់មុខ")
+        raise AssertionError("allowed=center មិនរូវចាប់មុខ")
 
     monkeypatch.setattr(R, "detect_cuts", explode)
     clip = Clip(start=0.0, end=30.0, title="x", score=8)
-    segments = R.plan_clip("v.mp4", clip, SIZE, layout_mode="center")
+    segments = R.plan_clip("v.mp4", clip, SIZE, allowed=frozenset({"center"}))
     assert len(segments) == 1 and segments[0].layout.kind == "center"
 
 
@@ -553,7 +554,7 @@ def test_plan_shot_keeps_static_box_for_a_still_face(monkeypatch):
 
 def test_plan_shot_center_mode_never_tracks(monkeypatch):
     fake_frames(monkeypatch, lambda t: 1300 - 90 * (t - 10.0))
-    layout = R.plan_shot(None, 10.0, 16.0, SIZE, force="center")
+    layout = R.plan_shot(None, 10.0, 16.0, SIZE, allowed=frozenset({"center"}))
     assert layout.kind == "center" and layout.box.x_expr is None
 
 
@@ -625,3 +626,64 @@ def test_plan_shot_still_splits_two_good_faces(monkeypatch):
     layout = R.plan_shot(None, 10.0, 16.0, SIZE)
     assert layout.kind == "split"
     assert R.panels_sharp_enough(layout.top, layout.bottom)
+
+
+# ---------- `--layout` ជាបញ្ជី ----------
+
+def test_parse_layouts_auto_means_everything():
+    assert R.parse_layouts("auto") == R.ALL_LAYOUTS
+    assert R.parse_layouts("") == R.ALL_LAYOUTS
+    assert R.parse_layouts(None) == R.ALL_LAYOUTS
+
+
+def test_parse_layouts_accepts_a_list_and_aliases():
+    """"fill" ជាឈ្មោះរបស់ OpusClip សម្រាប់ crop តាមមុខ."""
+    assert R.parse_layouts("fill,split") == frozenset({"single", "split"})
+    assert R.parse_layouts("face") == frozenset({"single"})
+    assert R.parse_layouts(" SPLIT , Centre ") == frozenset({"split", "center"})
+
+
+def test_parse_layouts_rejects_an_unknown_name():
+    with pytest.raises(ValueError) as error:
+        R.parse_layouts("gameplay")
+    assert "gameplay" in str(error.value)
+
+
+def test_two_faces_but_split_not_allowed(monkeypatch):
+    """ឃើញពីរនាក់ តែអ្នកប្រើសុំតែ fill -> crop មុខធំជាងគេ."""
+    monkeypatch.setattr(R, "grab_frame", lambda path, t, size: t)
+    monkeypatch.setattr(R, "detect_faces_in_frame", lambda frame, size: [
+        face(cx=400, w=300, h=330), face(cx=1500, w=290, h=320),
+    ])
+    layout = R.plan_shot(None, 10.0, 16.0, SIZE, allowed=frozenset({"single"}))
+    assert layout.kind == "single"
+
+
+def test_split_only_keeps_split_even_when_panels_are_soft(monkeypatch):
+    """អ្នកប្រើសុំតែ split -> យើងគោរព ទោះផ្ទាំងត្រូវពង្រីកខ្លាំង."""
+    monkeypatch.setattr(R, "grab_frame", lambda path, t, size: t)
+    monkeypatch.setattr(R, "detect_faces_in_frame", lambda frame, size: [
+        face(cx=400, w=300, h=330), face(cx=1500, w=90, h=100),
+    ])
+    assert R.plan_shot(None, 10.0, 16.0, SIZE,
+                       allowed=frozenset({"split"})).kind == "split"
+    # ជាមួយ auto វាប្តូរទៅ single វិញ
+    assert R.plan_shot(None, 10.0, 16.0, SIZE).kind == "single"
+
+
+def test_center_is_always_the_last_resort(monkeypatch):
+    """សុំតែ fill តែរកមុខមិនឃើញ -> យើងនៅតែត្រូវបញ្ចេញរូប."""
+    monkeypatch.setattr(R, "grab_frame", lambda path, t, size: t)
+    monkeypatch.setattr(R, "detect_faces_in_frame", lambda frame, size: [])
+    assert R.plan_shot(None, 10.0, 16.0, SIZE,
+                       allowed=frozenset({"single"})).kind == "center"
+
+
+def test_split_only_forces_split_from_seats(monkeypatch):
+    """ឥរិយាបថចាស់របស់ `--layout split`: មុខតែមួយក៏បង្ខំ split ដែរ."""
+    monkeypatch.setattr(R, "grab_frame", lambda path, t, size: t)
+    monkeypatch.setattr(R, "detect_faces_in_frame", lambda frame, size: [face(cx=900)])
+    seats = R.Seats(left=face(cx=400), right=face(cx=1500))
+    layout = R.plan_shot(None, 10.0, 16.0, SIZE, seats=seats,
+                         allowed=frozenset({"split"}))
+    assert layout.kind == "split"
