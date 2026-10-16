@@ -295,6 +295,9 @@ def detect_faces_in_frame(frame, size: tuple[int, int]) -> list[Face]:
         # ច្រោះប្រអប់ធំសម្បើម: false positive (ឧ. ចង្កៀង) ទទឹងលើស 45% នៃរូប
         if w > width * 0.45:
             continue
+        # ច្រោះប្រអប់តូចពេក: រូបថតលើជញ្ជាំង ឬមនុស្សឆ្ងាយ — មិនអាចជាអ្នកនិយាយទេ
+        if h < height * config.FACE_MIN_HEIGHT_RATIO:
+            continue
         faces.append(Face(x=x, y=y, w=w, h=h, score=round(score, 3),
                           landmarks=[float(v) for v in row[4:14]]))
     return sorted(faces, key=lambda f: f.cx)
@@ -338,6 +341,14 @@ def panel_box(face: Face, frame_w: int, frame_h: int,
 
     height = min(frame_h, face.h * zoom)
     width = height * aspect
+
+    # ប្រអប់ធំជាងទីធ្លាសងខាងមុខ -> `_clamp_box` រុញវាចូល ហើយមុខទៅជាប់គែមផ្ទាំង
+    # (យើងឃើញពិត: មុខនៅ x=1100 ក្នុងរូប 1280 ទទឹង, ប្រអប់ 606 -> មុខនៅ 70%)។
+    room = min(face.cx, frame_w - face.cx)
+    smallest = face.h * config.PANEL_ZOOM_MIN * aspect
+    width = max(min(width, 2 * room), smallest)
+    height = width / aspect
+
     if width > frame_w:                       # រូបតូចពេក -> កំណត់ដោយទទឹង
         width = frame_w
         height = width / aspect
@@ -345,6 +356,20 @@ def panel_box(face: Face, frame_w: int, frame_h: int,
     x = face.cx - width / 2
     y = face.cy - height * 0.40
     return _clamp_box(x, y, width, height, frame_w, frame_h)
+
+
+def panel_upscale(box: Box) -> float:
+    """ត្រូវពង្រីកប្រអប់នេះប៉ុន្មានដងទើបពេញផ្ទាំង split?"""
+    horizontal = config.SPLIT_DIRECTION == "horizontal"
+    panel_w = config.OUT_WIDTH // 2 if horizontal else config.OUT_WIDTH
+    panel_h = config.OUT_HEIGHT if horizontal else config.OUT_HEIGHT // 2
+    return max(panel_w / max(1, box.w), panel_h / max(1, box.h))
+
+
+def panels_sharp_enough(*boxes: Box, limit: float | None = None) -> bool:
+    """ផ្ទាំងទាំងអស់នៅក្នុងដែនពង្រីកដែលទទួលយកបានឬទេ?"""
+    limit = config.PANEL_MAX_UPSCALE if limit is None else limit
+    return all(panel_upscale(box) <= limit for box in boxes)
 
 
 def single_box(face: Face, frame_w: int, frame_h: int,
@@ -645,13 +670,21 @@ def plan_shot(video_path: Path, start: float, end: float, size: tuple[int, int],
     if len(best) >= 2:
         left, right = best[0], best[-1]
         if right.cx - left.cx >= frame_w * config.MIN_FACE_SEPARATION:
-            # ប្រើ seat សកលបើមាន (ស្ថិតស្ថេរជាង) បើអត់ ប្រើមុខពី frame នេះ
-            a, b = seats.as_tuple() if seats else (left, right)
+            # ប្រអប់គណនាពីមុខ **ក្នុង shot នេះ** មិនមែនពីកៅអីសកលទេ។ កៅអីជាមធ្យម
+            # លើទាំង video ដែលលាយ framing ច្រើន — វាស់ពិត: មុខកៅអី h=108 ខណៈមុខ
+            # ពិតក្នុង shot h=182 ហើយប្រអប់តូចនោះដាក់មុខជាប់គែមផ្ទាំង។
+            # កៅអីនៅប្រើសម្រាប់ **សម្គាល់អ្នកណា** (`identify`) ដែលជាកន្លែងវាល្អជាង។
             biggest = max(best, key=lambda f: f.w)
+            top = panel_box(left, frame_w, frame_h)
+            bottom = panel_box(right, frame_w, frame_h)
+            if not panels_sharp_enough(top, bottom):
+                # ផ្ទាំងមួយត្រូវពង្រីកខ្លាំងពេក -> ម្នាក់ច្បាស់ ជាជាងពីរនាក់ព្រិល
+                return Layout(kind="single", box=single_box(biggest, frame_w, frame_h),
+                              person=identify(best_frame, biggest, seats))
             return Layout(
                 kind="split",
-                top=panel_box(a, frame_w, frame_h),
-                bottom=panel_box(b, frame_w, frame_h),
+                top=top,
+                bottom=bottom,
                 # box បម្រុង: បើ split ខ្លីពេក យើងប្តូរទៅ single ដោយប្រើប្រអប់នេះ
                 # ដែលគណនាពី frame របស់ shot នេះផ្ទាល់ (មិនមែនខ្ចីពី shot ផ្សេង)។
                 box=single_box(biggest, frame_w, frame_h),

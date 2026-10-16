@@ -128,6 +128,17 @@ clipforge/
   edge in 12 of 26 sampled frames, the moving box keeps it at x=200-670 of 1080. It costs one frame
   grab per second of moving shot (five clips: 40s -> 54s with warm caches), and only 2 of 44
   segments in those five clips move enough to trigger it.
+- Split-panel sharpness. Three things decided how soft a panel looks, all measured on a 1280x720
+  podcast whose panels are 1080x960: (1) a framed photo on the wall was detected as a face 29 px
+  tall and blown up 16.9x for 16 s of a clip, so a detection under `FACE_MIN_HEIGHT_RATIO` (5% of
+  frame height) is dropped; (2) a shot whose panel would need more than `PANEL_MAX_UPSCALE` (3x)
+  now renders as a single face instead - one sharp person beats two blurry ones; (3) `PANEL_ZOOM`
+  2.0 -> 3.0 takes the upscale from 2.84x to 1.90x, and `PANEL_ZOOM_MIN` keeps the box no wider
+  than the room on either side of the face, since a clamped box pushes the face to the panel edge.
+  Panel boxes come from the faces in that shot, never from `seats`: seat geometry is a median over
+  the whole video (measured: seat face 108 px while the face in the shot was 182 px), which framed
+  people against the panel edge. Seats still decide *who* is who. `SHARPEN` (`unsharp`) runs once
+  after scaling and before the captions are burned. Worst upscale across the five clips: 1.97x.
 - Captions: `--caption-words 2..8` (default 5) and `--caption-color yellow|green|cyan|orange|white|#RRGGBB`
   (default #FFD23F from the design tokens; OpusClip uses green)
 - Encoder: `--encoder auto|nvenc|x264` (default auto: NVENC when the GPU accepts it).

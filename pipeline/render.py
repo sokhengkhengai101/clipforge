@@ -127,11 +127,22 @@ def layout_chain(layout: Layout, index: int, source_label: str, out_label: str,
             f"scale={out_width}:{out_height}:flags=lanczos,setsar=1{suffix}[{out_label}]")
 
 
+def sharpen_suffix() -> str:
+    """filter សម្អិតរូប ដែលដាក់ **ក្រោយ** ការពង្រីក និង **មុន** ការដុត caption.
+
+    ការពង្រីក 2.8x ពី 720p ធ្វើឲ្យរូបទន់។ `unsharp` មិនបង្កើតព័ត៌មានថ្មីទេ តែវា
+    បន្ថែមកម្រិតពណ៌នៅគែម ដែលភ្នែកអានថា "ច្បាស់"។ ដាក់មុន caption ដើម្បីកុំឲ្យ
+    អក្សរដែលមុតស្រាប់ក្លាយជាមានគែមរឹង។
+    """
+    return f",{config.SHARPEN}" if config.SHARPEN else ""
+
+
 def build_layout_filter(layout: Layout, ass_filename: str | None = None,
                         out_width: int | None = None, out_height: int | None = None) -> str:
     """filtergraph សម្រាប់ layout តែមួយ (clip ដែលមិនមានការកាត់ camera)."""
     burn = f",ass={ass_filename}" if ass_filename else ""
-    return layout_chain(layout, 0, "0:v", "v", burn, out_width, out_height)
+    return layout_chain(layout, 0, "0:v", "v", sharpen_suffix() + burn,
+                        out_width, out_height)
 
 
 def build_segments_filter(segments: list[Segment], clip_start: float,
@@ -167,7 +178,8 @@ def build_segments_filter(segments: list[Segment], clip_start: float,
 
     burn = f",ass={ass_filename}" if ass_filename else ""
     joined = "".join(f"[v{i}]" for i in range(count))
-    parts.append(f"{joined}concat=n={count}:v=1:a=0{burn}[v]")
+    # សម្អិតម្តងក្រោយ concat (មិនមែនក្នុងមួយ shot) — លទ្ធផលដូចគ្នា តែលឿនជាង
+    parts.append(f"{joined}concat=n={count}:v=1:a=0{sharpen_suffix()}{burn}[v]")
     return ";".join(parts)
 
 

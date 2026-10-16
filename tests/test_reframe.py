@@ -555,3 +555,73 @@ def test_plan_shot_center_mode_never_tracks(monkeypatch):
     fake_frames(monkeypatch, lambda t: 1300 - 90 * (t - 10.0))
     layout = R.plan_shot(None, 10.0, 16.0, SIZE, force="center")
     assert layout.kind == "center" and layout.box.x_expr is None
+
+
+# ---------- គុណភាពរូប: មុខតូចពេក និងការពង្រីកខ្លាំងពេក ----------
+
+class StubDetector:
+    """YuNet ក្លែងក្លាយ — ត្រឡប់ជួរដេកដែលយើងកំណត់ (x, y, w, h, landmarks×10, score)."""
+
+    def __init__(self, boxes):
+        self.boxes = boxes
+
+    def setInputSize(self, size):
+        pass
+
+    def detect(self, frame):
+        import numpy as np
+        rows = [[x, y, w, h, *([0.0] * 10), 0.95] for x, y, w, h in self.boxes]
+        return True, np.array(rows, dtype=np.float32)
+
+
+def test_detector_drops_a_face_that_is_too_small(monkeypatch):
+    """រូបថតលើជញ្ជាំង ២៩px មិនមែនជាអ្នកនិយាយ (វាស់ពិតលើ podcast ៧០ នាទី)."""
+    import numpy as np
+    monkeypatch.setattr(R, "_get_detector",
+                        lambda w, h: StubDetector([(100, 100, 300, 320), (900, 400, 30, 29)]))
+    frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+    faces = R.detect_faces_in_frame(frame, (1280, 720))
+    assert [f.h for f in faces] == [320]
+
+
+def test_detector_keeps_a_normal_face(monkeypatch):
+    import numpy as np
+    monkeypatch.setattr(R, "_get_detector", lambda w, h: StubDetector([(100, 100, 180, 200)]))
+    frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+    assert len(R.detect_faces_in_frame(frame, (1280, 720))) == 1
+
+
+def test_panel_upscale_math():
+    """ផ្ទាំង 1080x960 ពី box 404x360 = ពង្រីក 2.67x (ជាប់ដោយទទឹង)."""
+    assert R.panel_upscale(R.Box(x=0, y=0, w=404, h=360)) == pytest.approx(1080 / 404, abs=0.01)
+    assert R.panel_upscale(R.Box(x=0, y=0, w=64, h=58)) > 16
+
+
+def test_panels_sharp_enough():
+    big = R.Box(x=0, y=0, w=600, h=540)
+    tiny = R.Box(x=0, y=0, w=64, h=58)
+    assert R.panels_sharp_enough(big, big, limit=3.0)
+    assert not R.panels_sharp_enough(big, tiny, limit=3.0)
+
+
+def test_plan_shot_prefers_one_sharp_face_over_two_blurry(monkeypatch):
+    """មុខតូចម្នាក់ -> ផ្ទាំងនឹងព្រិលខ្លាំង -> យក single លើមុខធំវិញ."""
+    monkeypatch.setattr(R, "grab_frame", lambda path, t, size: t)
+    monkeypatch.setattr(R, "detect_faces_in_frame", lambda frame, size: [
+        face(cx=400, w=300, h=330),      # មុខធំ
+        face(cx=1500, w=90, h=100),      # មុខតូច -> ផ្ទាំងព្រិល
+    ])
+    layout = R.plan_shot(None, 10.0, 16.0, SIZE)
+    assert layout.kind == "single"
+    assert layout.box.w > 500
+
+
+def test_plan_shot_still_splits_two_good_faces(monkeypatch):
+    monkeypatch.setattr(R, "grab_frame", lambda path, t, size: t)
+    monkeypatch.setattr(R, "detect_faces_in_frame", lambda frame, size: [
+        face(cx=400, w=300, h=330),
+        face(cx=1500, w=290, h=320),
+    ])
+    layout = R.plan_shot(None, 10.0, 16.0, SIZE)
+    assert layout.kind == "split"
+    assert R.panels_sharp_enough(layout.top, layout.bottom)

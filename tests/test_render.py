@@ -447,3 +447,21 @@ def test_moving_crop_expression_survives_the_filtergraph():
     # comma នៃ expression ត្រូវនៅក្នុង quote ហើយ scale នៅបន្តដូចដើម
     assert f.startswith("[0:v]crop=180:240:x='")
     assert ",scale=" in f.split("'")[2]
+
+
+def test_sharpen_runs_after_scaling_and_before_captions():
+    """unsharp ត្រូវនៅក្រោយ scale (ដើម្បីសម្អិតរូបដែលពង្រីក) និងមុន ass."""
+    layout = Layout(kind="center", box=Box(x=0, y=0, w=180, h=240))
+    f = R.build_layout_filter(layout, "c.ass")
+    assert f.index("scale=") < f.index("unsharp") < f.index("ass=")
+
+
+def test_sharpen_applied_once_for_many_segments():
+    segments = two_segments(0.0, 10.0)
+    assert R.build_segments_filter(segments, 0.0, "c.ass").count("unsharp") == 1
+
+
+def test_sharpen_can_be_turned_off(monkeypatch):
+    monkeypatch.setattr(config, "SHARPEN", "")
+    layout = Layout(kind="center", box=Box(x=0, y=0, w=180, h=240))
+    assert "unsharp" not in R.build_layout_filter(layout, "c.ass")
