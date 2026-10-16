@@ -828,7 +828,9 @@ def plan_shot(video_path: Path, start: float, end: float, size: tuple[int, int],
     best: list[Face] = []
     best_frame = None
     seen: list[Face] = []          # មុខធំបំផុតក្នុង frame គំរូនីមួយៗ — ប្រើធៀបចលនា
+    sampled = 0
     for moment in sample_times(start, end, config.SHOT_SAMPLE_FRAMES):
+        sampled += 1
         frame = grab_frame(video_path, moment, size)
         faces = detect_faces_in_frame(frame, size)
         if faces:
@@ -885,7 +887,11 @@ def plan_shot(video_path: Path, start: float, end: float, size: tuple[int, int],
 
     # មុខ **ធំជាងគេ** ជាប្រធានបទ មិនមែនមុខឆ្វេងបំផុតទេ — ក្នុង frame ដែលមានទាំង
     # មនុស្ស ទាំងរូបថតលើជញ្ជាំង ការយកឆ្វេងបំផុតអាចដាក់ crop លើធ្នើរ។
-    if best and "single" in allowed:
+    # មុខលេចក្នុង frame គំរូតិចពេក -> ប្រអប់ថេរនឹងតាមមុខដែលបាត់ទៅហើយ។
+    # (វាស់ពិត: shot ១៤.៨ វិនាទី, មុខលេចតែ frame ដំបូង, crop កាត់ក្បាលចេញ។)
+    present_enough = seen and len(seen) >= sampled * config.FACE_PRESENCE_MIN
+
+    if best and present_enough and "single" in allowed:
         subject = max(best, key=lambda f: f.w)
         # បើ frame គំរូបង្ហាញថាមុខផ្លាស់ទី ប្រអប់ថេរនឹងកាត់មុខចេញ។
         # ពេលនោះ យើងយក frame បន្ថែម រួចធ្វើ crop ដែលរំកិលតាមមុខ។

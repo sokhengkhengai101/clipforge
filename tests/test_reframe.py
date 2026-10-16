@@ -789,3 +789,18 @@ def test_caption_sits_on_the_last_seam():
     assert R.caption_margin_for("split") == config.CAPTION_MARGIN_V_SPLIT
     # ៣ ផ្ទាំង: ស្នាមចុងក្រោយនៅ 2/3 នៃកម្ពស់ -> margin តូចជាង split
     assert R.caption_margin_for("three") < R.caption_margin_for("split")
+
+
+def test_single_needs_the_face_in_most_sample_frames(monkeypatch):
+    """មុខលេចតែ frame ដំបូង -> ប្រអប់ថេរនឹងតាមមុខដែលបាត់ទៅហើយ -> center."""
+    monkeypatch.setattr(R, "grab_frame", lambda path, t, size: t)
+    monkeypatch.setattr(R, "detect_faces_in_frame",
+                        lambda frame, size: [face(cx=900, w=200, h=260)] if frame < 12.0 else [])
+    assert R.plan_shot(None, 10.0, 25.0, SIZE).kind == "center"
+
+
+def test_single_is_kept_when_the_face_stays(monkeypatch):
+    monkeypatch.setattr(R, "grab_frame", lambda path, t, size: t)
+    monkeypatch.setattr(R, "detect_faces_in_frame",
+                        lambda frame, size: [face(cx=900, w=200, h=260)])
+    assert R.plan_shot(None, 10.0, 25.0, SIZE).kind == "single"

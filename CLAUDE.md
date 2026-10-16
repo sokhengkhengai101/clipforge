@@ -60,6 +60,13 @@ Known limits to judge clips against:
   the approved selection and every later run rendered two clips.
 - `.ass` and `.mp4` for a clip must share a folder: render runs FFmpeg with `cwd` set to that
   folder so the `ass=` filter never sees a Windows path (`:` and `\` are filtergraph syntax).
+- A face is only used for a `single` crop when it shows up in at least `FACE_PRESENCE_MIN` (half)
+  of the shot's sample frames. On wildlife footage a 14.8 s shot had the presenter in the first
+  sample only, and the static box then framed his chest for the last 10 s. Those shots fall back
+  to a centre crop.
+- Short sources are a poor fit for clip-finding. A 56 s wildlife video gave one 7 s candidate that
+  boundary-snapping stretched to 42 s, crossing a 26.5 s silence to reach `MIN_CLIP_SEC`. Use
+  `--full` for anything near clip length.
 - `SCENE_THRESHOLD = 0.3` misses real cuts. At 33.78-40.46s of the 47-min interview it reports no
   cut, while 0.2 finds three (34.33, 35.91, 39.29) that match what the frames show. A montage then
   lands in one "shot" and gets one crop box. Moving crop hides most of it; lowering the threshold
