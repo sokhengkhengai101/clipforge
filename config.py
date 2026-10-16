@@ -19,6 +19,15 @@ MAX_CLIP_SEC = 90.0        # clip វែងជាងនេះ = មិនយក
 # clip គួរចប់ត្រង់គំនិតចប់។ បើមានចុងប្រយោគពិត (`.?!`) ក្នុងចម្ងាយនេះ
 # យើងយកវា — រួមទាំងពេលពន្លាត clip ខ្លីផង។ បើគ្មាន យើងទទួលចុងដែលមាន។
 SNAP_HARD_END_SEC = 4.0
+# ពាក្យបំពេញ៖ ការឆ្លើយតបដែលគ្មានន័យជាពាក្យដំបូងនៃ clip។ clip ដែលចាប់ផ្តើមដោយ
+# "Yeah, so yeah, please go back to the 70s" ខាតវិនាទីដំបូង — ដែលជាវិនាទីសំខាន់បំផុត។
+FILLER_WORDS = ("yeah", "yes", "yep", "yup", "ok", "okay", "right", "sure",
+                "mm-hmm", "mhm", "uh-huh", "uh", "um", "er", "exactly", "totally")
+# ឃ្លាបំពេញ (ពាក្យច្រើន) — "you know same thing" ចាប់ផ្តើមមិនល្អដូច "Yeah" ដែរ
+FILLER_PHRASES = (("you", "know"), ("i", "mean"), ("i", "guess"), ("kind", "of"))
+FILLER_MAX_STRIP = 5       # ពិនិត្យត្រឹមប៉ុណ្ណេះពាក្យនាំមុខ
+FILLER_MIN_KEEP = 4        # ប្រយោគត្រូវនៅសល់យ៉ាងតិចប៉ុណ្ណេះពាក្យ ទើបដក
+
 PADDING_SEC = 0.3          # បន្ថែមខាងដើម/ចុង ឲ្យកុំកាត់ពាក្យ
 
 # ---------- ការផ្សាយពាណិជ្ជកម្ម (sponsor read) ----------

@@ -476,3 +476,80 @@ def test_extend_to_min_will_not_grow_into_an_ad():
     spans = B.find_ad_spans(sentences, transcript.duration)
     start, end = B._extend_to_min(0.0, 3.5, sentences, min_sec=30.0, ad_spans=spans)
     assert end <= spans[0].start + 0.01
+
+
+# ---------- ពាក្យបំពេញនៅដើម clip ----------
+
+def test_is_filler_word():
+    assert B.is_filler_word("Yeah,")
+    assert B.is_filler_word("RIGHT.")
+    assert not B.is_filler_word("please")
+    assert not B.is_filler_word("")
+
+
+def test_is_filler_sentence():
+    sentences = B.build_sentences(transcript_from_words(
+        words_from([("Yeah.", 0.0, 0.5), ("Right.", 0.6, 1.0)]), duration=5.0))
+    assert all(B.is_filler_sentence(s) for s in sentences)
+    real = B.build_sentences(transcript_from_words(
+        words_from([("Yeah,", 0.0, 0.5), ("that", 0.5, 1.0), ("works.", 1.0, 1.5)]),
+        duration=5.0))
+    assert not B.is_filler_sentence(real[0])
+
+
+def test_nearest_start_skips_a_filler_only_sentence():
+    """ប្រយោគ "Yeah." ជិតបំផុត តែវាជាការឆ្លើយតបទទេ -> យកប្រយោគពិតវិញ."""
+    words = (words_from([("Yeah.", 10.0, 10.3)])
+             + words_from([("The", 11.0, 11.3), ("real", 11.3, 11.6),
+                           ("story", 11.6, 12.0), ("starts.", 12.0, 12.4)]))
+    sentences = B.build_sentences(transcript_from_words(words, duration=20.0))
+    assert B._nearest_start(sentences, 10.1, tolerance=4.0) == 11.0
+
+
+def test_trim_leading_filler_passes_a_connector():
+    """"Yeah, so yeah, please..." -> ចាប់ត្រង់ "please" (រំលង "so" នៅចន្លោះ)."""
+    spec = [("Yeah,", 0.0, 0.3), ("so", 0.4, 0.5), ("yeah,", 0.5, 0.9),
+            ("please", 1.0, 1.4), ("go", 1.4, 1.6), ("back", 1.6, 1.9),
+            ("now.", 1.9, 2.3)]
+    sentences = B.build_sentences(transcript_from_words(words_from(spec), duration=10.0))
+    assert B._trim_leading_filler(0.0, sentences, padding=0.3) == pytest.approx(0.9, abs=0.01)
+
+
+def test_trim_leading_filler_handles_a_phrase():
+    """"you know" ជាឃ្លាបំពេញ ទោះពាក្យនីមួយៗមិនមែន."""
+    spec = [("Yeah,", 0.0, 0.3), ("you", 0.3, 0.5), ("know", 0.5, 0.8),
+            ("same", 0.9, 1.2), ("thing", 1.2, 1.5), ("happened", 1.5, 2.0),
+            ("here.", 2.0, 2.4)]
+    sentences = B.build_sentences(transcript_from_words(words_from(spec), duration=10.0))
+    assert B._trim_leading_filler(0.0, sentences, padding=0.3) == pytest.approx(0.8, abs=0.01)
+
+
+def test_trim_leading_filler_keeps_short_sentences_whole():
+    """បើកាត់រួចនៅសល់តិចពេក -> កុំកាត់ (clip នឹងចាប់ផ្តើមកណ្តាលឃ្លា)."""
+    spec = [("Yeah,", 0.0, 0.3), ("exactly", 0.3, 0.8), ("that.", 0.8, 1.2)]
+    sentences = B.build_sentences(transcript_from_words(words_from(spec), duration=10.0))
+    assert B._trim_leading_filler(0.0, sentences, padding=0.3) == 0.0
+
+
+def test_padding_does_not_pull_in_the_previous_word():
+    """padding 0.3s មិនត្រូវចូលកណ្តាលពាក្យមុន — អ្នកមើលឮកន្ទុយពាក្យនោះ."""
+    spec = [("Yeah,", 0.0, 0.5), ("the", 0.6, 0.8), ("real", 0.8, 1.1),
+            ("point", 1.1, 1.5), ("here.", 1.5, 2.0)]
+    sentences = B.build_sentences(transcript_from_words(words_from(spec), duration=10.0))
+    start, end = B._pad(0.6, 1.5, sentences, video_duration=10.0, padding=0.3)
+    assert start >= 0.5          # ចុងពាក្យ "Yeah," មិនមែន 0.3
+
+
+def test_snap_clip_opens_on_a_real_word():
+    """ដំណើរពេញ: clip ដែលព្រំដែនធ្លាក់លើ "Yeah," ត្រូវចាប់ផ្តើមលើពាក្យពិត."""
+    spec = [("Yeah,", 10.0, 10.4), ("I", 10.5, 10.6), ("built", 10.6, 11.0),
+            ("the", 11.0, 11.2), ("whole", 11.2, 11.6), ("thing", 11.6, 12.0),
+            ("myself.", 12.0, 12.6)]
+    spec += [(f"w{i}.", 13.0 + i, 13.5 + i) for i in range(20)]
+    transcript = transcript_from_words(words_from(spec), duration=60.0)
+    sentences = B.build_sentences(transcript)
+    clip = Clip(start=10.0, end=26.0, title="t", hook="h", type="story", score=8.0, reason="r")
+    snapped = B.snap_clip(clip, sentences, 60.0)
+    assert snapped is not None
+    first = B.clip_text(snapped, transcript).split()[0]
+    assert not B.is_filler_word(first), first

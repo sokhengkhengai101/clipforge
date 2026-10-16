@@ -33,6 +33,12 @@ Pipeline (one module per step, in `pipeline/`):
    Measured on the 70-min podcast: 2 spans, 304 s (7.5%), clips touching an ad 2 -> 0, one pure-ad
    clip dropped and one trimmed from 23 s to 28 s of real story. The 47-min interview has 0 spans
    and is unchanged.
+   The start gets the same treatment: a clip must not open on "Yeah," — the first second decides
+   whether anyone keeps watching. Snapping skips sentences that are pure acknowledgement and then
+   drops leading filler words, including phrases ("you know"), passing over a connector between two
+   of them ("Yeah, so yeah, please go back..." opens on "please"). Padding is clamped to word
+   boundaries, not sentence boundaries, or the 0.3 s lands inside the filler word and the viewer
+   hears its tail. Measured: podcast clips opening on filler 3/15 -> 0/15, interview 0/14 either way.
 5. `captions.py` — build `.ass` subtitle file per clip (≤ 2 lines, ≤ 32 chars/line, keyword highlight in #FFD23F)
 6. `render.py` — FFmpeg: trim → center-crop 9:16 → scale 1080×1920 → burn ASS → H.264 MP4
 

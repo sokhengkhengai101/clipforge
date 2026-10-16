@@ -195,14 +195,77 @@ def _avoid_ads(start: float, end: float, sentences: list[Sentence],
     return start, end
 
 
-def _nearest_start(sentences: list[Sentence], time: float) -> float:
+def _clean_token(text: str) -> str:
+    return text.strip().lower().strip(".,!?…\"'")
+
+
+def is_filler_word(text: str) -> bool:
+    """ពាក្យនេះជាការឆ្លើយតបទទេឬទេ ("yeah", "right", "um")?"""
+    return _clean_token(text) in config.FILLER_WORDS
+
+
+def is_filler_sentence(sentence: Sentence) -> bool:
+    """ប្រយោគទាំងមូលជាការឆ្លើយតប ("Yeah. Yeah. Right.") — មិនសមជាដើម clip."""
+    tokens = [t for t in sentence.text.split() if _clean_token(t)]
+    return bool(tokens) and all(is_filler_word(t) for t in tokens)
+
+
+def _trim_leading_filler(start: float, sentences: list[Sentence],
+                         padding: float) -> float:
+    """រុញ start ឲ្យផុតពាក្យបំពេញនាំមុខក្នុងប្រយោគដំបូង.
+
+    "Yeah, so yeah, please go back to the 70s" -> ចាប់ត្រង់ "please"។ យើងដក
+    បានត្រឹម `FILLER_MAX_STRIP` ពាក្យ ហើយតែពេលប្រយោគនៅសល់វែងល្មម ដើម្បីកុំឲ្យ
+    clip ចាប់ផ្តើមកណ្តាលឃ្លាខ្លី។
+    """
+    # ប្រយោគដែល **ផ្ទុក** `start` (បើគ្មាន យកប្រយោគបន្ទាប់) — ការយក
+    # "ប្រយោគដំបូងដែលចប់ក្រោយ start" ជ្រើសប្រយោគមុនខុស ហើយការកាត់មិនកើត។
+    sentence = next((s for s in sentences if s.words and s.start <= start < s.end), None)
+    if sentence is None:
+        sentence = next((s for s in sentences if s.words and s.start >= start), None)
+    if sentence is None:
+        return start
+
+    words = [w for w in sentence.words if w.start >= start - 0.05]
+    tokens = [_clean_token(w.word) for w in words]
+
+    # រំលងដល់ **ពាក្យបំពេញចុងក្រោយ** ក្នុងពាក្យដំបូងៗ។ ពាក្យតភ្ជាប់នៅចន្លោះ
+    # ("so" ក្នុង "Yeah, so yeah, please...") ត្រូវរំលងដែរ — តែបើក្រោយវាគ្មាន
+    # ពាក្យបំពេញទៀតទេ យើងមិនកាត់វាចោលឡើយ។
+    strip = index = 0
+    while index < min(config.FILLER_MAX_STRIP, len(tokens)):
+        phrase = next((p for p in config.FILLER_PHRASES
+                       if tuple(tokens[index:index + len(p)]) == p), None)
+        if phrase is not None:
+            index += len(phrase)
+            strip = index
+        elif is_filler_word(tokens[index]):
+            index += 1
+            strip = index
+        else:
+            index += 1          # ពាក្យតភ្ជាប់ -> មើលបន្តទៀត
+    if strip == 0 or len(words) - strip < config.FILLER_MIN_KEEP:
+        return start
+
+    first = words[strip]
+    # ទុកដកដង្ហើមបន្តិច តែកុំលេបពាក្យបំពេញដែលទើបដកចេញវិញ
+    return max(words[strip - 1].end, first.start - padding)
+
+
+def _nearest_start(sentences: list[Sentence], time: float,
+                   tolerance: float | None = None) -> float:
     """ដើមប្រយោគជិតបំផុតនឹង `time` (ដើម្បីកុំចាប់ផ្តើមពាក់កណ្តាលប្រយោគ).
 
-    បើ `time` ធ្លាក់ក្នុងប្រយោគមួយ យើងជ្រើសរវាងដើមប្រយោគនោះ និងដើមប្រយោគបន្ទាប់
-    — មួយណាជិតជាង។ បែបនេះយើងមិនអូសប្រយោគវែងមួយទាំងមូលចូលដោយអត់ការ។
+    ប្រយោគដែលជាការឆ្លើយតបសុទ្ធ ("Yeah.") ត្រូវរំលង បើមានដើមប្រយោគពិតក្នុងចម្ងាយ
+    `tolerance` — វិនាទីដំបូងនៃ clip ជាវិនាទីដែលសម្រេចថាគេមើលបន្តឬរំកិលចោល។
     """
-    candidates = [s.start for s in sentences]
-    return min(candidates, key=lambda t: abs(t - time))
+    tolerance = config.SNAP_HARD_END_SEC if tolerance is None else tolerance
+
+    real = [s.start for s in sentences
+            if not is_filler_sentence(s) and abs(s.start - time) <= tolerance]
+    if real:
+        return min(real, key=lambda t: abs(t - time))
+    return min((s.start for s in sentences), key=lambda t: abs(t - time))
 
 
 def _nearest_end(sentences: list[Sentence], time: float,
@@ -258,7 +321,8 @@ def _extend_to_min(start: float, end: float, sentences: list[Sentence],
             continue
         if in_ad(sentence.start):
             break
-        start = sentence.start
+        # កុំទាញពាក្យបំពេញចូលវិញពេលថយក្រោយ ("Yeah, I built...")
+        start = _trim_leading_filler(sentence.start, sentences, 0.0)
 
     return start, end
 
@@ -288,9 +352,14 @@ def _pad(start: float, end: float, sentences: list[Sentence], video_duration: fl
 
     គោលបំណង padding គឺចាប់ដង្ហើមមុននិយាយ — មិនមែនចាប់ពាក្យមុនទេ។
     """
-    # ចុងប្រយោគមុន (ជិតបំផុតនៅខាងឆ្វេង) = ដែនកំណត់របស់ padding ខាងដើម
-    ends_before = [s.end for s in sentences if s.end <= start]
-    starts_after = [s.start for s in sentences if s.start >= end]
+    # ដែនកំណត់ត្រូវជាព្រំដែន **ពាក្យ** មិនមែនប្រយោគ៖ padding 0.3s អាចចូលកណ្តាល
+    # ពាក្យមុន ហើយអ្នកមើលឮកន្ទុយពាក្យនោះ (យើងឃើញ "Yeah," ត្រឡប់ចូលវិញបែបនេះ)។
+    words = [w for s in sentences for w in s.words]
+    ends_before = [w.end for w in words if w.end <= start]
+    starts_after = [w.start for w in words if w.start >= end]
+    if not words:      # transcript ចាស់គ្មាន word timestamps -> ប្រើប្រយោគវិញ
+        ends_before = [s.end for s in sentences if s.end <= start]
+        starts_after = [s.start for s in sentences if s.start >= end]
 
     lower_limit = max(ends_before) if ends_before else 0.0
     upper_limit = min(starts_after) if starts_after else video_duration
@@ -345,6 +414,10 @@ def snap_clip(
             return None
         start, end = avoided
 
+    # កាត់ពាក្យបំពេញ **មុន** ការពន្លាត ដើម្បីឲ្យការពន្លាតសងប្រវែងដែលបាត់វិញ
+    # (បើកាត់ក្រោយ clip អាចធ្លាក់ក្រោម min រួចយើងត្រូវបោះការកាត់ចោល)។
+    start = _trim_leading_filler(start, sentences, padding)
+
     start, end = _extend_to_min(start, end, sentences, min_sec, ad_spans)
     start, end = _trim_to_max(start, end, sentences, max_sec, min_sec)
     start, end = _pad(start, end, sentences, video_duration, padding)
@@ -358,6 +431,11 @@ def snap_clip(
         if avoided != (start, end) and on_warning:
             on_warning(f"'{clip.title}' ត្រូវកាត់ឲ្យផុតការផ្សាយពាណិជ្ជកម្ម")
         start, end = avoided
+
+    # ពាក្យបំពេញនាំមុខត្រូវដកចេញ **ក្រោយ** padding បើមិនដូច្នោះ padding ទាញវាចូលវិញ
+    trimmed_start = _trim_leading_filler(start, sentences, padding)
+    if end - trimmed_start >= min_sec:
+        start = trimmed_start
 
     duration = end - start
     if duration < min_sec:
