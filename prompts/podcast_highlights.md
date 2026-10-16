@@ -1,4 +1,4 @@
-# Podcast highlights prompt — v3
+# Podcast highlights prompt — v4
 
 Prompt នេះមាន version ដើម្បីដឹងថា clip ល្អ/អាក្រក់មកពី prompt ណា។
 កែវា -> ដំឡើងលេខ version ហើយកត់ចំណាំនៅខាងក្រោម។
@@ -28,6 +28,20 @@ The first sentence of the clip IS the hook. If the first sentence is setup, thro
 reference to something said earlier, the clip starts in the wrong place — move the start forward to
 where the real statement begins.
 
+### The ending test
+
+Before you accept a clip, read its LAST sentence on its own. It has to land: a punchline, a
+conclusion, a decision, a turn in the story. If the conversation could carry on for another minute
+without the viewer feeling anything was finished, the clip has no ending — drop it or move `end`
+back to the last line that does land.
+
+Finding the payoff does not mean cutting to it. If the line that lands sits less than
+{{MIN_SEC}} seconds after your `start`, keep the setup that leads to it — a payoff with no build-up
+means nothing to someone who just arrived.
+
+For `funny`, the test is stricter: name the line that gets the laugh. Two people enjoying each
+other's company is not a joke. Banter with no punchline plays as noise on a phone speaker.
+
 ### Reject these, even if they sound interesting
 
 - Sponsor reads, product plugs, channel talk, anything about the show itself.
@@ -36,6 +50,10 @@ where the real statement begins.
 - Anything that depends on what is on screen ("as you can see", "let me draw this", "over here").
 - Anything that needs context from outside the clip to make sense ("like I said before", "that").
 - Pleasantries, scheduling, intros and goodbyes.
+- Back-and-forth where neither speaker holds a thought: if most lines are short reactions
+  ("Yeah.", "Right.", "For sure.", "Mm-hmm.") the part is chatter, not a clip.
+- Everyday logistics with no opinion or joke in them: which shop sells it, what it costs, what
+  brand they buy, how they got there.
 
 ### Hard rules
 
@@ -55,7 +73,9 @@ where the real statement begins.
 - `score`: 1-10, how likely a stranger watches it to the end. Be strict and use the whole range:
   9-10 only for something you would bet on going viral, 7-8 for a solid clip, 5-6 for "fine but
   forgettable", below 5 for anything you would not post.
-- `reason`: one sentence on what makes a viewer stay.
+- `reason`: quote the payoff sentence from the transcript in full, word for word, inside double
+  quotes, then say in a few words why it lands. A fragment of two or three words is not a sentence.
+  If you cannot find that sentence, the clip is not ready — leave it out.
 
 Return ONLY valid JSON in exactly this shape:
 
@@ -69,7 +89,7 @@ Return ONLY valid JSON in exactly this shape:
       "hook": "Everyone builds agents backwards.",
       "type": "contrarian",
       "score": 8,
-      "reason": "Flat contradiction of common practice, then a concrete example that proves it."
+      "reason": "Pays off on 'they built the whole thing twice' — the cost lands as a number."
     }
   ]
 }
@@ -92,3 +112,12 @@ Return ONLY valid JSON in exactly this shape:
     -> ប្រាប់ឲ្យបដិសេធបញ្ជីដែលគ្មានការអះអាងព័ទ្ធ
   * score ទាំងអស់ចេញមក 8-9 (គ្មានការបែងចែក) -> កំណត់និយមន័យរបស់ពិន្ទុនីមួយៗ
   * គោលដៅប្រវែងប្តូរទៅ 20-40s (ខ្លីជាងសម្រាប់ scroll)
+- v4 (2026-10-16): ផ្អែកលើ clip "Popcorn Snacks" (៣៨ វិនាទី, score 9) ពី podcast ៧០ នាទី
+  ដែលជាការសន្ទនាវិលវល់អំពីកន្លែងទិញ popcorn ហើយចប់ដោយ "it isn't it isn't right?"៖
+  * បន្ថែម "ការសាកល្បងចុងបញ្ចប់" — អានប្រយោគចុងក្រោយដាច់ដោយឡែក វាត្រូវតែ "ចុះចត"
+  * `funny` ត្រូវមាន punchline ដែលហៅឈ្មោះបាន មិនមែនត្រឹមការនិយាយលេងរីករាយ
+  * បដិសេធការឆ្លើយតបខ្លីៗជាប់គ្នា ("Yeah. Yeah. Yeah.") និងរឿងប្រចាំថ្ងៃគ្មានមតិ
+  * `reason` ត្រូវ **ដកស្រង់ប្រយោគ** ដែលធ្វើឲ្យ clip ចប់ — បើរកមិនឃើញ កុំយក clip នោះ
+  * ក្រោយសាក v4 លើ chunk ពិត៖ model កាត់ clip ខ្លីទៅ ១៤ វិនាទី (ក្រោមអប្បបរមា) ដើម្បី
+    ទៅដល់ចំណុចបញ្ចប់លឿន ហើយដកស្រង់តែពាក្យ ("classy") -> បន្ថែមច្បាប់ថា punchline
+    ត្រូវមានការសាងសង់មុន និងតម្រូវឲ្យដកស្រង់**ប្រយោគពេញ**
