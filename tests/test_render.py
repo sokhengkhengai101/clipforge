@@ -467,16 +467,17 @@ def test_sharpen_can_be_turned_off(monkeypatch):
     assert "unsharp" not in R.build_layout_filter(layout, "c.ass")
 
 
-def test_three_panels_stack_vertically():
+def test_three_panels_are_one_big_and_two_small():
     layout = Layout(kind="three", panels=[Box(x=i * 100, y=0, w=300, h=200) for i in range(3)])
     f = R.build_layout_filter(layout)
     assert "[0:v]split=3" in f
-    assert "vstack=inputs=3" in f
-    assert f.count("scale=1080:640") == 3
+    assert "scale=1080:1280" in f            # ផ្ទាំងធំខាងលើ
+    assert f.count("scale=540:640") == 2     # ពីរតូចខាងក្រោម
+    assert "xstack=inputs=3:layout=0_0|0_1280|540_1280" in f
 
 
 def test_four_panels_use_a_grid():
     layout = Layout(kind="four", panels=[Box(x=i * 100, y=0, w=300, h=200) for i in range(4)])
     f = R.build_layout_filter(layout)
-    assert "xstack=inputs=4:layout=0_0|w0_0|0_h0|w0_h0" in f
+    assert "xstack=inputs=4:layout=0_0|540_0|0_960|540_960" in f
     assert f.count("scale=540:960") == 4

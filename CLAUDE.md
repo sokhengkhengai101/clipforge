@@ -131,13 +131,22 @@ clipforge/
   `center`. `three` and `four` are **not** in `auto` -- they change the picture a lot, so they are
   opt-in (`--layout fill,split,three`). The planner tries the widest grid first (four, then three,
   then split) and takes the biggest N faces sorted left to right, provided neighbours are at least
-  `MIN_FACE_SEPARATION` apart and no panel exceeds `PANEL_MAX_UPSCALE`. Panels are 1080x960 for
-  split, 1080x640 for three, and a 2x2 grid of 540x960 for four -- four stacked rows would be
-  1080x480, too shallow for a face, the same reason 16:9 stacks side by side. Measured on the
-  70-min podcast, which is a three-person show (3 faces in 35 of 60 sampled frames): the shot at
-  478 s renders at 2.44x upscale as three panels against 3.42x as a split, because the wider panel
-  needs a wider crop. Captions move to the seam between the last two panels for any multi-panel
-  layout (`caption_margin_for`), which is the only band that covers nobody's face. So
+  `MIN_FACE_SEPARATION` apart and no panel exceeds `PANEL_MAX_UPSCALE`. `panel_rects()` owns the
+  geometry: split is two halves, `three` is **one big panel over two small ones** (1080x1280 plus
+  two 540x640, matching OpusClip's reference), and four is a 2x2 grid of 540x960 -- four stacked
+  rows would be 1080x480, too shallow for a face, the same reason 16:9 stacks side by side. The
+  biggest face takes the big panel. Render stacks them with `vstack`/`hstack` when the panels form
+  one column or row and `xstack` with pixel positions when they do not.
+  When a crop is too small for its panel, `panel_box` **widens the crop** instead of upscaling
+  past `PANEL_MAX_UPSCALE`: the big panel of `three` needs 360x427 to stay within 3x, while a 96 px
+  face at `PANEL_ZOOM` 3 gives only 243x288 (4.44x). Growth stops at `PANEL_ZOOM_MAX` (6x face
+  height), past which the panel would be a room with a tiny face in it, and the layout is rejected
+  instead. Even sizes round down, so the growth adds 1% or the rounding lands just over the limit
+  (3.0047x) and the layout is rejected for nothing.
+  Measured on the 70-min podcast, which is a three-person show (3 faces in 35 of 60 sampled
+  frames): the shot at 478 s renders three panels at 2.98x, and clip 4 is three panels end to end.
+  Captions move to the seam between the last two panels for any multi-panel layout
+  (`caption_margin_for`), which is the only band that covers nobody's face. So
   `--layout fill,split` allows both and `--layout fill` forbids split entirely. `center` is always
   the last resort, because a shot with no face still has to render. `--layout split` on its own
   keeps the old forced behaviour: a one-face shot is still split, using the global seats.

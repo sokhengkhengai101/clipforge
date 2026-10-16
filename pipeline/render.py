@@ -18,7 +18,7 @@ from typing import Callable
 import config
 from pipeline.audio import FFmpegError, probe_duration, require_ffmpeg
 from pipeline.highlights import Clip
-from pipeline.reframe import Box, Layout, Segment, panel_geometry
+from pipeline.reframe import Box, Layout, Segment, panel_rects
 
 
 class RenderError(RuntimeError):
@@ -108,27 +108,26 @@ def layout_chain(layout: Layout, index: int, source_label: str, out_label: str,
         # output បញ្ឈរ/ការ៉េ -> ជាន់គ្នាបញ្ឈរ (vstack); output ផ្ដេក -> ឆ្វេង/ស្តាំ (hstack);
         # ៤ ផ្ទាំង -> ក្រឡា 2×2 (`xstack`)។ ផ្ទាំង 1920×540 នៅលើ 16:9 រាក់ពេក
         # ដូច្នេះទិសត្រូវប្តូរតាម output។
-        cols, rows, panel_w, panel_h = panel_geometry(layout.kind)
-        count = len(layout.panels)
+        rects = panel_rects(layout.kind)
+        count = min(len(layout.panels), len(rects))
 
         parts = [f"[{source_label}]split={count}" +
                  "".join(f"[p{index}_{i}]" for i in range(count))]
-        for i, box in enumerate(layout.panels):
+        for i, (box, (_, _, panel_w, panel_h)) in enumerate(zip(layout.panels, rects)):
             parts.append(f"[p{index}_{i}]{box.as_filter()},"
                          f"scale={panel_w}:{panel_h}:flags=lanczos[q{index}_{i}]")
 
         joined = "".join(f"[q{index}_{i}]" for i in range(count))
-        if cols == 1:
-            stack = f"vstack=inputs={count}"
-        elif rows == 1:
-            stack = f"hstack=inputs={count}"
+        columns = {x for x, _, _, _ in rects[:count]}
+        rows = {y for _, y, _, _ in rects[:count]}
+        if len(columns) == 1:
+            stack = f"vstack=inputs={count}"          # ជួរឈរតែមួយ
+        elif len(rows) == 1:
+            stack = f"hstack=inputs={count}"          # ជួរដេកតែមួយ
         else:
-            # xstack ត្រូវការទីតាំងនីមួយៗ: 0_0|w0_0|0_h0|w0_h0
-            spots = []
-            for i in range(count):
-                column, row = i % cols, i // cols
-                spots.append(f"{'0' if column == 0 else 'w0'}_{'0' if row == 0 else 'h0'}")
-            stack = f"xstack=inputs={count}:layout={'|'.join(spots)}"
+            # ទំហំផ្ទាំងមិនស្មើគ្នា (ឧ. three = ធំ ១ + តូច ២) -> ដាក់តាម pixel
+            spots = "|".join(f"{x}_{y}" for x, y, _, _ in rects[:count])
+            stack = f"xstack=inputs={count}:layout={spots}"
         parts.append(f"{joined}{stack},setsar=1{suffix}[{out_label}]")
         return ";".join(parts)
 

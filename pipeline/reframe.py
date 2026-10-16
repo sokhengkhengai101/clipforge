@@ -343,21 +343,45 @@ def _clamp_box(x: float, y: float, w: float, h: float,
 PANEL_GRIDS = {"split": 2, "three": 3, "four": 4}
 
 
-def panel_geometry(kind: str) -> tuple[int, int, int, int]:
-    """(ជួរឈរ, ជួរដេក, ទទឹងផ្ទាំង, កម្ពស់ផ្ទាំង) សម្រាប់ layout ច្រើនផ្ទាំង.
+def _even(value: float) -> int:
+    return max(2, int(value) // 2 * 2)
 
-    ៤ ផ្ទាំងជាក្រឡា 2×2 ជានិច្ច ព្រោះ ៤ ជួរដេកលើ 1080×1920 ផ្តល់ផ្ទាំង 1080×480
-    ដែលរាក់ពេកសម្រាប់ដាក់មុខ (បញ្ហាដូច 16:9 ក្នុងចំណាំ `--aspect`)។
+
+def panel_rects(kind: str) -> list[tuple[int, int, int, int]]:
+    """(x, y, w, h) នៃផ្ទាំងនីមួយៗក្នុងរូបលទ្ធផល.
+
+    - `split`: ពីរស្មើគ្នា (បញ្ឈរលើ output បញ្ឈរ, ផ្ដេកលើ 16:9)
+    - `three`: **ផ្ទាំងធំ ១ + តូច ២** ដូច OpusClip — អ្នកនិយាយមេបានទំហំ ២/៣
+      ហើយពីរនាក់ទៀតចែកជួរក្រោម។ ៣ ជួរស្មើគ្នាធ្វើឲ្យគ្មាននរណាលេចធ្លោ។
+    - `four`: ក្រឡា 2×2 (៤ ជួរដេកនឹងឲ្យផ្ទាំង 1080×480 ដែលរាក់ពេក)
     """
     out_w, out_h = config.OUT_WIDTH, config.OUT_HEIGHT
-    count = PANEL_GRIDS.get(kind, 1)
-    if count == 4:
-        cols, rows = 2, 2
-    elif config.SPLIT_DIRECTION == "horizontal":
-        cols, rows = count, 1
-    else:
-        cols, rows = 1, count
-    return cols, rows, out_w // cols, out_h // rows
+    horizontal = config.SPLIT_DIRECTION == "horizontal"
+
+    if kind == "split":
+        if horizontal:
+            half = _even(out_w / 2)
+            return [(0, 0, half, out_h), (half, 0, out_w - half, out_h)]
+        half = _even(out_h / 2)
+        return [(0, 0, out_w, half), (0, half, out_w, out_h - half)]
+
+    if kind == "three":
+        if horizontal:
+            big = _even(out_w * 2 / 3)
+            side, half = out_w - big, _even(out_h / 2)
+            return [(0, 0, big, out_h), (big, 0, side, half),
+                    (big, half, side, out_h - half)]
+        big = _even(out_h * 2 / 3)
+        bottom, half = out_h - big, _even(out_w / 2)
+        return [(0, 0, out_w, big), (0, big, half, bottom),
+                (half, big, out_w - half, bottom)]
+
+    if kind == "four":
+        half_w, half_h = _even(out_w / 2), _even(out_h / 2)
+        return [(0, 0, half_w, half_h), (half_w, 0, out_w - half_w, half_h),
+                (0, half_h, half_w, out_h - half_h),
+                (half_w, half_h, out_w - half_w, out_h - half_h)]
+    return []
 
 
 def caption_margin_for(kind: str) -> int | None:
@@ -366,30 +390,30 @@ def caption_margin_for(kind: str) -> int | None:
     `None` = ប្រើទីតាំងធម្មតា (lower third)។ ស្នាមជាកន្លែងតែមួយដែលអក្សរមិនបាំង
     មុខអ្នកណាម្នាក់ — OpusClip ធ្វើដូចគ្នាលើ split។
     """
-    if kind not in PANEL_GRIDS or config.SPLIT_DIRECTION != "vertical":
+    rects = panel_rects(kind) if config.SPLIT_DIRECTION == "vertical" else []
+    seams = {y for _, y, _, _ in rects if y > 0}
+    if not seams:
         return None
-    _, rows, _, _ = panel_geometry(kind)
-    if rows < 2:
-        return None
-    seam = config.OUT_HEIGHT * (rows - 1) / rows
+    seam = max(seams)                  # ស្នាមផ្ដេកចុងក្រោយ
     block = config.CAPTION_MAX_LINES * config.CAPTION_FONT_SIZE * 1.1
     return max(0, int(config.OUT_HEIGHT - seam - block / 2))
 
 
 def panel_box(face: Face, frame_w: int, frame_h: int,
               aspect: float | None = None, zoom: float | None = None,
-              kind: str | None = None) -> Box:
+              kind: str | None = None, index: int = 0) -> Box:
     """ប្រអប់សម្រាប់ផ្ទាំងមួយក្នុង split (សមាមាត្រ 9:8 = 1.125).
 
     កម្ពស់ = កម្ពស់មុខ × `zoom` ដូច្នេះមុខមិនពេញអេក្រង់ពេក ហើយនៅមានបរិបទ។
     មុខត្រូវដាក់នៅ ~40% ពីលើ ដែលជាទម្រង់ធម្មតានៃ portrait។
     """
     if aspect is None:
-        if kind is None:
-            aspect = config.PANEL_ASPECT
-        else:
-            _, _, panel_w, panel_h = panel_geometry(kind)
+        rects = panel_rects(kind) if kind else []
+        if rects:
+            _, _, panel_w, panel_h = rects[min(index, len(rects) - 1)]
             aspect = panel_w / panel_h
+        else:
+            aspect = config.PANEL_ASPECT
     zoom = config.PANEL_ZOOM if zoom is None else zoom
 
     height = min(frame_h, face.h * zoom)
@@ -402,18 +426,43 @@ def panel_box(face: Face, frame_w: int, frame_h: int,
     width = max(min(width, 2 * room), smallest)
     height = width / aspect
 
+    # ប្រអប់តូចពេកសម្រាប់ផ្ទាំង -> **ពង្រីកប្រអប់** (យកបរិបទបន្ថែម) ជំនួសការផ្លុំរូប។
+    # ផ្ទាំងធំនៃ `three` (1080×1280) ត្រូវការ crop 360×427 ទើបនៅក្នុងដែន 3x;
+    # មុខ 96px × zoom 3 ផ្តល់តែ 243×288 ដែលត្រូវផ្លុំ 4.44x។
+    if kind is not None:
+        rects = panel_rects(kind)
+        if rects:
+            _, _, panel_w, panel_h = rects[min(index, len(rects) - 1)]
+            grow = max(panel_w / config.PANEL_MAX_UPSCALE / max(1.0, width),
+                       panel_h / config.PANEL_MAX_UPSCALE / max(1.0, height))
+            if grow > 1.0:
+                # ១% បន្ថែម ព្រោះទំហំត្រូវបង្គត់**ចុះ**ទៅលេខគូ (426 ពី 426.67)
+                # ហើយការបង្គត់នោះធ្វើឲ្យការពង្រីកលើសដែនបន្តិច (3.0047x)។
+                width, height = width * grow * 1.01, height * grow * 1.01
+                # តែកុំពង្រីកហួស — ផ្ទាំងដែលមុខតូចល្អិតគ្មានតម្លៃទេ
+                ceiling = face.h * config.PANEL_ZOOM_MAX
+                if height > ceiling:
+                    height = ceiling
+                    width = height * aspect
+
     if width > frame_w:                       # រូបតូចពេក -> កំណត់ដោយទទឹង
         width = frame_w
         height = width / aspect
+    if height > frame_h:                      # ...ឬដោយកម្ពស់
+        height = frame_h
+        width = height * aspect
 
     x = face.cx - width / 2
     y = face.cy - height * 0.40
     return _clamp_box(x, y, width, height, frame_w, frame_h)
 
 
-def panel_upscale(box: Box, kind: str = "split") -> float:
-    """ត្រូវពង្រីកប្រអប់នេះប៉ុន្មានដងទើបពេញផ្ទាំងរបស់ layout នោះ?"""
-    _, _, panel_w, panel_h = panel_geometry(kind)
+def panel_upscale(box: Box, kind: str = "split", index: int = 0) -> float:
+    """ត្រូវពង្រីកប្រអប់នេះប៉ុន្មានដងទើបពេញផ្ទាំងទី `index` នៃ layout នោះ?"""
+    rects = panel_rects(kind)
+    if not rects:
+        return 1.0
+    _, _, panel_w, panel_h = rects[min(index, len(rects) - 1)]
     return max(panel_w / max(1, box.w), panel_h / max(1, box.h))
 
 
@@ -421,7 +470,8 @@ def panels_sharp_enough(*boxes: Box, kind: str = "split",
                         limit: float | None = None) -> bool:
     """ផ្ទាំងទាំងអស់នៅក្នុងដែនពង្រីកដែលទទួលយកបានឬទេ?"""
     limit = config.PANEL_MAX_UPSCALE if limit is None else limit
-    return all(panel_upscale(box, kind) <= limit for box in boxes)
+    return all(panel_upscale(box, kind, index) <= limit
+               for index, box in enumerate(boxes))
 
 
 def pick_panel_faces(faces: list[Face], count: int, frame_w: int) -> list[Face] | None:
@@ -798,7 +848,13 @@ def plan_shot(video_path: Path, start: float, end: float, size: tuple[int, int],
             continue
         if kind == "split" and chosen[1].cx - chosen[0].cx < frame_w * config.MIN_FACE_SEPARATION:
             continue
-        boxes = [panel_box(f, frame_w, frame_h, kind=kind) for f in chosen]
+        if kind == "three":
+            # ផ្ទាំងធំខាងលើទទួល **អ្នកនិយាយមេ** (មុខធំជាងគេ) រួចពីរនាក់ទៀត
+            # តម្រៀបឆ្វេង-ស្តាំនៅជួរក្រោម
+            lead = max(chosen, key=lambda f: f.w)
+            chosen = [lead] + [f for f in chosen if f is not lead]
+        boxes = [panel_box(f, frame_w, frame_h, kind=kind, index=i)
+                 for i, f in enumerate(chosen)]
         if not panels_sharp_enough(*boxes, kind=kind):
             continue          # ព្រិលពេក -> សាកផ្ទាំងតិចជាង រួចទើប single
         # box បម្រុង: បើ layout នេះខ្លីពេក `smooth_segments` ប្តូរទៅ single
@@ -815,7 +871,8 @@ def plan_shot(video_path: Path, start: float, end: float, size: tuple[int, int],
             chosen = [seats.left, seats.right]
         if chosen:
             return Layout(kind=kind,
-                          panels=[panel_box(f, frame_w, frame_h, kind=kind) for f in chosen],
+                          panels=[panel_box(f, frame_w, frame_h, kind=kind, index=i)
+                                  for i, f in enumerate(chosen)],
                           box=single_box(biggest, frame_w, frame_h) if biggest else None)
 
     # មុខ **ធំជាងគេ** ជាប្រធានបទ មិនមែនមុខឆ្វេងបំផុតទេ — ក្នុង frame ដែលមានទាំង

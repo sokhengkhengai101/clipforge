@@ -610,7 +610,7 @@ def test_plan_shot_prefers_one_sharp_face_over_two_blurry(monkeypatch):
     monkeypatch.setattr(R, "grab_frame", lambda path, t, size: t)
     monkeypatch.setattr(R, "detect_faces_in_frame", lambda frame, size: [
         face(cx=400, w=300, h=330),      # មុខធំ
-        face(cx=1500, w=90, h=100),      # មុខតូច -> ផ្ទាំងព្រិល
+        face(cx=1500, w=40, h=46),       # តូចពេក -> ប្រអប់ពង្រីកក៏មិនសម
     ])
     layout = R.plan_shot(None, 10.0, 16.0, SIZE)
     assert layout.kind == "single"
@@ -663,7 +663,7 @@ def test_split_only_keeps_split_even_when_panels_are_soft(monkeypatch):
     """អ្នកប្រើសុំតែ split -> យើងគោរព ទោះផ្ទាំងត្រូវពង្រីកខ្លាំង."""
     monkeypatch.setattr(R, "grab_frame", lambda path, t, size: t)
     monkeypatch.setattr(R, "detect_faces_in_frame", lambda frame, size: [
-        face(cx=400, w=300, h=330), face(cx=1500, w=90, h=100),
+        face(cx=400, w=300, h=330), face(cx=1500, w=40, h=46),
     ])
     assert R.plan_shot(None, 10.0, 16.0, SIZE,
                        allowed=frozenset({"split"})).kind == "split"
@@ -723,11 +723,22 @@ def test_parse_layouts_knows_three_and_four():
     assert "three" not in R.parse_layouts("auto")
 
 
-def test_panel_geometry_grids():
-    assert R.panel_geometry("split") == (1, 2, 1080, 960)
-    assert R.panel_geometry("three") == (1, 3, 1080, 640)
+def test_panel_rects_split_is_two_equal_halves():
+    assert R.panel_rects("split") == [(0, 0, 1080, 960), (0, 960, 1080, 960)]
+
+
+def test_panel_rects_three_is_one_big_and_two_small():
+    """មុខតាម OpusClip: អ្នកនិយាយមេយក ២/៣ នៃកម្ពស់."""
+    rects = R.panel_rects("three")
+    assert rects[0] == (0, 0, 1080, 1280)
+    assert rects[1] == (0, 1280, 540, 640)
+    assert rects[2] == (540, 1280, 540, 640)
+
+
+def test_panel_rects_four_is_a_grid():
     # ៤ ជួរដេកនឹងផ្តល់ផ្ទាំង 1080x480 ដែលរាក់ពេក -> ក្រឡា 2×2
-    assert R.panel_geometry("four") == (2, 2, 540, 960)
+    assert R.panel_rects("four") == [(0, 0, 540, 960), (540, 0, 540, 960),
+                                     (0, 960, 540, 960), (540, 960, 540, 960)]
 
 
 def test_pick_panel_faces_takes_the_biggest_sorted_left_to_right():
