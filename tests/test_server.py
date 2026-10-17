@@ -345,3 +345,124 @@ def test_connection_is_closed(db_path):
     DB.project_id("demo", "D:/v.mp4", db_path)
     db_path.unlink()          # បរាជ័យលើ Windows បើ handle នៅជាប់
     assert not db_path.exists()
+
+
+# ---------- Export (screen 05) ----------
+
+
+def test_export_names_are_readable_and_legal():
+    """`clip_01.mp4` ទៅជា `01 - Title.mp4`, ហើយតួអក្សរដែល Windows បដិសេធរត់ចោល."""
+    from server import export as E
+
+    assert E.export_name({"index": 1, "title": "Daily Rhino Monitoring"}, "mp4") \
+        == "01 - Daily Rhino Monitoring.mp4"
+    # `:` `"` `?` `/` មិនអាចនៅក្នុងឈ្មោះ file លើ Windows
+    assert E.export_name({"index": 2, "title": 'Why "AI" fails: part 2/3?'}, "srt") \
+        == "02 - Why AI fails part 23.srt"
+    # គ្មាន title -> ឈ្មោះដើម
+    assert E.export_name({"index": 3, "title": ""}, "mp4") == "clip_03.mp4"
+    # វែងពេក -> កាត់, ហើយមិនបញ្ចប់ដោយ space ឬ `.`
+    long_name = E.export_name({"index": 4, "title": "x" * 200 + "."}, "mp4")
+    assert len(long_name) < 80 and not long_name.startswith("04 - .")
+
+
+def fake_clip(folder: Path, index: int, title: str, kinds=("mp4", "srt")) -> dict:
+    """clip ក្លែងក្លាយ៖ file ពិតលើ disk តែខ្លឹមសារជាអក្សរខ្លី (គ្មាន FFmpeg)."""
+    files = {}
+    for kind in kinds:
+        path = folder / f"clip_{index:02d}.{kind}"
+        path.write_bytes(b"data" * 10)
+        files[kind] = str(path)
+    return {"index": index, "title": title, "files": files}
+
+
+@pytest.fixture
+def project(tmp_path, monkeypatch):
+    """Project ក្លែងក្លាយដែល `/projects/demo/export` មើលឃើញ."""
+    from server import app as APP
+
+    source = tmp_path / "clips"
+    source.mkdir()
+    clips = [fake_clip(source, 1, "First idea"), fake_clip(source, 2, "Second idea")]
+    monkeypatch.setattr(APP, "clips_of_project", lambda folder: clips)
+    return clips
+
+
+def test_export_preview_does_not_touch_disk(client, project, tmp_path):
+    """GET បង្ហាញតែអ្វីដែល *នឹង* កើតឡើង — គ្មាន file ថ្មីទេ."""
+    body = client.get("/projects/demo/export?kinds=mp4,srt").json()
+    assert [item["index"] for item in body["clips"]] == [1, 2]
+    assert [file["name"] for file in body["clips"][0]["files"]] \
+        == ["01 - First idea.mp4", "01 - First idea.srt"]
+    assert body["bytes"] > 0 and body["mb"] == 0.0     # file ក្លែងតូចជាង 10 KB
+    assert body["destination"].endswith(str(Path("ClipForge") / "demo"))
+    assert not (tmp_path / "out").exists()
+
+
+def test_export_copies_clips_and_keeps_the_originals(client, project, tmp_path):
+    destination = tmp_path / "out"
+    body = client.post("/projects/demo/export",
+                       json={"destination": str(destination), "kinds": ["mp4"]}).json()
+    assert len(body["files"]) == 2 and body["skipped"] == []
+    assert sorted(path.name for path in destination.iterdir()) \
+        == ["01 - First idea.mp4", "02 - Second idea.mp4"]
+    # file ដើមនៅដដែល (គោលការណ៍៖ មិនប៉ះ output/)
+    for clip in project:
+        assert Path(clip["files"]["mp4"]).is_file()
+
+
+def test_export_can_pick_some_clips_and_the_sidecars(client, project, tmp_path):
+    destination = tmp_path / "out"
+    body = client.post("/projects/demo/export",
+                       json={"destination": str(destination), "clips": [2],
+                             "kinds": ["mp4", "srt", "vtt"]}).json()
+    # clip 2 ប៉ុណ្ណោះ, ហើយ vtt មិនមានលើ disk ដូច្នេះវាគ្មានក្នុងលទ្ធផល
+    assert sorted(file["name"] for file in body["files"]) \
+        == ["02 - Second idea.mp4", "02 - Second idea.srt"]
+
+
+def test_export_never_overwrites(client, project, tmp_path):
+    """Export ពីរដង = file ពីរ, មិនមែនមួយដែលត្រូវសរសេរពីលើ."""
+    destination = tmp_path / "out"
+    for _ in range(2):
+        client.post("/projects/demo/export",
+                    json={"destination": str(destination), "clips": [1], "kinds": ["mp4"]})
+    assert sorted(path.name for path in destination.iterdir()) \
+        == ["01 - First idea (2).mp4", "01 - First idea.mp4"]
+
+
+def test_export_rejects_an_unknown_kind(client, project, tmp_path):
+    reply = client.post("/projects/demo/export",
+                        json={"destination": str(tmp_path / "out"), "kinds": ["exe"]})
+    assert reply.status_code == 400
+
+
+def test_export_404s_for_an_unknown_project(client, monkeypatch):
+    from server import app as APP
+
+    monkeypatch.setattr(APP, "clips_of_project", lambda folder: [])
+    monkeypatch.setattr(APP.db, "project_clips", lambda name: [])
+    assert client.get("/projects/not-a-project/export").status_code == 404
+
+
+def test_export_400s_when_nothing_is_rendered(client, monkeypatch, tmp_path):
+    """Project មាន តែ clip មិនទាន់ render — 400 ជាមួយមូលហេតុ, មិនមែន folder ទទេ."""
+    from server import app as APP
+
+    monkeypatch.setattr(APP, "clips_of_project",
+                        lambda folder: [{"index": 1, "title": "x", "files": {}}])
+    reply = client.post("/projects/demo/export", json={"destination": str(tmp_path / "out")})
+    assert reply.status_code == 400
+    assert not (tmp_path / "out").exists()
+
+
+def test_reveal_needs_a_path_that_exists(client, tmp_path, monkeypatch):
+    from server import export as E
+
+    opened = []
+    monkeypatch.setattr(E.subprocess, "Popen", lambda command, **kw: opened.append(command))
+    monkeypatch.setattr(E.os, "startfile", lambda path: opened.append(path), raising=False)
+    assert client.post("/reveal", json={"path": str(tmp_path)}).status_code == 200
+    assert len(opened) == 1
+    assert client.post("/reveal", json={"path": str(tmp_path / "nope")}).status_code == 404
+    assert len(opened) == 1

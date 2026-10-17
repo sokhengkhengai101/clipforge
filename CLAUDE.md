@@ -354,6 +354,36 @@ app (imported dynamically, so the browser build puts it in a chunk it never load
 `CopyFromScreen` was wrong, because Windows refuses to raise a window on request and the capture
 then shows whatever is actually in front.
 
+**1E: Export (the sidecar half).** Screen 05 needs a folder someone can upload from, not
+`output/<name>/clips/clip_01.mp4`: that name says nothing on a phone, and `--redo render` rewrites
+those files under you. `server/export.py` copies them out instead, naming each
+`01 - <title>.mp4` so sorting by name is the ranking order, and it **never overwrites** -- a second
+export of the same clip lands beside the first as `01 - <title> (2).mp4`, the way Windows copies.
+Titles lose the characters Windows rejects (`<>:"/\|?*`, control characters) and are cut to 60,
+since the whole path has to stay under 260.
+`GET /projects/{name}/export` returns what an export *would* write (new names, bytes, total)
+without touching the disk; `POST` does it with `{destination, clips, kinds}`. Both call the same
+`plan()`, so the preview cannot disagree with the result. `kinds` is checked against `media.KINDS`,
+so the UI cannot ask it to copy an `.exe`, and a file that fails goes into `skipped` with its
+reason rather than aborting the other four. `POST /reveal` opens the folder in Explorer
+(`explorer /select,<file>` for a file, which returns exit code 1 even when it works, so the result
+is ignored). Every file carries `bytes` as well as `mb`, because an `.srt` is a few KB and
+`round(mb, 2)` printed it as "0.0 MB". The default destination is
+`~/Videos/ClipForge/<project>/`, computed in Python only, so the UI never joins that path itself.
+Measured on `How-AI-agents` (5 clips, 9.25 MB): the preview lists `01 - Proper Skill Creation
+Process.mp4` through `05 - Sponsor Emails and Agent Efficiency.mp4`; exporting clips 1 and 4 twice
+leaves four files with the second pair suffixed `(2)`; the sources in `output/` are unchanged.
+Asking for `srt,vtt` there returns neither, because that project was rendered before
+`CAPTION_SIDECARS` -- the plan only lists files that exist.
+
+Building it turned up why most projects on this machine were invisible to the UI:
+`load_clips()` rejects a `clips.json` whose `cache_version` is not the current one (5), and 4 of
+the 6 real projects are version 2. For the pipeline that answer is right -- an old cache means
+"run the LLM again" -- but `server/clips.py` and `review.py` were using the same function to
+*display* finished work, so a project with five rendered `.mp4`s showed up with no clips at all.
+Those two now pass `any_version=True`. The schema tolerates it: a clip from before the rubric has
+no `grades`, which `Clip` already accepts (that old file reads back as `90 A-`).
+
 ## Later phases (context only — do not build yet)
 
 - Phase 2: MediaPipe face tracking reframe, bilingual EN + Khmer subtitles, interview Q&A finder, long video → 10 clips.

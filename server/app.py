@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 
 import config
-from server import db, media
+from server import db, export, media
 from server.clips import clips_of_project
 from server.jobs import PROJECT_ROOT, JobRunner
 
@@ -212,6 +212,83 @@ def project_clips(name: str) -> dict:
     if not items and not (PROJECT_ROOT / "output" / name).is_dir():
         raise HTTPException(status_code=404, detail="រកមិនឃើញ project នេះ")
     return {"name": name, "clips": items}
+
+
+class ExportRequest(BaseModel):
+    """អ្វីដែល UI ផ្ញើពេលចុច Export."""
+
+    destination: str | None = None      # None = កន្លែងលំនាំដើម
+    clips: list[int] | None = None      # None = clip ទាំងអស់
+    kinds: list[str] = ["mp4"]          # mp4 និង/ឬ srt, vtt, ass
+
+
+class RevealRequest(BaseModel):
+    path: str
+
+
+def _export_kinds(kinds: list[str]) -> tuple[str, ...]:
+    """ទទួលតែ kind ដែល `media.KINDS` ស្គាល់ — UI មិនអាចសុំចម្លង `.exe` បានទេ."""
+    chosen = tuple(kind for kind in kinds if kind in media.KINDS)
+    if not chosen:
+        raise HTTPException(status_code=400, detail=f"kind មិនស្គាល់: {kinds}")
+    return chosen
+
+
+def _export_plan(name: str, kinds: tuple[str, ...],
+                 indexes: list[int] | None) -> list[dict]:
+    clips = _clips_of(name)
+    if not clips and not (PROJECT_ROOT / "output" / name).is_dir():
+        raise HTTPException(status_code=404, detail="រកមិនឃើញ project នេះ")
+    return export.plan(clips, indexes, kinds)
+
+
+@app.get("/projects/{name}/export")
+def export_preview(name: str, kinds: str = "mp4") -> dict:
+    """អ្វីដែល Export **នឹង** សរសេរ និងទៅ folder ណា — មិនប៉ះ disk ទេ.
+
+    UI ហៅវាមុនពេលចុច ដើម្បីបង្ហាញឈ្មោះ file និងទំហំសរុប. វាប្រើ `export.plan()`
+    ដូច POST ដែរ ដូច្នេះការបង្ហាញជាមុន និងលទ្ធផលពិតមិនអាចខុសគ្នា.
+    """
+    chosen = _export_kinds(kinds.split(","))
+    items = _export_plan(name, chosen, None)
+    return {
+        "name": name,
+        "destination": str(export.default_destination(name)),
+        "clips": items,
+        "bytes": sum(file["bytes"] for item in items for file in item["files"]),
+        "mb": round(sum(file["bytes"] for item in items
+                        for file in item["files"]) / 1e6, 2),
+    }
+
+
+@app.post("/projects/{name}/export")
+def export_project(name: str, request: ExportRequest) -> dict:
+    """ចម្លង clip ដែលជ្រើសទៅ folder — ឈ្មោះអានបាន, មិនសរសេរពីលើអ្វីទាំងអស់."""
+    chosen = _export_kinds(request.kinds)
+    items = _export_plan(name, chosen, request.clips)
+    if not any(item["files"] for item in items):
+        raise HTTPException(status_code=400,
+                            detail="គ្មាន file ឲ្យ export (clip មិនទាន់ render?)")
+    destination = (Path(request.destination) if request.destination
+                   else export.default_destination(name))
+    try:
+        return export.copy_plan(items, destination)
+    except OSError as e:
+        # folder មិនអាចបង្កើត (drive មិនមាន, គ្មានសិទ្ធិ) — កំហុសរបស់អ្នកប្រើ មិនមែន bug
+        raise HTTPException(status_code=400,
+                            detail=f"សរសេរចូល folder នេះមិនបាន: {e}") from e
+
+
+@app.post("/reveal")
+def reveal_path(request: RevealRequest) -> dict:
+    """បើក folder ក្នុង File Explorer (បន្លិច file បើ path ជា file).
+
+    Sidecar ចង link តែ 127.0.0.1 ហើយ CORS អនុញ្ញាតតែ origin របស់ app —
+    ដូច្នេះមានតែ UI ក្នុងម៉ាស៊ីននេះអាចហៅវា.
+    """
+    if not export.reveal(Path(request.path)):
+        raise HTTPException(status_code=404, detail="path នេះមិនមាន")
+    return {"ok": True}
 
 
 @app.websocket("/jobs/{job_id}/events")
