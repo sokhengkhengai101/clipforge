@@ -21,6 +21,19 @@ page.on('response', (r) => {
   if (r.status() >= 400) problems.push(`http ${r.status()} ${r.url()}`)
 })
 
+// ការ៉េ project និងប៊ូតុង "Start <ឈ្មោះវីដេអូ>" អាចមានឈ្មោះដូចគ្នា — ក្នុង app
+// ពិត selector ចាស់ចុច Start ហើយ pipeline រត់. ពិនិត្យថាគ្មាន job ចាប់ផ្តើមដោយចៃដន្យ.
+const SIDECAR = 'http://127.0.0.1:8765'
+const busy = async () => (await (await fetch(`${SIDECAR}/health`)).json()).busy
+async function noJobStarted(after) {
+  if (withJob) return
+  const id = await busy()
+  if (!id) return
+  await fetch(`${SIDECAR}/jobs/${id}`, { method: 'DELETE' })
+  throw new Error(`${after} started job ${id} — cancelled it. Fix the selector.`)
+}
+if (await busy()) throw new Error('a job is already running; wait for it before shooting')
+
 await page.goto('http://127.0.0.1:5173/', { waitUntil: 'networkidle' })
 await page.waitForTimeout(1000)
 await page.screenshot({ path: `${outDir}/home.png` })
@@ -33,9 +46,12 @@ await page.waitForTimeout(500)
 await page.screenshot({ path: `${outDir}/home-bottom.png` })
 
 // Review: ជ្រើស project ដែលមាន clip រួច រួចចូលមើល
-const project = await page.getByRole('button', { name: /Taylor_Tomlinson/ })
+// `(?!Start )`: ការ៉េ project មិនមែនប៊ូតុង "Start <ឈ្មោះវីដេអូ>"
+const project = page.getByRole('button', { name: /^(?!Start ).*Taylor_Tomlinson/ })
 if (await project.count()) {
   await project.first().click()
+  await page.waitForTimeout(500)
+  await noJobStarted('clicking the project card')
   await page.getByRole('button', { name: /Review \d+ clips/ }).click()
   await page.waitForTimeout(2500)
   await page.screenshot({ path: `${outDir}/review.png` })
@@ -132,6 +148,8 @@ if (withJob) {
   await page.waitForTimeout(9000)
   await page.screenshot({ path: `${outDir}/processing.png` })
 }
+
+await noJobStarted('this run')
 
 const icons = await page.evaluate(() =>
   [...document.querySelectorAll('img')].map((i) => ({

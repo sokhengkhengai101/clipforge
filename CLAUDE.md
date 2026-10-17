@@ -203,9 +203,18 @@ clipforge/
 Tauri 2 (Rust) + React/TypeScript + Tailwind + shadcn/ui over a Python sidecar. This machine
 already has Node 24.13 and Rust 1.99, so nothing large needs installing; FastAPI and uvicorn do.
 
-Order: **1A sidecar**, **1B SQLite**, **1C React** and **1D Tauri** (done) -> 1E the rest of the Figma
-screens. The UI is built against the sidecar in a plain browser first, so there is no Rust rebuild
-loop while the screens take shape.
+Order: **1A sidecar**, **1B SQLite**, **1C React**, **1D Tauri** and **1E** (done). 1E built every
+Figma screen Phase 1 can honestly back -- 01 Models, 02 Home, 03 Processing, 04 Review, 05 Export --
+and left 06 Silence & Filler Cleanup (Phase 2 pipeline work), 07 Brand Kits and 08 Batch Queue
+(Phase 3) unbuilt rather than drawn and inert. The UI is built against the sidecar in a plain
+browser first, so there is no Rust rebuild loop while the screens take shape.
+
+**Gate to move to Phase 2** (not met yet -- the developer judges it, as with Phase 0): on a video
+that has never been processed, the desktop app takes it from drop to exported clips with no
+terminal, and the developer would post the result. Verified so far: every screen works in the real
+window (below); Start inside the app runs the pipeline to `done` (76 s with warm caches, see the
+incident below); drop gives the full path (1D). Not yet measured: a cold run inside the app, where
+transcribe and highlights take ~16 minutes on the 35-min podcast.
 
 `server/` holds the sidecar, bound to 127.0.0.1 only (the project uploads nothing):
 
@@ -447,6 +456,37 @@ Measured on this machine: `NVIDIA GeForce GTX 1060 · 3.0 GB VRAM`, `16.0 GB RAM
 FFmpeg ready; whisper cache base/medium/small/tiny; Ollama has qwen2.5:3b (1.9 GB) and
 qwen2.5:7b-instruct (4.7 GB); all three ONNX models present (0.2 / 38.7 / 35.9 MB). No console
 errors, no broken icons.
+
+**Checked in the desktop app, not only the browser.** Every measurement of screens 01, 04 and 05
+above came from Chromium through the Vite proxy, which is a different path from the product:
+the app loads the page from `tauri.localhost` and calls `127.0.0.1:8765` directly, through CORS,
+with uvicorn as a child of `app.exe`. `ui/scripts/app-shot.mjs` drives the **real window**:
+WebView2 speaks CDP, so the app is started with
+`$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS="--remote-debugging-port=9222"` and Playwright attaches
+with `connectOverCDP`. It needs the frontend built into the exe, which `tauri dev` does not do
+(that loads `localhost:5173`, an origin the CORS list already allows), so the build is
+`npx tauri build --debug --no-bundle` (5m43s cold, reusing the dev artifacts).
+Measured: origin `http://tauri.localhost`, the app started its own uvicorn (parent `app`), all 15
+sidecar calls 2xx -- `/env`, five thumbnails, `/clips`, the mp4 as 206, the vtt,
+`GET`/`POST /export`, `/reveal` -- no console errors. Exporting one clip wrote the mp4, srt and vtt,
+and **Open folder** really opened Explorer on that folder (checked through
+`Shell.Application().Windows()`, not by eye). Closing the window left no python process and both
+8765 and 9222 free.
+A real window keeps its state between runs, unlike a fresh browser page: a dialog left open by one
+run covers the sidebar for the next, so the script presses Escape first.
+
+**Incident: a screenshot script started the pipeline.** The Home screen's Start button reads
+`Start ${chosen.name}`, and in the app `chosen` was still `Taylor_Tomlinson.mp4` from the previous
+run, so the selector `getByRole('button', { name: /Taylor_Tomlinson/ }).first()` matched **Start**
+before the project card and a real job ran (`--max-clips 5 --model qwen2.5:7b-instruct
+--whisper-model medium`). Every step was cached, so it re-rendered the same five clips in 76 s;
+they were checked afterwards (all 1080x1920, same sizes) and the source video was never touched.
+It was left to finish because killing a render can leave a half-written `.mp4`. `shot.mjs` had the
+same selector and only got away with it because a fresh browser picks a different video.
+Both scripts now match the card with `/^(?!Start ).*Taylor_Tomlinson/`, refuse to start while a
+job is running, and check `/health` after the project click and at the end: a job that appears
+is cancelled at once -- it is still in cached steps then, before any clip is written -- and the run
+fails naming the click. Re-run under the same conditions: no job started.
 
 ## Later phases (context only — do not build yet)
 
