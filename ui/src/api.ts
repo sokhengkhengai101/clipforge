@@ -4,6 +4,9 @@ export type Health = {
   ok: boolean
   version: string
   ffmpeg: boolean
+  device: string
+  whisper_model: string
+  llm_model: string
   busy: string | null
 }
 
@@ -55,6 +58,20 @@ async function send<T>(path: string, method = 'GET', body?: unknown): Promise<T>
   return (await answer.json()) as T
 }
 
+export type Clip = {
+  index: number
+  start: number
+  end: number
+  duration: number
+  title: string
+  hook: string
+  type: string
+  total: number
+  letter: string
+  reason: string
+  files: Record<string, string>
+}
+
 export type JobOptions = {
   video: string
   max_clips?: number
@@ -67,6 +84,11 @@ export const api = {
   videos: () => send<Video[]>('/videos'),
   startJob: (options: JobOptions) => send<JobStatus>('/jobs', 'POST', options),
   cancelJob: (id: string) => send<JobStatus>(`/jobs/${id}`, 'DELETE'),
+  // 404 = project នេះមិនទាន់មាន clip (job ទើបចាប់ផ្តើម) -> បញ្ជីទទេ
+  clips: (name: string) =>
+    send<{ name: string; clips: Clip[] }>(`/projects/${encodeURIComponent(name)}/clips`)
+      .then((answer) => answer.clips)
+      .catch(() => [] as Clip[]),
 }
 
 /** URL របស់ WebSocket. `location.host` = 5173, ហើយ proxy បញ្ជូនបន្តទៅ 8765. */

@@ -47,6 +47,11 @@ def root() -> RedirectResponse:
     return RedirectResponse("/docs")
 
 
+# detect_device() សួរ CUDA ម្តង ហើយចម្លើយមិនប្តូរក្នុងអំឡុងរត់មួយ —
+# ដូច្នេះរក្សាទុក កុំឲ្យរាល់ការហៅ /health ទៅសួរ driver ម្តងទៀត.
+DEVICE, WHISPER_MODEL, COMPUTE_TYPE = config.detect_device()
+
+
 @app.get("/health")
 def health() -> dict:
     """UI ហៅវាដើម្បីដឹងថា sidecar រស់ឬនៅ."""
@@ -56,6 +61,9 @@ def health() -> dict:
         "version": app.version,
         # `shutil.which` រក binary ក្នុង PATH — UI ត្រូវដឹងមុនពេល start job
         "ffmpeg": shutil.which("ffmpeg") is not None,
+        "device": DEVICE,
+        "whisper_model": WHISPER_MODEL,
+        "llm_model": config.OLLAMA_MODEL,
         "busy": active.id if active else None,
     }
 

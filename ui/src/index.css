@@ -1,16 +1,48 @@
 @import 'tailwindcss';
 
-/* Token ពី Figma (CLAUDE.md "Design references") — ប្រើជា class
-   `bg-app`, `text-accent` ... បាន ដោយ Tailwind 4 អាន `@theme` នេះ. */
+/* Token ពី Figma — variable ពិតក្នុង file `SycDviWBBpHlK901HhvFWK`
+   (អានដោយ Figma MCP, មិនមែនចម្លងដោយដៃ). ឈ្មោះ `bg/app` ក្នុង Figma
+   ក្លាយជា `--color-bg-app` នៅទីនេះ ហើយ Tailwind បង្កើត class `bg-bg-app`. */
 @theme {
-  --color-app: #0f1115;
-  --color-panel: #171a21;
-  --color-card: #232733;
+  --color-bg-app: #0f1115;
+  --color-bg-panel: #171a21;
+  --color-bg-card: #232733;
+  --color-bg-hover: #2c3140;
+
+  --color-border-default: #2e3340;
+  --color-border-strong: #454b5c;
+
   --color-accent: #7c5cff;
-  --color-keyword: #ffd23f;
+  --color-accent-soft: #2a2350;
+  --color-on-accent: #ffffff;
+
+  --color-text-primary: #f2f4f8;
+  --color-text-secondary: #9aa1b2;
+  --color-success: #3dd68c;
+  --color-keyword: #ffd23f;        /* ពណ៌ keyword របស់ caption */
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+
   --font-sans: 'Inter', system-ui, sans-serif;
+  --font-khmer: 'Kantumruy Pro', 'Inter', sans-serif;
+}
+
+/* Type scale ពី Figma (ទំហំ/កម្ពស់បន្ទាត់/ចន្លោះអក្សរ) */
+@utility text-display { font-size: 28px; line-height: 36px; font-weight: 600; }
+@utility text-title { font-size: 20px; line-height: 28px; font-weight: 600; }
+@utility text-heading { font-size: 16px; line-height: 24px; font-weight: 600; }
+@utility text-body { font-size: 14px; line-height: 20px; font-weight: 400; }
+@utility text-body-strong { font-size: 14px; line-height: 20px; font-weight: 500; }
+@utility text-caption { font-size: 12px; line-height: 16px; font-weight: 400; }
+@utility text-label {
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 600;
+  letter-spacing: 0.66px;
 }
 
 body {
-  @apply bg-app text-slate-200;
+  @apply bg-bg-app font-sans text-text-primary;
 }

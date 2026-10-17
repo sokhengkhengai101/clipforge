@@ -191,7 +191,8 @@ clipforge/
 ├─ pipeline/            # audio, transcribe, highlights, boundaries, captions, render, llm
 ├─ prompts/             # podcast_highlights.md (LLM prompt, versioned)
 ├─ server/              # Phase 1 sidecar: app.py (FastAPI), jobs.py (subprocess), db.py (SQLite)
-├─ ui/                  # Phase 1 React UI (Vite + Tailwind), node_modules git-ignored
+├─ ui/                  # Phase 1 React UI (Vite + Tailwind + Figma tokens/assets)
+│  └─ scripts/shot.mjs # Playwright screenshot check for the UI
 ├─ tests/
 └─ output/              # git-ignored
 ```
@@ -264,6 +265,29 @@ that already existed at `start()` *minus* the steps `--redo`/`--force`/`--full` 
 reports `cached`, `fresh` and `done`. Measured through the Vite proxy on the wildlife video with
 `redo=render`: `cached` = audio/transcribe/highlights/boundaries, `fresh` = captions/render,
 41 log lines and 56 status messages over the WebSocket, `done` in 23.5 s.
+
+**Figma (1E, brought forward).** The design file is read through the Figma MCP server, not by eye:
+`get_metadata` lists the eight screens, `get_variable_defs` gives the real variables, and
+`get_design_context` returns reference code plus a render of a screen. The tokens in
+`src/index.css` are those variables (`bg/app` -> `--color-bg-app`, so the class is `bg-bg-app`),
+including ones CLAUDE.md had never recorded: `bg/hover #2c3140`, `border/default #2e3340`,
+`border/strong #454b5c`, `accent/soft #2a2350`, `text/primary #f2f4f8`, `text/secondary #9aa1b2`,
+`status/success #3dd68c`, radius 6/10/14, and the type scale (Display 28/36 ... Label 11/16 with
+0.66 px tracking), which are `@utility text-display`, `text-label` and so on.
+The 22 icons are downloaded into `ui/src/assets/figma/` -- Figma's asset URLs expire in 7 days,
+so nothing may point at them at runtime.
+**Screen "03 · Processing" (node 10:414) is implemented** as `components/Processing.tsx`, with
+`TitleBar`, `Sidebar` and `Badge` beside it. It is bound to the real job, which means three panels
+of the design hold different content: the design's 8 pipeline steps are our 6 (its "Detect speech"
+with Silero VAD and "Identify speakers" with pyannote are Phase 2), its "Live transcript" is our
+pipeline log, and its SPEAKERS / GPU LOAD stats are STATE / ELAPSED / LOG LINES / CLIPS, because
+those are numbers we actually have. The sidebar's other pages are drawn but inert.
+`ui/scripts/shot.mjs` (Playwright, a dev dependency) opens the page at 1440x900, clicks Start and
+writes `home.png` and `processing.png`, reporting console errors, failed requests and every
+icon's rendered size -- that is how the screen was checked against the Figma render rather than
+assumed. Measured on the last run: all 22 icons load at their design sizes, no console errors, and
+the WebSocket filled the log (19 lines at 9 s) while the steps showed 4 cached and `captions`
+active.
 
 ## Later phases (context only — do not build yet)
 
