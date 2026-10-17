@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import config
+from server import db
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -106,6 +107,7 @@ class JobRunner:
                       out_dir=PROJECT_ROOT / "output" / video.stem, args=args)
             self.jobs[job.id] = job
 
+        db.save_job(job.id, video.stem, str(video), job.args, job.started)
         thread = threading.Thread(target=self._run, args=(job,), daemon=True)
         thread.start()
         return job
@@ -120,6 +122,7 @@ class JobRunner:
             )
         except OSError as e:
             job.state, job.error, job.finished = "failed", str(e), time.time()
+            self._record(job)
             return
 
         for line in job.process.stdout:
@@ -128,11 +131,25 @@ class JobRunner:
                 job.log.append(text)
         code = job.process.wait()
         job.finished = time.time()
-        if job.state == "cancelled":
+        if job.state != "cancelled":
+            job.state = "done" if code == 0 else "failed"
+            if code != 0:
+                job.error = f"make_clips.py ចេញដោយ code {code}"
+        self._record(job)
+
+    def _record(self, job: Job) -> None:
+        """សរសេរលទ្ធផលចូល database — រួមទាំង clip បើ pipeline សរសេរវារួច."""
+        db.update_job(job.id, state=job.state, step=job.progress()["step"],
+                      error=job.error, finished=job.finished)
+        if job.state != "done":
             return
-        job.state = "done" if code == 0 else "failed"
-        if code != 0:
-            job.error = f"make_clips.py ចេញដោយ code {code}"
+        try:
+            from server.clips import clips_of_project
+            found = clips_of_project(job.out_dir)
+        except Exception:                     # clips.json ខូច/គ្មាន -> រំលង
+            return
+        if found:
+            db.save_clips(job.video.stem, str(job.video), found)
 
     def cancel(self, job_id: str) -> Job:
         job = self.jobs[job_id]

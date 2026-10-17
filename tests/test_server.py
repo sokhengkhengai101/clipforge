@@ -12,6 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import config
+from server import db as DB
 from server import jobs as J
 from server.app import app, runner
 
@@ -139,3 +140,74 @@ def test_websocket_sends_status(client, tmp_path, monkeypatch):
 def test_websocket_rejects_unknown_job(client):
     with client.websocket_connect("/jobs/nope/events") as socket:
         assert "error" in json.loads(socket.receive_text())
+
+
+# ---------- database (1B) ----------
+
+@pytest.fixture
+def db_path(tmp_path):
+    path = tmp_path / "test.db"
+    DB.init_db(path)
+    return path
+
+
+def test_project_is_created_once(db_path):
+    first = DB.project_id("demo", "D:/v.mp4", db_path)
+    again = DB.project_id("demo", "D:/v.mp4", db_path)
+    assert first == again
+    assert len(DB.list_projects(db_path)) == 1
+
+
+def test_job_history_survives(db_path):
+    DB.save_job("j1", "demo", "D:/v.mp4", ["python", "make_clips.py"], 100.0, db_path)
+    DB.update_job("j1", state="done", step="render", finished=160.0, path=db_path)
+    jobs = DB.list_jobs(path=db_path)
+    assert jobs[0]["id"] == "j1"
+    assert jobs[0]["state"] == "done"
+    assert jobs[0]["seconds"] == 60.0
+    assert jobs[0]["project"] == "demo"
+    assert jobs[0]["args"][0] == "python"
+
+
+def test_failed_job_keeps_its_error(db_path):
+    DB.save_job("j2", "demo", "D:/v.mp4", [], 10.0, db_path)
+    DB.update_job("j2", state="failed", error="ffmpeg បាត់", finished=12.0, path=db_path)
+    assert DB.list_jobs(path=db_path)[0]["error"] == "ffmpeg បាត់"
+
+
+def test_clips_round_trip(db_path):
+    clips = [{"index": 1, "start": 0.0, "end": 30.0, "title": "one", "type": "story",
+              "total": 87, "letter": "B+",
+              "grades": {"hook": {"score": 90, "letter": "A-", "reason": "r"}},
+              "files": {"mp4": "a.mp4"}}]
+    assert DB.save_clips("demo", "D:/v.mp4", clips, db_path) == 1
+    stored = DB.project_clips("demo", db_path)
+    assert stored[0]["index"] == 1
+    assert stored[0]["grades"]["hook"]["letter"] == "A-"
+    assert stored[0]["files"]["mp4"] == "a.mp4"
+
+
+def test_saving_clips_replaces_the_old_set(db_path):
+    DB.save_clips("demo", "D:/v.mp4", [{"index": i, "start": 0, "end": 10,
+                                        "title": f"c{i}"} for i in (1, 2, 3)], db_path)
+    DB.save_clips("demo", "D:/v.mp4", [{"index": 1, "start": 0, "end": 10,
+                                        "title": "only"}], db_path)
+    stored = DB.project_clips("demo", db_path)
+    assert len(stored) == 1 and stored[0]["title"] == "only"
+
+
+def test_project_summary_counts(db_path):
+    DB.save_job("j3", "demo", "D:/v.mp4", [], 1.0, db_path)
+    DB.update_job("j3", state="done", finished=2.0, path=db_path)
+    DB.save_clips("demo", "D:/v.mp4", [{"index": 1, "start": 0, "end": 5, "title": "x"}],
+                  db_path)
+    summary = DB.list_projects(db_path)[0]
+    assert summary["clips"] == 1 and summary["jobs"] == 1
+    assert summary["last_state"] == "done"
+
+
+def test_connection_is_closed(db_path):
+    """`with sqlite3.connect()` commit តែមិន close — file ត្រូវលុបបាន."""
+    DB.project_id("demo", "D:/v.mp4", db_path)
+    db_path.unlink()          # បរាជ័យលើ Windows បើ handle នៅជាប់
+    assert not db_path.exists()

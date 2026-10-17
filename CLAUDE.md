@@ -190,7 +190,7 @@ clipforge/
 ├─ check_env.py         # doctor script: Python/FFmpeg/GPU/Ollama check
 ├─ pipeline/            # audio, transcribe, highlights, boundaries, captions, render, llm
 ├─ prompts/             # podcast_highlights.md (LLM prompt, versioned)
-├─ server/              # Phase 1 sidecar: app.py (FastAPI), jobs.py (subprocess)
+├─ server/              # Phase 1 sidecar: app.py (FastAPI), jobs.py (subprocess), db.py (SQLite)
 ├─ tests/
 └─ output/              # git-ignored
 ```
@@ -200,7 +200,7 @@ clipforge/
 Tauri 2 (Rust) + React/TypeScript + Tailwind + shadcn/ui over a Python sidecar. This machine
 already has Node 24.13 and Rust 1.99, so nothing large needs installing; FastAPI and uvicorn do.
 
-Order: **1A sidecar** (done) -> 1B SQLite -> 1C React in a browser -> 1D wrap in Tauri -> 1E Figma
+Order: **1A sidecar** and **1B SQLite** (done) -> 1C React in a browser -> 1D wrap in Tauri -> 1E Figma
 styling. The UI is built against the sidecar in a plain browser first, so there is no Rust rebuild
 loop while the screens take shape.
 
@@ -209,8 +209,9 @@ loop while the screens take shape.
     python -m uvicorn server.app:app --host 127.0.0.1 --port 8765
     http://127.0.0.1:8765/docs
 
-`GET /health`, `GET /videos`, `POST /jobs`, `GET /jobs/{id}`, `DELETE /jobs/{id}`,
-`GET /projects/{name}/clips`, and `WS /jobs/{id}/events` for live log lines and status.
+`GET /health`, `GET /videos`, `POST /jobs`, `GET /jobs` (session + history),
+`GET /jobs/{id}`, `DELETE /jobs/{id}`, `GET /projects`, `GET /projects/{name}/clips`, and
+`WS /jobs/{id}/events` for live log lines and status.
 
 **The sidecar spawns `make_clips.py` as a subprocess** rather than importing the pipeline. The
 orchestration is 330 lines interleaved with `console.print`, and extracting it now would risk a CLI
@@ -222,6 +223,24 @@ console text. One job at a time: a second `POST /jobs` returns 409, because Whis
 share one 3 GB GPU.
 Measured end to end through the API: the 56-second wildlife video ran to `done` in 34.3 s with
 6/6 steps and 37 log lines streamed over the WebSocket.
+
+**`server/db.py` — SQLite (1B).** The pipeline already leaves its state on disk, so the database
+is not there to hold the clips again; it is there to hold what the files cannot say: *which jobs
+ran, when, how long, and why one failed*. `clips.json` only describes the newest run. Three tables
+in `output/clipforge.db` (git-ignored, 28 KB after one job): `project` (one row per `output/<name>/`
+folder, unique by name), `job` (id, args as JSON, state, step, error, started/finished), and
+`clip` (the ranked list, unique by `(project_id, idx)` and rewritten whole on each run).
+`JobRunner` writes a `job` row on `start()` and updates it once on finish; a `done` job also
+writes its clips. `server/clips.py` reads `clips.json` for both the API and the database, so the
+two can never disagree.
+A new connection is opened per operation: sqlite3 connections are not thread-safe and jobs run in
+their own thread, while the writes are a handful per job. `connect()` is a `@contextmanager`
+because `with sqlite3.connect(...)` commits but **does not close** — the handle stays open and
+Windows then refuses to delete the file, which is how a test found it.
+Measured end to end: a job through the API wrote one project, one `job` row (35.4 s, step
+`render`) and one clip (`Daily Rhino Monitoring`, 11.2-53.1 s, 70 C+); after killing and
+restarting uvicorn, `GET /jobs` still returns that job with `from_history: true` while
+`GET /jobs?history=false` returns `[]`.
 
 ## Later phases (context only — do not build yet)
 

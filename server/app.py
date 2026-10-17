@@ -15,13 +15,15 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
 import config
-from pipeline.highlights import load_clips
+from server import db
+from server.clips import clips_of_project
 from server.jobs import PROJECT_ROOT, JobRunner
 
 config.enable_utf8_output()
 
-app = FastAPI(title="ClipForge sidecar", version="0.1.0")
+app = FastAPI(title="ClipForge sidecar", version="0.2.0")
 runner = JobRunner()
+db.init_db()
 
 
 class JobRequest(BaseModel):
@@ -73,8 +75,27 @@ def start_job(request: JobRequest) -> dict:
 
 
 @app.get("/jobs")
-def list_jobs() -> list[dict]:
-    return [job.as_dict() for job in runner.jobs.values()]
+def list_jobs(history: bool = True) -> list[dict]:
+    """job ក្នុង session នេះ + ប្រវត្តិពី database (រស់ឆ្លងការបិទបើក server)."""
+    live = {job.id: job.as_dict() for job in runner.jobs.values()}
+    if not history:
+        return list(live.values())
+    merged = list(live.values())
+    for row in db.list_jobs():
+        if row["id"] not in live:
+            merged.append({"id": row["id"], "video": row["project"],
+                           "state": row["state"], "error": row["error"] or "",
+                           "seconds": row["seconds"],
+                           "progress": {"done": [], "total": 6,
+                                        "step": row["step"] or ""},
+                           "log_lines": 0, "from_history": True})
+    return merged
+
+
+@app.get("/projects")
+def list_projects() -> list[dict]:
+    """project ដែលធ្លាប់រត់ — មកពី database មិនមែនការស្កេន folder."""
+    return db.list_projects()
 
 
 @app.get("/jobs/{job_id}")
@@ -95,31 +116,12 @@ def cancel_job(job_id: str) -> dict:
 @app.get("/projects/{name}/clips")
 def project_clips(name: str) -> dict:
     """clip ដែល pipeline សរសេររួច — អានពី `clips.json` និង file ជុំវិញវា."""
-    out_dir = PROJECT_ROOT / "output" / name
-    clips = load_clips(out_dir / "clips.json")
-    if clips is None:
-        raise HTTPException(status_code=404, detail="គ្មាន clips.json")
-
-    folder = out_dir / "clips"
-    items = []
-    for index, clip in enumerate(clips, start=1):
-        stem = folder / f"clip_{index:02d}"
-        grades = None
-        if clip.grades:
-            grades = {name: {"score": getattr(clip.grades, name).score,
-                             "letter": getattr(clip.grades, name).letter,
-                             "reason": getattr(clip.grades, name).reason}
-                      for name in ("hook", "flow", "value")}
-        items.append({
-            "index": index,
-            "start": clip.start, "end": clip.end, "duration": clip.duration,
-            "title": clip.title, "hook": clip.hook, "type": clip.type,
-            "total": clip.total, "letter": clip.letter, "grades": grades,
-            "reason": clip.reason,
-            "files": {suffix: str(stem.with_suffix(f".{suffix}"))
-                      for suffix in ("mp4", "ass", "srt", "vtt")
-                      if stem.with_suffix(f".{suffix}").is_file()},
-        })
+    items = clips_of_project(PROJECT_ROOT / "output" / name)
+    if not items:
+        # គ្មាន file -> សាកមើលក្នុង database (folder អាចត្រូវលុប)
+        items = db.project_clips(name)
+    if not items:
+        raise HTTPException(status_code=404, detail="គ្មាន clip សម្រាប់ project នេះ")
     return {"name": name, "clips": items}
 
 
