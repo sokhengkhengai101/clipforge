@@ -93,6 +93,44 @@ export type JobOptions = {
   layout?: string
 }
 
+/** ---- Export (screen 05) ---- */
+
+export type ExportFile = {
+  kind: string
+  source: string
+  name: string
+  bytes: number
+  mb: number
+}
+
+export type ExportClip = { index: number; title: string; files: ExportFile[] }
+
+/** អ្វីដែល ffprobe អានពី clip ទីមួយ — `null` បើ ffprobe មិនឆ្លើយ. */
+export type VideoFormat = {
+  width: number | null
+  height: number | null
+  fps: number | null
+  codec: string | null
+  kbps: number | null
+}
+
+export type ExportPreview = {
+  name: string
+  destination: string
+  format: VideoFormat | null
+  clips: ExportClip[]
+  bytes: number
+  mb: number
+}
+
+export type ExportResult = {
+  destination: string
+  files: (ExportFile & { index: number; path: string })[]
+  skipped: (ExportFile & { index: number; reason: string })[]
+  bytes: number
+  mb: number
+}
+
 /** ជួរមួយក្នុងតារាង `project` របស់ database (server/db.py). */
 export type Project = {
   id: number
@@ -115,6 +153,20 @@ export const api = {
     send<{ name: string; clips: Clip[] }>(`/projects/${encodeURIComponent(name)}/clips`)
       .then((answer) => answer.clips)
       .catch(() => [] as Clip[]),
+
+  /** អ្វីដែល export *នឹង* សរសេរ — មិនប៉ះ disk ទេ. */
+  exportPreview: (name: string, kinds: string[]) =>
+    send<ExportPreview>(
+      `/projects/${encodeURIComponent(name)}/export?kinds=${kinds.join(',')}`,
+    ),
+
+  exportClips: (
+    name: string,
+    body: { destination?: string; clips?: number[]; kinds: string[] },
+  ) => send<ExportResult>(`/projects/${encodeURIComponent(name)}/export`, 'POST', body),
+
+  /** បើក folder ក្នុង File Explorer. */
+  reveal: (path: string) => send<{ ok: boolean }>('/reveal', 'POST', { path }),
 }
 
 /** URL របស់ file មួយក្នុង clip — `<video src>` និង `<img src>` ប្រើវាផ្ទាល់. */

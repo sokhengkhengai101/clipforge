@@ -188,8 +188,10 @@ def test_projects_include_folders_made_before_the_database(client, monkeypatch):
     """Project ចាស់ដែលសង់ដោយ CLI មានតែ folder — វាត្រូវតែលេចក្នុងបញ្ជី."""
     from server import app as APP
 
+    # clip ពិតតែងមាន .mp4 — ការរាប់ក្នុង /projects រាប់តែ clip ដែល render រួច
     monkeypatch.setattr(APP, "clips_of_project",
-                        lambda folder: [{"index": 1}] if folder.name == "old-cli-project" else [])
+                        lambda folder: [{"index": 1, "files": {"mp4": "clip_01.mp4"}}]
+                        if folder.name == "old-cli-project" else [])
     folder = J.PROJECT_ROOT / "output" / "old-cli-project"
     folder.mkdir(parents=True, exist_ok=True)
     try:
@@ -466,3 +468,51 @@ def test_reveal_needs_a_path_that_exists(client, tmp_path, monkeypatch):
     assert len(opened) == 1
     assert client.post("/reveal", json={"path": str(tmp_path / "nope")}).status_code == 404
     assert len(opened) == 1
+
+
+def test_probe_reads_the_real_file(tmp_path, monkeypatch):
+    """Resolution/Quality ក្នុង dialog មកពី ffprobe លើ clip ពិត, មិនមែនពី config."""
+    from server import media
+
+    video = tmp_path / "clip_01.mp4"
+    video.write_bytes(b"x")
+    answer = {"streams": [{"width": 1080, "height": 1920, "codec_name": "h264",
+                           "avg_frame_rate": "30000/1001", "bit_rate": "2500000"}],
+              "format": {"bit_rate": "2600000"}}
+
+    def fake_run(command, **kwargs):
+        return subprocess.CompletedProcess(command, 0, json.dumps(answer).encode())
+
+    monkeypatch.setattr(media.subprocess, "run", fake_run)
+    found = media.probe_video(video)
+    assert found == {"width": 1080, "height": 1920, "fps": 29.97,
+                     "codec": "h264", "kbps": 2500}
+    assert media.probe_video(tmp_path / "gone.mp4") is None
+
+
+def test_probe_survives_a_broken_ffprobe(tmp_path, monkeypatch):
+    """ffprobe បាត់ ឬឆ្លើយមិនមែន JSON -> None, UI សរសេរ "—"."""
+    from server import media
+
+    video = tmp_path / "clip_01.mp4"
+    video.write_bytes(b"x")
+    monkeypatch.setattr(media.subprocess, "run",
+                        lambda command, **kw: subprocess.CompletedProcess(command, 0, b"oops"))
+    assert media.probe_video(video) is None
+
+
+def test_projects_count_only_rendered_clips(client, monkeypatch):
+    """`clips.json` អាចមានមុន render — ការ៉េមិនត្រូវសរសេរ READY ទេ."""
+    from server import app as APP
+
+    monkeypatch.setattr(APP, "clips_of_project", lambda folder: [
+        {"index": 1, "title": "rendered", "files": {"mp4": "a.mp4", "srt": "a.srt"}},
+        {"index": 2, "title": "chosen but never rendered", "files": {}},
+    ])
+    folder = J.PROJECT_ROOT / "output" / "half-rendered"
+    folder.mkdir(parents=True, exist_ok=True)
+    try:
+        found = {item["name"]: item for item in client.get("/projects").json()}
+        assert found["half-rendered"]["clips"] == 1
+    finally:
+        folder.rmdir()

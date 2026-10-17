@@ -390,6 +390,34 @@ the 6 real projects are version 2. For the pipeline that answer is right -- an o
 Those two now pass `any_version=True`. The schema tolerates it: a clip from before the rubric has
 no `grades`, which `Clip` already accepts (that old file reads back as `90 A-`).
 
+**Screen "05 - Export dialog" (node 11:723) is implemented** as `components/ExportDialog.tsx`,
+opened by the Export button on Review. In the design it is not a page: a scrim with a 600x780
+dialog over screen 04, so it is a modal here too.
+Export **copies** finished files; it never re-renders. Three panels of the design mean something
+slightly different because of that, and the dialog says so rather than pretending:
+PLATFORM PRESET became `PLATFORM FIT`, which reads the clip's real aspect from `ffprobe` and shows
+which platforms it already fits (9:16 -> TikTok, Reels, Shorts; YouTube dimmed with "needs a
+re-render at 16:9"); it is drawn in `accent-soft`, not filled accent, so four lit buttons do not
+read as four selected ones. "Burn captions" is on and locked, because captions are burned at
+render. "Add brand logo" is Phase 3, dimmed and badged like the Home presets.
+Resolution and Quality are the file's own numbers (`media.probe_video`, one `ffprobe` on the first
+clip): the design mock says "30 fps · 12 Mbps" and the real clips say 29.97 fps and 6.0 Mbps.
+The file-name field is read-only and states the rule (`{clip_no} - {title}.mp4`) instead of
+offering a template, since the number is what keeps sorting by name equal to the ranking.
+The preview asks for `mp4,srt,vtt` once and the subtitle toggle filters client-side, so flipping it
+does not re-ask the sidecar. After copying, the dialog shows the real path, the file names written
+and an Open folder button (`POST /reveal`).
+Measured through Playwright against the real sidecar on `Taylor_Tomlinson`: the dialog opens with
+5 clips ticked, `PLATFORM FIT · 9:16`, `1080 × 1920 · 29.97 fps`, `H264 · 6.0 Mbps`, footer
+"5 videos + 10 subtitle files · 118.7 MB"; unticking four and exporting wrote
+`01 - Comedy vs. Real Life.mp4/.srt/.vtt` (26.5 MB) with no console errors and no failed requests.
+`ui/scripts/shot.mjs` now opens the dialog on every run and takes `--export-to <dir>` to do a real
+copy somewhere other than `~/Videos`.
+
+One thing this screen fixed: `/projects` counted every clip in `clips.json`, including ones that
+were never rendered, so `sample_5s` (a `clips.json` with no `clips/` folder at all) showed READY
+and a thumbnail request that 404'd on every load; it now counts only clips with an `.mp4`.
+
 ## Later phases (context only — do not build yet)
 
 - Phase 2: MediaPipe face tracking reframe, bilingual EN + Khmer subtitles, interview Q&A finder, long video → 10 clips.

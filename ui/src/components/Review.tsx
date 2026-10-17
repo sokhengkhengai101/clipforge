@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { clipFileUrl, clipThumbUrl, type Clip, type Grades } from '../api'
 import { parseVtt, type Cue } from '../vtt'
 import { Badge } from './Badge'
+import { ExportDialog } from './ExportDialog'
 import rerunIcon from '../assets/figma/rerun.svg'
 import exportIcon from '../assets/figma/export.svg'
 import applyIcon from '../assets/figma/apply.svg'
@@ -34,6 +35,7 @@ export function Review({
   busy: boolean
 }) {
   const [selected, setSelected] = useState(clips[0]?.index ?? 1)
+  const [exporting, setExporting] = useState(false)
   const clip = clips.find((c) => c.index === selected) ?? clips[0]
   const video = useRef<HTMLVideoElement>(null)
 
@@ -41,6 +43,7 @@ export function Review({
 
   return (
     <div className="flex h-full min-w-0 flex-1 flex-col overflow-hidden">
+      {exporting && <ExportDialog project={project} onClose={() => setExporting(false)} />}
       <header className="flex items-center gap-3 border-b border-border-default px-6 py-3.5">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
@@ -61,14 +64,13 @@ export function Review({
           <img src={rerunIcon} alt="" width={16} height={16} />
           {busy ? 'Rendering...' : 'Re-render clips'}
         </button>
-        <a
-          href={clipFileUrl(project, clip.index, 'mp4')}
-          download
+        <button
+          onClick={() => setExporting(true)}
           className="flex items-center gap-2 rounded-sm bg-accent px-4 py-2.5 text-body-strong text-on-accent"
         >
           <img src={exportIcon} alt="" width={16} height={16} />
-          Download clip {clip.index}
-        </a>
+          Export clips
+        </button>
       </header>
 
       <div className="flex min-h-0 flex-1">

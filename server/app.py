@@ -141,12 +141,16 @@ def list_projects() -> list[dict]:
         found = clips_of_project(folder)
         if not found:
             continue
+        # រាប់តែ clip ដែល **render រួច**: `clips.json` ជាបញ្ជីដែល LLM ជ្រើស ហើយ
+        # វាអាចមានមុន render ទាល់តែសោះ (`sample_5s` មាន clips.json តែគ្មាន
+        # folder `clips/`). បើរាប់ទាំងនោះ ការ៉េបង្ហាញ READY រួច Review បើកទទេ.
+        rendered = sum(1 for clip in found if clip.get("files", {}).get("mp4"))
         projects.append({
             "id": -len(projects) - 1,          # លេខអវិជ្ជមាន = មិនមានក្នុង database
             "name": folder.name,
             "video": "",                        # មិនដឹង path ដើមទេ
             "created": folder.stat().st_mtime,
-            "clips": len(found),
+            "clips": rendered,
             "jobs": 0,
             "last_state": None,
         })
@@ -251,9 +255,14 @@ def export_preview(name: str, kinds: str = "mp4") -> dict:
     """
     chosen = _export_kinds(kinds.split(","))
     items = _export_plan(name, chosen, None)
+    # ទំហំ/fps/codec ពិតមកពី clip ទីមួយ — dialog បង្ហាញវាជា "Resolution"/"Quality",
+    # ហើយលេខទាំងនោះត្រូវជារបស់ file មិនមែនជារបស់ config.
+    first = next((file["source"] for item in items for file in item["files"]
+                  if file["kind"] == "mp4"), None)
     return {
         "name": name,
         "destination": str(export.default_destination(name)),
+        "format": media.probe_video(Path(first)) if first else None,
         "clips": items,
         "bytes": sum(file["bytes"] for item in items for file in item["files"]),
         "mb": round(sum(file["bytes"] for item in items

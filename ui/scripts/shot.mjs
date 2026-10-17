@@ -1,6 +1,6 @@
 // ថតរូប UI ដោយ browser ពិត (Playwright) ហើយរាយបញ្ហាដែលឃើញ.
 //   node scripts/shot.mjs <folder> [--job]
-// --job ចុច Start (រត់ pipeline ពិត). បើគ្មាន វាថតតែ home និង review.
+// --job ចុច Start (រត់ pipeline ពិត). បើគ្មាន វាថតតែ home, review និង export.
 import { chromium } from 'playwright'
 
 const outDir = process.argv[2]
@@ -49,6 +49,48 @@ if (await project.count()) {
     thumbs: [...document.querySelectorAll('img[src*="thumb"]')].map((i) => i.naturalWidth > 0),
   }))
   console.log('review:', JSON.stringify(review))
+
+  // Screen 05: បើក dialog Export រួចអានអ្វីដែលវាបង្ហាញពិត
+  await page.getByRole('button', { name: /Export clips/ }).click()
+  await page.waitForTimeout(1500)
+  await page.screenshot({ path: `${outDir}/export.png` })
+  const dialog = await page.evaluate(() => {
+    const box = document.querySelector('[role="dialog"]')
+    if (!box) return null
+    const lines = box.innerText.split(/\r?\n/)
+    // label និងតម្លៃអាចមានបន្ទាត់ទទេរវាងគ្នា -> យកបន្ទាត់មិនទទេបន្ទាប់
+    const after = (label) => {
+      const at = lines.indexOf(label)
+      return at < 0 ? null : (lines.slice(at + 1).find((line) => line.trim()) ?? null)
+    }
+    return {
+      title: lines[0],
+      clipRows: box.querySelectorAll('button').length,
+      ticked: [...box.querySelectorAll('img')].filter((i) => i.width === 12).length,
+      fit: lines.find((line) => line.startsWith('PLATFORM FIT')) ?? null,
+      resolution: after('Resolution'),
+      quality: after('Quality'),
+      folder: box.querySelector('input')?.value ?? null,
+      footer: lines.find((line) => /MB$/.test(line)) ?? null,
+    }
+  })
+  console.log('export dialog:', JSON.stringify(dialog))
+
+  // --export-to <dir>: ចម្លងពិតតែ clip ទី១ ចូល folder ដែលប្រាប់ (មិនមែន Videos/).
+  const target = process.argv[process.argv.indexOf('--export-to') + 1]
+  if (process.argv.includes('--export-to') && target) {
+    const rows = page.locator('[role="dialog"] button', { hasText: /^#\d/ })
+    for (let i = 1; i < (await rows.count()); i++) await rows.nth(i).click()
+    await page.locator('[role="dialog"] input').fill(target)
+    await page.getByRole('button', { name: /^Export \d+ clip/ }).click()
+    await page.waitForTimeout(4000)
+    await page.screenshot({ path: `${outDir}/export-done.png` })
+    const done = await page.evaluate(() => {
+      const box = document.querySelector('[role="dialog"]')
+      return box ? box.innerText.split(/\r?\n/).filter((line) => line.trim()) : null
+    })
+    console.log('export done:', JSON.stringify(done))
+  }
 }
 
 if (withJob) {
