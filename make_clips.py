@@ -61,15 +61,20 @@ def clips_table(clips: list) -> Table:
     table.add_column("#", width=2, justify="right")
     table.add_column("ពេល", width=13)
     table.add_column("វិ.", width=4, justify="right")
-    table.add_column("score", width=5, justify="right")
+    table.add_column("score", width=7, justify="right")
+    table.add_column("H/F/V", width=10)
     table.add_column("type", width=10)
     table.add_column("title")
     for i, clip in enumerate(clips, start=1):
+        grades = ("/".join(d.letter for d in (clip.grades.hook, clip.grades.flow,
+                                              clip.grades.value))
+                  if clip.grades else "-")
         table.add_row(
             str(i),
             f"{mmss(clip.start)} - {mmss(clip.end)}",
             f"{clip.duration:.0f}",
-            f"{clip.score:.0f}",
+            f"{clip.total:.0f} {clip.letter}",
+            grades,
             clip.type,
             clip.title,
         )

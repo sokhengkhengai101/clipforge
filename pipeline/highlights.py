@@ -34,6 +34,71 @@ class HighlightsError(RuntimeError):
     """រកមិនបាន highlight ឬ LLM បរាជ័យទាំងអស់."""
 
 
+# ---------- ពិន្ទុតាមវិមាត្រ (rubric) ----------
+
+# ទម្ងន់ពីការស្រាវជ្រាវ: hook .35, flow .25, value .30, trend .10។ យើងទម្លាក់
+# `trend` (ទម្ងន់ 0) ព្រោះវាត្រូវការទិន្នន័យខាងក្រៅ (អ្វីកំពុងល្បី) ដែល model
+# ក្នុងម៉ាស៊ីនមិនអាចដឹង — វានឹងទាយ។ ទម្ងន់ដែលនៅសល់ត្រូវធ្វើមាត្រដ្ឋានឡើងវិញ។
+RUBRIC_WEIGHTS = {"hook": 0.35, "flow": 0.25, "value": 0.30}
+
+# តារាងអក្សរពីការស្រាវជ្រាវ (§3.6)
+GRADE_TABLE = ((93, "A"), (88, "A-"), (83, "B+"), (78, "B"), (73, "B-"),
+               (68, "C+"), (63, "C"), (58, "C-"), (0, "D"))
+
+
+def letter_for(value: float) -> str:
+    """បម្លែងពិន្ទុ 0-100 ទៅជាអក្សរ. 87 -> "A-"."""
+    return next(letter for threshold, letter in GRADE_TABLE if value >= threshold)
+
+
+class Dimension(BaseModel):
+    """ពិន្ទុមួយវិមាត្រ + មូលហេតុខ្លីសម្រាប់បង្ហាញក្នុង UI."""
+
+    score: float = 50.0
+    reason: str = ""
+
+    @field_validator("score", mode="before")
+    @classmethod
+    def _clamp(cls, value: object) -> float:
+        try:
+            return min(100.0, max(0.0, float(value)))
+        except (TypeError, ValueError):
+            return 50.0
+
+    @field_validator("reason", mode="before")
+    @classmethod
+    def _clean(cls, value: object) -> str:
+        return " ".join(str(value or "").split())
+
+    @property
+    def letter(self) -> str:
+        return letter_for(self.score)
+
+
+class Grades(BaseModel):
+    """Hook / Flow / Value — ការវិនិច្ឆ័យក្នុងមួយវិមាត្រ.
+
+    **ហេតុអ្វីវិមាត្រច្រើនជាងពិន្ទុតែមួយ?** វាស់ពិត: ជាមួយ `score` 1-10 តែមួយ
+    model ប្រើតែ 8 និង 9 (sd 0.40) ដូច្នេះការតម្រៀបស្ទើរគ្មានព័ត៌មាន។ វិមាត្រ
+    នីមួយៗមាននិយមន័យដាច់ដោយឡែក ដូច្នេះវាបែងចែកបានល្អជាង។
+    """
+
+    hook: Dimension = Dimension()
+    flow: Dimension = Dimension()
+    value: Dimension = Dimension()
+
+    @property
+    def total(self) -> float:
+        """ពិន្ទុរួម 0-100 (ទម្ងន់ធ្វើមាត្រដ្ឋានឲ្យបូកបាន 1.0)."""
+        weight_sum = sum(RUBRIC_WEIGHTS.values())
+        return round(sum(getattr(self, name).score * weight
+                         for name, weight in RUBRIC_WEIGHTS.items()) / weight_sum)
+
+    @property
+    def letter(self) -> str:
+        return letter_for(self.total)
+
+
 class Clip(BaseModel):
     """clip មួយដែល LLM ស្នើ (ក្រោយ validate រួច)."""
 
@@ -44,6 +109,7 @@ class Clip(BaseModel):
     type: str = "insight"
     score: float = 5.0
     reason: str = ""
+    grades: Grades | None = None          # `None` = candidate ចាស់ពីមុន rubric
 
     @field_validator("type", mode="before")
     @classmethod
@@ -77,9 +143,25 @@ class Clip(BaseModel):
             raise ValueError("title is empty")
         return self
 
+    @model_validator(mode="after")
+    def _score_from_grades(self) -> "Clip":
+        """បើមាន rubric ប្រើវាជាប្រភពពិតនៃពិន្ទុ (score ចាស់ 1-10 នៅដំណើរការ)."""
+        if self.grades is not None:
+            object.__setattr__(self, "score", round(self.grades.total / 10, 1))
+        return self
+
     @property
     def duration(self) -> float:
         return self.end - self.start
+
+    @property
+    def total(self) -> float:
+        """ពិន្ទុ 0-100 ដូច OpusClip បង្ហាញ."""
+        return self.grades.total if self.grades else round(self.score * 10)
+
+    @property
+    def letter(self) -> str:
+        return letter_for(self.total)
 
 
 def full_video_clip(duration: float, title: str = "full") -> Clip:

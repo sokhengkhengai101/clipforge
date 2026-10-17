@@ -449,3 +449,78 @@ def test_full_video_clip_bypasses_the_duration_limit():
     assert clip.duration == 5000.0
     with pytest.raises(ValidationError):
         H.Clip(start=0.0, end=5000.0, title="x")      # ផ្លូវធម្មតានៅតែបដិសេធ
+
+
+# ---------- rubric (Hook / Flow / Value) ----------
+
+def test_letter_table_matches_the_research_thresholds():
+    assert H.letter_for(95) == "A"
+    assert H.letter_for(93) == "A"
+    assert H.letter_for(92) == "A-"
+    assert H.letter_for(87) == "B+"
+    assert H.letter_for(0) == "D"
+
+
+def test_total_is_weighted_not_averaged():
+    """hook មានទម្ងន់ធ្ងន់ជាងគេ — clip ដែល hook ខ្ពស់ត្រូវឈ្នះ."""
+    strong_hook = H.Grades(hook=H.Dimension(score=100), flow=H.Dimension(score=60),
+                           value=H.Dimension(score=60))
+    strong_value = H.Grades(hook=H.Dimension(score=60), flow=H.Dimension(score=60),
+                            value=H.Dimension(score=100))
+    assert strong_hook.total > strong_value.total
+
+
+def test_total_is_zero_to_hundred():
+    full = H.Grades(hook=H.Dimension(score=100), flow=H.Dimension(score=100),
+                    value=H.Dimension(score=100))
+    assert full.total == 100 and full.letter == "A"
+
+
+def test_clip_score_follows_the_rubric():
+    """`score` ចាស់ (1-10) ត្រូវតាម rubric ដើម្បីឲ្យកូដចាស់នៅដំណើរការ."""
+    clip = H.Clip(start=0, end=30, title="t",
+                  grades=H.Grades(hook=H.Dimension(score=90), flow=H.Dimension(score=90),
+                                value=H.Dimension(score=90)))
+    assert clip.total == 90
+    assert clip.score == pytest.approx(9.0, abs=0.05)
+
+
+def test_old_clip_without_grades_still_works():
+    """candidate ដែល cache ទុកមុន rubric មិនត្រូវដាច់ទេ."""
+    clip = H.Clip(start=0, end=30, title="t", score=8)
+    assert clip.grades is None
+    assert clip.total == 80 and clip.letter == "B"
+
+
+def test_grades_survive_a_cache_round_trip(tmp_path):
+    clip = H.Clip(start=0, end=30, title="t",
+                  grades=H.Grades(hook=H.Dimension(score=92, reason="bold first line"),
+                                flow=H.Dimension(score=70),
+                                value=H.Dimension(score=85)))
+    path = H.save_clips([clip], tmp_path / "c.json", model="m", prompt="p")
+    again = H.load_clips(path)
+    assert again is not None
+    assert again[0].grades.hook.score == 92
+    assert again[0].grades.hook.reason == "bold first line"
+    assert again[0].total == clip.total
+
+
+def test_bad_dimension_values_do_not_crash():
+    """LLM អាចឆ្លើយ "high" ឬ 150 — យើងត្រូវទប់."""
+    grades = H.Grades(hook=H.Dimension(score="high"), flow=H.Dimension(score=150),
+                      value=H.Dimension(score=-20))
+    assert grades.hook.score == 50.0
+    assert grades.flow.score == 100.0
+    assert grades.value.score == 0.0
+
+
+def test_parse_clips_reads_grades_from_the_llm():
+    data = {"clips": [{"start": 10, "end": 40, "title": "t", "type": "story",
+                       "grades": {"hook": {"score": 88, "reason": "opens on a claim"},
+                                  "flow": {"score": 75, "reason": "ends softly"},
+                                  "value": {"score": 90, "reason": "real story"}}}]}
+    clips = H.parse_clips(data, video_duration=600.0)
+    assert len(clips) == 1
+    assert clips[0].grades.hook.letter == "A-"
+    assert clips[0].total == H.Grades(hook=H.Dimension(score=88), flow=H.Dimension(score=75),
+                                      value=H.Dimension(score=90)).total

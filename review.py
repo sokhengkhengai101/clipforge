@@ -106,7 +106,8 @@ def main(
     table.add_column("#", width=2, justify="right")
     table.add_column("ពេលក្នុង video", width=14)
     table.add_column("វិ.", width=4, justify="right")
-    table.add_column("score", width=5, justify="right")
+    table.add_column("score", width=7, justify="right")
+    table.add_column("H/F/V", width=10)
     table.add_column("type", width=10)
     table.add_column("MB", width=5, justify="right")
     table.add_column("title")
@@ -120,8 +121,12 @@ def main(
             size_text = f"{size_mb:.1f}"
         else:
             size_text = "[red]-[/red]"
+        grades = ("/".join(d.letter for d in (clip.grades.hook, clip.grades.flow,
+                                              clip.grades.value))
+                  if clip.grades else "-")
         table.add_row(str(index), f"{mmss(clip.start)} - {mmss(clip.end)}",
-                      f"{clip.duration:.0f}", f"{clip.score:.0f}", clip.type,
+                      f"{clip.duration:.0f}", f"{clip.total:.0f} {clip.letter}",
+                      grades, clip.type,
                       size_text, clip.title)
     console.print()
     console.print(table)
@@ -150,7 +155,7 @@ def main(
         for index, clip in enumerate(clips, start=1):
             console.print(f"\n[bold]#{index}  {clip.title}[/bold]  "
                           f"[dim]{mmss(clip.start)}-{mmss(clip.end)} "
-                          f"({clip.duration:.0f}s, score {clip.score:.0f})[/dim]")
+                          f"({clip.duration:.0f}s, {clip.total:.0f}/100 {clip.letter})[/dim]")
             if clip.hook:
                 console.print(f"  [cyan]hook:[/cyan] {clip.hook}")
             if clip.reason:

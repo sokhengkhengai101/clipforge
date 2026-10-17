@@ -43,6 +43,16 @@ Pipeline (one module per step, in `pipeline/`):
    of them ("Yeah, so yeah, please go back..." opens on "please"). Padding is clamped to word
    boundaries, not sentence boundaries, or the 0.3 s lands inside the filler word and the viewer
    hears its tail. Measured: podcast clips opening on filler 3/15 -> 0/15, interview 0/14 either way.
+   Candidates carry a **rubric** instead of one number: `grades.hook / .flow / .value`, each 0-100
+   with a reason, weighted 0.35/0.25/0.30 into a score out of 100 and letter grades computed in
+   code (`letter_for`), which is the OpusClip clip card. `trend` is left out: it needs outside data
+   about what is topical, which a local model would only guess.
+   It did **not** fix score inflation, which is why it was built. Measured on the same podcast: one
+   1-10 score gave only 8 and 9 across 15 candidates (sd 0.40, i.e. 4.0 out of 100), while the
+   rubric gives 80-86 across 9 (sd **2.36**) -- averaging three clustered numbers has *less* spread
+   than one. The second-pass `rank_clips` is still what orders clips. What the rubric does buy is
+   the explanation: per-dimension letters and reasons. It costs about 70% more time in the
+   highlights step (182-230 s per chunk against ~126 s), because the model writes more JSON.
 5. `captions.py` — build `.ass` subtitle file per clip (≤ 2 lines, ≤ 32 chars/line, keyword highlight in #FFD23F)
 6. `render.py` — FFmpeg: trim → center-crop 9:16 → scale 1080×1920 → burn ASS → H.264 MP4
 

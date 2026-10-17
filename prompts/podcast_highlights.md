@@ -1,4 +1,4 @@
-# Podcast highlights prompt — v4
+# Podcast highlights prompt — v5
 
 Prompt នេះមាន version ដើម្បីដឹងថា clip ល្អ/អាក្រក់មកពី prompt ណា។
 កែវា -> ដំឡើងលេខ version ហើយកត់ចំណាំនៅខាងក្រោម។
@@ -70,9 +70,16 @@ other's company is not a joke. Banter with no punchline plays as noise on a phon
 - `title`: 3-8 words describing the moment. No clickbait punctuation.
 - `hook`: the clip's own opening words, quoted or lightly tightened. Under 12 words.
 - `type`: one of `story`, `insight`, `howto`, `contrarian`, `question`, `funny`.
-- `score`: 1-10, how likely a stranger watches it to the end. Be strict and use the whole range:
-  9-10 only for something you would bet on going viral, 7-8 for a solid clip, 5-6 for "fine but
-  forgettable", below 5 for anything you would not post.
+- `grades`: three separate judgements, each 0-100 with a reason under 20 words. Score each one on
+  its own question -- a clip can open brilliantly and end badly, and the numbers should say so.
+  - `hook`: do the first three seconds make a stranger stay? A question, a bold claim, conflict or
+    surprise scores high; "so, um, today we" scores low.
+  - `flow`: is it one complete thought, cleanly started and finished? Dangling references ("like I
+    said"), a mid-sentence start or an abrupt end score low.
+  - `value`: does it inform, entertain or move someone? An insight, a story with a turn, real
+    laughter or a usable tip score high; chatter with no point scores low.
+  Use the whole range. 90+ means you would bet on it; 75 is solid; 50 is forgettable; below 40 is
+  something you would not post. If every clip gets the same number, the scores are useless.
 - `reason`: quote the payoff sentence from the transcript in full, word for word, inside double
   quotes, then say in a few words why it lands. A fragment of two or three words is not a sentence.
   If you cannot find that sentence, the clip is not ready — leave it out.
@@ -88,7 +95,11 @@ Return ONLY valid JSON in exactly this shape:
       "title": "Why most AI agents fail",
       "hook": "Everyone builds agents backwards.",
       "type": "contrarian",
-      "score": 8,
+      "grades": {
+        "hook":  {"score": 92, "reason": "Opens on a flat contradiction, no setup"},
+        "flow":  {"score": 80, "reason": "Complete argument, ending slightly soft"},
+        "value": {"score": 85, "reason": "Concrete cost figure backs the claim"}
+      },
       "reason": "Pays off on 'they built the whole thing twice' — the cost lands as a number."
     }
   ]
@@ -118,6 +129,10 @@ Return ONLY valid JSON in exactly this shape:
   * `funny` ត្រូវមាន punchline ដែលហៅឈ្មោះបាន មិនមែនត្រឹមការនិយាយលេងរីករាយ
   * បដិសេធការឆ្លើយតបខ្លីៗជាប់គ្នា ("Yeah. Yeah. Yeah.") និងរឿងប្រចាំថ្ងៃគ្មានមតិ
   * `reason` ត្រូវ **ដកស្រង់ប្រយោគ** ដែលធ្វើឲ្យ clip ចប់ — បើរកមិនឃើញ កុំយក clip នោះ
+- v5 (2026-10-18): ពិន្ទុតែមួយ 1-10 ផ្តល់ sd ត្រឹម 0.40 (model ប្រើតែ 8 និង 9 លើ
+  candidate ១៥) ដូច្នេះការតម្រៀបស្ទើរគ្មានព័ត៌មាន។ ប្តូរទៅ rubric ៣ វិមាត្រ
+  (hook/flow/value) 0-100 ក្នុងមួយវិមាត្រ + មូលហេតុខ្លី។ អក្សរ (A, B+...) គណនា
+  ក្នុង code ព្រោះ LLM មិនស៊ីសង្វាក់ពេលដាក់អក្សរដោយខ្លួនឯង។
   * ក្រោយសាក v4 លើ chunk ពិត៖ model កាត់ clip ខ្លីទៅ ១៤ វិនាទី (ក្រោមអប្បបរមា) ដើម្បី
     ទៅដល់ចំណុចបញ្ចប់លឿន ហើយដកស្រង់តែពាក្យ ("classy") -> បន្ថែមច្បាប់ថា punchline
     ត្រូវមានការសាងសង់មុន និងតម្រូវឲ្យដកស្រង់**ប្រយោគពេញ**
