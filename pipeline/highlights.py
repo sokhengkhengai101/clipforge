@@ -367,8 +367,15 @@ def save_clips(clips: list[Clip], path: Path, *, model: str, prompt: str) -> Pat
     return path
 
 
-def load_clips(path: Path) -> list[Clip] | None:
-    """អាន cache មកវិញ. ត្រឡប់ None បើគ្មាន/ខូច/ចាស់."""
+def load_clips(path: Path, any_version: bool = False) -> list[Clip] | None:
+    """អាន cache មកវិញ. ត្រឡប់ None បើគ្មាន/ខូច/ចាស់.
+
+    `any_version=True` អាន cache ចាស់ដែរ. វាមានពីរអត្ថន័យខុសគ្នា៖ ក្នុង
+    pipeline, version ចាស់ = "រត់ LLM ម្តងទៀត" ដូច្នេះ None ជាចម្លើយត្រូវ;
+    តែសម្រាប់ **បង្ហាញ** clip ដែល render រួចហើយ (UI, review.py), ការបដិសេធ
+    ធ្វើឲ្យ project ចាស់មើលមិនឃើញទាំងស្រុង ទោះ .mp4 មានពេញលើ disk. Schema
+    ទ្រាំបាន៖ clip មុន rubric គ្មាន `grades` ហើយ `Clip` ទទួលវាធម្មតា.
+    """
     path = Path(path)
     if not path.is_file():
         return None
@@ -376,7 +383,7 @@ def load_clips(path: Path) -> list[Clip] | None:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError):
         return None
-    if data.get("cache_version") != CACHE_VERSION:
+    if not any_version and data.get("cache_version") != CACHE_VERSION:
         return None
     try:
         return [Clip(**c) for c in data["clips"]]

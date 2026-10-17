@@ -231,6 +231,26 @@ def test_load_clips_old_version(tmp_path):
     assert H.load_clips(path) is None
 
 
+def test_load_clips_any_version_is_for_display(tmp_path):
+    """Project ចាស់ (cache v2) មិនត្រូវមើលមិនឃើញក្នុង UI ទេ — .mp4 មានលើ disk.
+
+    cache ចាស់ = "រត់ LLM ម្តងទៀត" សម្រាប់ pipeline, តែ = "បង្ហាញវា" សម្រាប់ UI.
+    """
+    path = H.save_clips([make_clip(0, 30, title="ចាស់")], tmp_path / "h.json",
+                        model="m", prompt="p")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["cache_version"] = 2                 # ដូច clips.json ពិតលើម៉ាស៊ីននេះ
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    assert H.load_clips(path) is None                      # pipeline: រត់ម្តងទៀត
+    shown = H.load_clips(path, any_version=True)            # UI: បង្ហាញ
+    assert shown is not None and shown[0].title == "ចាស់"
+    # JSON ខូចនៅតែ None ទោះ any_version
+    bad = tmp_path / "bad.json"
+    bad.write_text("{", encoding="utf-8")
+    assert H.load_clips(bad, any_version=True) is None
+
+
 # ---------- find_highlights (LLM ត្រូវ mock) ----------
 
 def fake_llm_response(*args, **kwargs):

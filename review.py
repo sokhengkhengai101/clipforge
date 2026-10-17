@@ -94,7 +94,7 @@ def main(
     out_dir = resolve_output_dir(name)
     clips_dir = out_dir / "clips"
 
-    clips = load_clips(out_dir / "clips.json")
+    clips = load_clips(out_dir / "clips.json", any_version=True)   # មើល, មិនមែន cache
     if not clips:
         console.print(f"[red]គ្មាន clips.json ក្នុង {out_dir}[/red] — run make_clips.py សិន")
         raise typer.Exit(code=1)

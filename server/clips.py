@@ -10,7 +10,9 @@ SIDECAR_SUFFIXES = ("mp4", "ass", "srt", "vtt")
 def clips_of_project(out_dir: Path) -> list[dict]:
     """បញ្ជី clip ជា dict ធម្មតា. ទទេ បើគ្មាន `clips.json`."""
     out_dir = Path(out_dir)
-    clips = load_clips(out_dir / "clips.json")
+    # any_version: UI បង្ហាញ clip ដែលមានលើ disk — cache ចាស់មិនមែនជាមូលហេតុ
+    # លាក់ project ទេ (ឃើញពិត៖ 4 ក្នុង 6 project លើម៉ាស៊ីននេះជា version 2).
+    clips = load_clips(out_dir / "clips.json", any_version=True)
     if not clips:
         return []
 
