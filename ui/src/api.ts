@@ -58,6 +58,10 @@ async function send<T>(path: string, method = 'GET', body?: unknown): Promise<T>
   return (await answer.json()) as T
 }
 
+export type Dimension = { score: number; letter: string; reason: string }
+
+export type Grades = { hook: Dimension; flow: Dimension; value: Dimension }
+
 export type Clip = {
   index: number
   start: number
@@ -68,6 +72,7 @@ export type Clip = {
   type: string
   total: number
   letter: string
+  grades: Grades | null
   reason: string
   files: Record<string, string>
 }
@@ -77,6 +82,8 @@ export type JobOptions = {
   max_clips?: number
   full?: boolean
   redo?: string
+  caption_words?: number
+  caption_color?: string
 }
 
 export const api = {
@@ -89,6 +96,15 @@ export const api = {
     send<{ name: string; clips: Clip[] }>(`/projects/${encodeURIComponent(name)}/clips`)
       .then((answer) => answer.clips)
       .catch(() => [] as Clip[]),
+}
+
+/** URL របស់ file មួយក្នុង clip — `<video src>` និង `<img src>` ប្រើវាផ្ទាល់. */
+export function clipFileUrl(project: string, index: number, kind: string): string {
+  return `/api/projects/${encodeURIComponent(project)}/clips/${index}/file?kind=${kind}`
+}
+
+export function clipThumbUrl(project: string, index: number): string {
+  return `/api/projects/${encodeURIComponent(project)}/clips/${index}/thumb`
 }
 
 /** URL របស់ WebSocket. `location.host` = 5173, ហើយ proxy បញ្ជូនបន្តទៅ 8765. */

@@ -3,6 +3,7 @@ import { api, type Clip, type Health, type Video } from './api'
 import { useJob } from './useJob'
 import { Badge } from './components/Badge'
 import { Processing } from './components/Processing'
+import { Review } from './components/Review'
 import { Sidebar } from './components/Sidebar'
 import { TitleBar } from './components/TitleBar'
 import plus from './assets/figma/plus.svg'
@@ -14,7 +15,9 @@ export default function App() {
   const [maxClips, setMaxClips] = useState(5)
   const [clips, setClips] = useState<Clip[]>([])
   const [error, setError] = useState('')
-  const [showJob, setShowJob] = useState(false)
+  const [view, setView] = useState<'home' | 'job' | 'review'>('home')
+  const [captionWords, setCaptionWords] = useState(5)
+  const [captionColor, setCaptionColor] = useState('#FFD23F')
   const job = useJob()
 
   useEffect(() => {
@@ -27,22 +30,32 @@ export default function App() {
       .catch((e: Error) => setError(e.message))
   }, [])
 
-  // clip មានតែក្រោយជំហាន render — សួរមុននោះគ្រាន់តែទទួល 404
+  // clip មានតែក្រោយ render — សួរពេលប្តូរវីដេអូ និងពេល job ដល់ជំហាននោះ
   const projectName = chosen ? stemOf(chosen.name) : ''
   const rendered = job.status?.progress.done.includes('render') ?? false
   useEffect(() => {
-    if (!projectName || !rendered) {
-      setClips([])
-      return
-    }
+    if (!projectName) return
     api.clips(projectName).then(setClips)
   }, [projectName, rendered, job.status?.state])
 
   const start = useCallback(() => {
     if (!chosen) return
-    setShowJob(true)
+    setView('job')
     job.start({ video: chosen.path, max_clips: maxClips })
   }, [chosen, maxClips, job])
+
+  /** ប្តូរ style caption រួច render ជាថ្មី — មិន transcribe ឡើងវិញទេ. */
+  const rerender = useCallback(() => {
+    if (!chosen) return
+    setView('job')
+    job.start({
+      video: chosen.path,
+      max_clips: maxClips,
+      redo: 'render',
+      caption_words: captionWords,
+      caption_color: captionColor,
+    })
+  }, [chosen, maxClips, captionWords, captionColor, job])
 
   const title = chosen ? `ClipForge Studio — ${chosen.name}` : 'ClipForge Studio'
 
@@ -52,7 +65,7 @@ export default function App() {
       <div className="flex min-h-0 flex-1">
         <Sidebar device={health?.device ?? '...'} ffmpeg={health?.ffmpeg ?? false} />
 
-        {showJob && job.status ? (
+        {view === 'job' && job.status ? (
           <Processing
             status={job.status}
             log={job.log}
@@ -60,7 +73,19 @@ export default function App() {
             videoName={chosen?.name ?? ''}
             error={job.error}
             onCancel={job.cancel}
-            onBack={() => setShowJob(false)}
+            onReview={() => setView('review')}
+            onBack={() => setView('home')}
+          />
+        ) : view === 'review' && clips.length > 0 ? (
+          <Review
+            project={projectName}
+            clips={clips}
+            captionWords={captionWords}
+            captionColor={captionColor}
+            onCaptionWords={setCaptionWords}
+            onCaptionColor={setCaptionColor}
+            onRerender={rerender}
+            busy={job.running}
           />
         ) : (
           <Home
@@ -73,6 +98,8 @@ export default function App() {
             health={health}
             error={error || job.error}
             busy={job.running}
+            clips={clips}
+            onReview={() => setView('review')}
           />
         )}
       </div>
@@ -90,6 +117,8 @@ function Home({
   health,
   error,
   busy,
+  clips,
+  onReview,
 }: {
   videos: Video[]
   chosen: Video | null
@@ -100,6 +129,8 @@ function Home({
   health: Health | null
   error: string
   busy: boolean
+  clips: Clip[]
+  onReview: () => void
 }) {
   return (
     <div className="flex h-full min-w-0 flex-1 flex-col gap-5 overflow-auto px-8 py-6">
@@ -123,6 +154,14 @@ function Home({
             className="w-16 rounded-sm border border-border-default bg-bg-card px-2 py-1.5 text-body text-text-primary"
           />
         </label>
+        {clips.length > 0 && (
+          <button
+            onClick={onReview}
+            className="rounded-sm border border-border-default bg-bg-card px-4 py-2.5 text-body-strong text-text-primary"
+          >
+            Review {clips.length} clips
+          </button>
+        )}
         <button
           onClick={onStart}
           disabled={!chosen || busy}

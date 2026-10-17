@@ -282,12 +282,29 @@ of the design hold different content: the design's 8 pipeline steps are our 6 (i
 with Silero VAD and "Identify speakers" with pyannote are Phase 2), its "Live transcript" is our
 pipeline log, and its SPEAKERS / GPU LOAD stats are STATE / ELAPSED / LOG LINES / CLIPS, because
 those are numbers we actually have. The sidebar's other pages are drawn but inert.
-`ui/scripts/shot.mjs` (Playwright, a dev dependency) opens the page at 1440x900, clicks Start and
-writes `home.png` and `processing.png`, reporting console errors, failed requests and every
-icon's rendered size -- that is how the screen was checked against the Figma render rather than
-assumed. Measured on the last run: all 22 icons load at their design sizes, no console errors, and
-the WebSocket filled the log (19 lines at 9 s) while the steps showed 4 cached and `captions`
-active.
+`ui/scripts/shot.mjs` (Playwright, a dev dependency) drives the page in a real browser at
+1440x900 and reports console errors, failed requests, every icon's rendered size and what the
+Review screen actually loaded -- that is how these screens were checked against the Figma render
+rather than assumed. `--job` also clicks Start and screenshots a run. Measured on the last run:
+27 icons load, 5 thumbnails, the video reports 1080x1920, 28 cues parsed, no console errors and
+no failed requests. A cancelled video request (`ERR_ABORTED`) is ignored, since the browser aborts
+the stream whenever the clip changes.
+
+**Screen "04 · Review & Edit" (node 7:2) is implemented** as `components/Review.tsx`: the clip
+list with real thumbnails, the clip playing in a `<video>`, the rubric panel, and the caption
+settings, which start a `--redo render` job rather than only looking like controls.
+It needs three endpoints (`server/media.py`): `GET /projects/{name}/clips/{i}/file?kind=mp4|ass|srt|vtt`,
+and `/thumb`, which runs FFmpeg once and keeps the `.jpg` beside the clip. The URL carries the
+clip **number**, never a path, and the path comes from `clips.json`, so `../` in a URL means
+nothing. `FileResponse` answers Range requests (measured: 206 with 1000 bytes), which is what lets
+the video seek. The transcript under the player is the clip's own `.vtt` parsed in the browser
+(`src/vtt.ts`), and clicking a line seeks the video.
+`GET /projects/{name}/clips` now returns an empty list for a project that has run but has no clips
+yet, and 404 only for a project that does not exist; it used to 404 on every poll before render
+finished and fill the browser console.
+What the design shows and we do not have: the waveform, speaker labels, per-word cutting, the
+Reframe and Cleanup tabs (drawn, inert) and the three toggles. Clips scored before the rubric have
+no `grades`, and the panel says so instead of drawing empty bars.
 
 ## Later phases (context only — do not build yet)
 

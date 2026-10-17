@@ -18,6 +18,7 @@ export function Processing({
   videoName,
   error,
   onCancel,
+  onReview,
   onBack,
 }: {
   status: JobStatus
@@ -26,6 +27,7 @@ export function Processing({
   videoName: string
   error: string
   onCancel: () => void
+  onReview: () => void
   onBack: () => void
 }) {
   const states = stepStates(status.progress, STEPS)
@@ -103,7 +105,7 @@ export function Processing({
 
         <div className="flex w-[440px] shrink-0 flex-col gap-5">
           <LogCard log={log} />
-          <ClipsCard clips={clips} error={error || status.error} />
+          <ClipsCard clips={clips} error={error || status.error} onReview={onReview} />
         </div>
       </div>
     </div>
@@ -142,7 +144,15 @@ function LogCard({ log }: { log: string[] }) {
   )
 }
 
-function ClipsCard({ clips, error }: { clips: Clip[]; error: string }) {
+function ClipsCard({
+  clips,
+  error,
+  onReview,
+}: {
+  clips: Clip[]
+  error: string
+  onReview: () => void
+}) {
   return (
     <section className="flex min-h-0 flex-1 flex-col gap-2.5 rounded-lg border border-border-default bg-bg-panel px-4 py-4">
       <div className="flex w-full items-center gap-2">
@@ -185,8 +195,8 @@ function ClipsCard({ clips, error }: { clips: Clip[]; error: string }) {
 
       {clips.length > 0 && (
         <button
-          disabled
-          className="flex w-full items-center justify-center gap-2 rounded-sm bg-accent px-4 py-2.5 text-body-strong text-on-accent disabled:opacity-60"
+          onClick={onReview}
+          className="flex w-full items-center justify-center gap-2 rounded-sm bg-accent px-4 py-2.5 text-body-strong text-on-accent"
         >
           <img src={reviewIcon} alt="" width={16} height={16} />
           Start reviewing ({clips.length} ready)

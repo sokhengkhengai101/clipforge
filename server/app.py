@@ -13,11 +13,11 @@ import shutil
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 
 import config
-from server import db
+from server import db, media
 from server.clips import clips_of_project
 from server.jobs import PROJECT_ROOT, JobRunner
 
@@ -130,15 +130,49 @@ def cancel_job(job_id: str) -> dict:
     return runner.cancel(job_id).as_dict()
 
 
+def _clips_of(name: str) -> list[dict]:
+    items = clips_of_project(PROJECT_ROOT / "output" / name)
+    return items or db.project_clips(name)
+
+
+@app.get("/projects/{name}/clips/{index}/file")
+def clip_file(name: str, index: int, kind: str = "mp4") -> FileResponse:
+    """បម្រើ `.mp4` (ឬ subtitle) របស់ clip មួយ ឲ្យ `<video>` ក្នុង browser ចាក់បាន.
+
+    `FileResponse` គាំទ្រ HTTP Range ដូច្នេះការរំកិល (seek) ដំណើរការ.
+    """
+    found = media.clip_file(_clips_of(name), index, kind)
+    if found is None:
+        raise HTTPException(status_code=404, detail=f"គ្មាន {kind} សម្រាប់ clip {index}")
+    path, media_type = found
+    return FileResponse(path, media_type=media_type, filename=path.name)
+
+
+@app.get("/projects/{name}/clips/{index}/thumb")
+def clip_thumb(name: str, index: int) -> FileResponse:
+    """រូបតូចមួយពី clip — FFmpeg ដកវាលើកដំបូង រួចរក្សាទុកជា .jpg."""
+    found = media.clip_file(_clips_of(name), index, "mp4")
+    if found is None:
+        raise HTTPException(status_code=404, detail=f"គ្មាន clip {index}")
+    image = media.thumbnail(found[0])
+    if image is None:
+        raise HTTPException(status_code=404, detail="ដក frame មិនបាន")
+    return FileResponse(image, media_type="image/jpeg")
+
+
 @app.get("/projects/{name}/clips")
 def project_clips(name: str) -> dict:
-    """clip ដែល pipeline សរសេររួច — អានពី `clips.json` និង file ជុំវិញវា."""
+    """clip ដែល pipeline សរសេររួច — អានពី `clips.json` និង file ជុំវិញវា.
+
+    Project ដែលធ្លាប់រត់ តែមិនទាន់មាន clip ត្រឡប់បញ្ជីទទេ (200), មិនមែន 404 —
+    UI សួរវាមុនពេល render ចប់ ហើយ 404 រាល់ដងគ្រាន់តែបំពេញ console ដោយ error.
+    """
     items = clips_of_project(PROJECT_ROOT / "output" / name)
     if not items:
         # គ្មាន file -> សាកមើលក្នុង database (folder អាចត្រូវលុប)
         items = db.project_clips(name)
-    if not items:
-        raise HTTPException(status_code=404, detail="គ្មាន clip សម្រាប់ project នេះ")
+    if not items and not (PROJECT_ROOT / "output" / name).is_dir():
+        raise HTTPException(status_code=404, detail="រកមិនឃើញ project នេះ")
     return {"name": name, "clips": items}
 
 

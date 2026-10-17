@@ -5,6 +5,7 @@
 """
 
 import json
+import subprocess
 import time
 from pathlib import Path
 
@@ -106,6 +107,46 @@ def test_progress_reads_files_from_disk(tmp_path):
     assert "captions" in job.progress()["done"]
 
 
+def test_clip_file_is_found_by_index_not_by_path(tmp_path):
+    """URL ប្រាប់តែ**លេខ** clip — path មកពី clips.json ដូច្នេះ `../` គ្មានន័យ."""
+    from server import media
+
+    video = tmp_path / "clip_01.mp4"
+    video.write_bytes(b"x")
+    clips = [{"index": 1, "files": {"mp4": str(video)}},
+             {"index": 2, "files": {}}]
+    found = media.clip_file(clips, 1, "mp4")
+    assert found is not None and found[0] == video and found[1] == "video/mp4"
+    assert media.clip_file(clips, 2, "mp4") is None       # clip មាន តែគ្មាន file
+    assert media.clip_file(clips, 9, "mp4") is None       # គ្មាន clip នេះ
+    assert media.clip_file(clips, 1, "exe") is None       # kind មិនស្គាល់
+
+
+def test_clip_file_endpoint_404s_without_a_project(client):
+    assert client.get("/projects/not-a-project/clips/1/file").status_code == 404
+    assert client.get("/projects/not-a-project/clips/1/thumb").status_code == 404
+
+
+def test_thumbnail_is_cached(tmp_path, monkeypatch):
+    """FFmpeg រត់តែលើកដំបូង — លើកក្រោយប្រើ .jpg ដែលមានស្រាប់."""
+    from server import media
+
+    video = tmp_path / "clip_01.mp4"
+    video.write_bytes(b"x")
+    image = tmp_path / "clip_01.jpg"
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        image.write_bytes(b"jpeg")
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(media.subprocess, "run", fake_run)
+    assert media.thumbnail(video) == image
+    assert media.thumbnail(video) == image
+    assert len(calls) == 1
+
+
 def test_cached_steps_are_not_counted_as_progress(tmp_path, monkeypatch):
     """Marker file ពីការរត់មុនមិនត្រូវបង្ហាញជា 6/6 ភ្លាមក្នុង UI."""
     video = tmp_path / "v.mp4"
@@ -142,6 +183,18 @@ def test_redo_flags_map_to_steps():
 
 def test_clips_endpoint_needs_a_project(client):
     assert client.get("/projects/not-a-project/clips").status_code == 404
+
+
+def test_project_without_clips_yet_returns_an_empty_list(client, tmp_path, monkeypatch):
+    """Project ដែលទើបចាប់ផ្តើម -> 200 និងបញ្ជីទទេ, មិនមែន 404."""
+    empty = J.PROJECT_ROOT / "output" / "empty-project-for-test"
+    empty.mkdir(parents=True, exist_ok=True)
+    try:
+        answer = client.get("/projects/empty-project-for-test/clips")
+        assert answer.status_code == 200
+        assert answer.json()["clips"] == []
+    finally:
+        empty.rmdir()
 
 
 def test_clips_endpoint_returns_grades(client, tmp_path, monkeypatch):
