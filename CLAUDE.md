@@ -269,7 +269,13 @@ reports `cached`, `fresh` and `done`. Measured through the Vite proxy on the wil
 
 **Figma (1E, brought forward).** The design file is read through the Figma MCP server, not by eye:
 `get_metadata` lists the eight screens, `get_variable_defs` gives the real variables, and
-`get_design_context` returns reference code plus a render of a screen. The tokens in
+`get_design_context` returns reference code plus a render of a screen.
+That server is the **claude.ai Figma connector** (account-level, `claude mcp list` shows it as
+connected), not an entry in a project `.mcp.json` -- a second entry pointing at the same
+`https://mcp.figma.com/mcp` only waits for approval and duplicates the tools. MCP tools are
+registered when the process starts, so authorising a connector in `/mcp` does not reach a session
+that is already running: Claude Code has to be restarted (`claude --continue` brings the
+conversation back) before the figma tools can be called. The tokens in
 `src/index.css` are those variables (`bg/app` -> `--color-bg-app`, so the class is `bg-bg-app`),
 including ones CLAUDE.md had never recorded: `bg/hover #2c3140`, `border/default #2e3340`,
 `border/strong #454b5c`, `accent/soft #2a2350`, `text/primary #f2f4f8`, `text/secondary #9aa1b2`,
