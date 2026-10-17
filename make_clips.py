@@ -14,8 +14,8 @@ from rich.table import Table
 import config
 from pipeline.audio import FFmpegError, extract_audio, probe_duration
 from pipeline.boundaries import clip_text, snap_boundaries
-from pipeline.captions import (CaptionError, build_all_captions, build_ass,
-                               resolve_font)
+from pipeline.captions import (CaptionError, build_all_captions, build_ass, check_cues,
+                               resolve_font, wrap_into_cues)
 from pipeline.highlights import (HighlightsError, find_highlights, full_video_clip,
                                  load_clips, rank_clips, save_clips)
 from pipeline.llm import LLMError
@@ -385,6 +385,13 @@ def main(
         )
         console.print(f"[green]✔ 5/6 captions[/green]    {len(ass_files)} .ass ក្នុង "
                       f"{short_path(clips_dir)}  ({cue_count} cues, font={caption_font})")
+        # QA លើ cue ពិត (checklist §12) — ព្រមាន មិនបញ្ឈប់
+        for index, clip in enumerate(final, start=1):
+            words = [w for s in transcript.segments for w in s.words
+                     if w.end > clip.start and w.start < clip.end]
+            troubles = check_cues(wrap_into_cues(words, clip.start))
+            for trouble in troubles[:3]:
+                console.print(f"[yellow]    ⚠ clip {index}: {trouble}[/yellow]")
     except CaptionError as e:
         # គ្មានពាក្យ (video ស្ងាត់) មិនមែនជាហេតុផលបោះបង់ទេ — render ដោយគ្មាន caption
         console.print(f"[yellow]⚠ 5/6 captions រំលង:[/yellow] {e}")

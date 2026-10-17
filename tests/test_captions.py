@@ -711,3 +711,59 @@ def test_sentences_still_group_together():
     cues = C.wrap_into_cues(words, 0.0, max_chars=40, max_lines=2, max_words=5)
     first = " ".join(C.display_word(w.word) for line in cues[0].lines for w in line)
     assert first.lower().startswith("short one")
+
+
+# ---------- QA validator (§12) ----------
+
+def cue_of(text: str, start: float, end: float) -> C.Cue:
+    words = [Word(word=w, start=start, end=end, probability=0.9) for w in text.split()]
+    return C.Cue(start=start, end=end, lines=[words])
+
+
+def test_clean_cues_report_nothing(monkeypatch):
+    monkeypatch.setattr(config, "CAPTION_HIGHLIGHT_MIN", 0.0)
+    cues = [cue_of("the quick brown", 0.0, 1.0), cue_of("fox jumps high", 1.0, 2.0)]
+    assert C.check_cues(cues) == []
+
+
+def test_too_many_words_is_reported(monkeypatch):
+    monkeypatch.setattr(config, "CAPTION_MAX_WORDS_PER_CUE", 3)
+    monkeypatch.setattr(config, "CAPTION_HIGHLIGHT_MIN", 0.0)
+    problems = C.check_cues([cue_of("one two three four five", 0.0, 2.0)])
+    assert any("ពាក្យ" in p for p in problems)
+
+
+def test_short_cue_is_reported(monkeypatch):
+    monkeypatch.setattr(config, "CAPTION_HIGHLIGHT_MIN", 0.0)
+    problems = C.check_cues([cue_of("blink", 0.0, 0.1)])
+    assert any("0.10s" in p for p in problems)
+
+
+def test_overlap_is_reported(monkeypatch):
+    monkeypatch.setattr(config, "CAPTION_HIGHLIGHT_MIN", 0.0)
+    problems = C.check_cues([cue_of("first words here", 0.0, 2.0),
+                             cue_of("second words here", 1.0, 3.0)])
+    assert any("ត្រួតគ្នា" in p for p in problems)
+
+
+def test_cue_ending_on_a_linking_word_is_reported(monkeypatch):
+    monkeypatch.setattr(config, "CAPTION_HIGHLIGHT_MIN", 0.0)
+    problems = C.check_cues([cue_of("behind the", 0.0, 1.0),
+                             cue_of("operation runs", 1.0, 2.0)])
+    assert any("'the'" in p for p in problems)
+
+
+def test_highlight_ratio_out_of_range_is_reported(monkeypatch):
+    """ពាក្យខ្លីទាំងអស់ -> គ្មានអ្វីបំលេច -> ក្រោមដែន."""
+    monkeypatch.setattr(config, "CAPTION_HIGHLIGHT_MIN", 0.10)
+    cues = [cue_of("a b c", 0.0, 1.0), cue_of("d e f", 1.0, 2.0)]
+    assert any("បំលេច" in p for p in C.check_cues(cues))
+
+
+def test_short_cue_is_extended_when_there_is_room():
+    """§4: cue ខ្លីត្រូវពន្យារ — តែមិនឲ្យត្រួត cue បន្ទាប់."""
+    words = [Word(word="hey", start=0.0, end=0.1, probability=0.9),
+             Word(word="listen.", start=5.0, end=5.4, probability=0.9)]
+    cues = C.wrap_into_cues(words, 0.0, max_chars=30, max_lines=2, max_words=5)
+    assert cues[0].end - cues[0].start >= config.CAPTION_MIN_CUE_SEC
+    assert cues[0].end <= cues[1].start + 0.001

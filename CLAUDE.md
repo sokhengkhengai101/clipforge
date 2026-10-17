@@ -60,6 +60,14 @@ Pipeline (one module per step, in `pipeline/`):
    of podcast cues and 27% of interview cues; carrying the trailing word into the next cue instead
    takes both to 1-2%, at the cost of ~8% more cues. Delaying the break by a word does not work,
    because those cues are already at `--caption-words`.
+   A cue also ends at a silence over `CAPTION_PAUSE_SEC` (0.5 s), or the text sits frozen on
+   screen through it: 4-9% of cues spanned a gap that long, the worst holding five words for 5.3 s.
+   `check_cues()` runs the research checklist over the real cues after captions are built and
+   prints what it finds (words/chars/lines over the limit, cues under 0.25 s, overlaps, cues ending
+   on a linking word, highlight ratio outside 10-35%, text outside the safe zone). On the current
+   clips it reports 3 problems in 123 cues and 3 in 95; the podcast one that stays is the word
+   "yet" ending a sentence in 0.14 s, where merging forward would mix two sentences and merging
+   back would break the word limit.
 6. `render.py` — FFmpeg: trim → center-crop 9:16 → scale 1080×1920 → burn ASS → H.264 MP4
 
 All six steps are implemented and run end to end. Measured on a 35-min 640×360 podcast:

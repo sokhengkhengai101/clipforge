@@ -193,8 +193,15 @@ def wrap_into_cues(
         cues.append(Cue(start=max(0.0, start), end=end, lines=lines))
 
     def add_word(word: Word) -> None:
-        """ដាក់ពាក្យមួយ — ចុះបន្ទាត់ថ្មី ឬបើក cue ថ្មីពេលពេញ."""
+        """ដាក់ពាក្យមួយ — ចុះបន្ទាត់ថ្មី ឬបើក cue ថ្មីពេលពេញ ឬពេលស្ងាត់យូរ."""
         nonlocal current_lines
+        # ភាពស្ងាត់វែង -> បិទ cue មុន កុំឲ្យអក្សរកកនៅលើអេក្រង់ពេលគ្មានសំឡេង
+        filled = [line for line in current_lines if line]
+        if filled and word.start - filled[-1][-1].end > config.CAPTION_PAUSE_SEC:
+            flush()
+            current_lines = [[word]]
+            return
+
         candidate = current_lines[-1] + [word]
         if line_length(candidate) <= max_chars or not current_lines[-1]:
             current_lines[-1].append(word)
@@ -304,6 +311,14 @@ def wrap_into_cues(
     for earlier, later in zip(cues, cues[1:]):
         if earlier.end > later.start:
             earlier.end = later.start
+
+    # cue ខ្លីពេកអានមិនទាន់ -> ពន្យារដល់ cue បន្ទាប់ (មិនត្រួតគ្នា)
+    for index, cue in enumerate(cues):
+        if cue.end - cue.start >= config.CAPTION_MIN_CUE_SEC:
+            continue
+        wanted = cue.start + config.CAPTION_MIN_CUE_SEC
+        limit = cues[index + 1].start if index + 1 < len(cues) else wanted
+        cue.end = max(cue.end, min(wanted, limit))
 
     return cues
 
@@ -589,3 +604,69 @@ def build_all_captions(
         paths.append(build_ass(clip, transcript, out_dir / f"clip_{index:02d}.ass",
                                font=font, margin_v=margin, segments=segments))
     return paths
+
+
+# ---------- QA (checklist §12) ----------
+
+def check_cues(cues: list[Cue], anchor: str = "normal",
+               margin_v: int | None = None) -> list[str]:
+    """ពិនិត្យ cue ទល់នឹងច្បាប់ caption. ត្រឡប់បញ្ជីបញ្ហា (ទទេ = ស្អាត).
+
+    នេះជាការត្រួតពិនិត្យ **លើលទ្ធផលពិត** មិនមែន unit test ទេ — វារត់ក្នុង
+    pipeline ដូច្នេះការថយក្រោយលេចឡើងភ្លាម ជាជាងរកឃើញនៅពេលមើលវីដេអូ។
+    """
+    problems: list[str] = []
+    if not cues:
+        return problems
+
+    # ១. ទំហំ: ពាក្យ / តួអក្សរ / បន្ទាត់
+    for index, cue in enumerate(cues):
+        words = sum(len(line) for line in cue.lines)
+        if words > config.CAPTION_MAX_WORDS_PER_CUE:
+            problems.append(f"cue {index}: {words} ពាក្យ (ដែន {config.CAPTION_MAX_WORDS_PER_CUE})")
+        if len(cue.lines) > config.CAPTION_MAX_LINES:
+            problems.append(f"cue {index}: {len(cue.lines)} បន្ទាត់ (ដែន {config.CAPTION_MAX_LINES})")
+        for line in cue.lines:
+            length = len(" ".join(display_word(w.word) for w in line))
+            if length > config.CAPTION_MAX_CHARS_PER_LINE:
+                problems.append(f"cue {index}: បន្ទាត់ {length} តួ "
+                                f"(ដែន {config.CAPTION_MAX_CHARS_PER_LINE})")
+
+    # ២. ពេលវេលា: ប្រវែងអប្បបរមា និងការត្រួតគ្នា
+    for index, cue in enumerate(cues):
+        if cue.end - cue.start < config.CAPTION_MIN_CUE_SEC:
+            problems.append(f"cue {index}: លេចត្រឹម {cue.end - cue.start:.2f}s "
+                            f"(ដែន {config.CAPTION_MIN_CUE_SEC}s)")
+    for index, (earlier, later) in enumerate(zip(cues, cues[1:])):
+        if earlier.end > later.start + 0.001:
+            problems.append(f"cue {index}/{index + 1}: ត្រួតគ្នា "
+                            f"{earlier.end - later.start:.2f}s")
+
+    # ៣. ការកាត់ត្រង់ពាក្យភ្ជាប់ (ច្បាប់ §3)
+    for index, cue in enumerate(cues[:-1]):
+        last = display_word(cue.lines[-1][-1].word).lower()
+        if last in config.CAPTION_NO_BREAK_AFTER:
+            problems.append(f"cue {index}: ចប់ដោយ {last!r}")
+
+    # ៤. សមាមាត្រពាក្យបំលេច
+    total = sum(len(line) for cue in cues for line in cue.lines)
+    highlighted = sum(len(pick_keywords(cue)) for cue in cues)
+    if total:
+        ratio = highlighted / total
+        if not (config.CAPTION_HIGHLIGHT_MIN <= ratio <= config.CAPTION_HIGHLIGHT_MAX):
+            problems.append(f"ការបំលេច {100 * ratio:.0f}% (ដែន "
+                            f"{100 * config.CAPTION_HIGHLIGHT_MIN:.0f}-"
+                            f"{100 * config.CAPTION_HIGHLIGHT_MAX:.0f}%)")
+
+    # ៥. តំបន់សុវត្ថិភាព (ប៊ូតុងរបស់ platform)
+    most_lines = max(len(cue.lines) for cue in cues)
+    ys = line_positions(most_lines, anchor, margin_v)
+    half = config.CAPTION_FONT_SIZE / 2
+    top_limit = config.OUT_HEIGHT * config.CAPTION_SAFE_TOP
+    bottom_limit = config.OUT_HEIGHT * (1 - config.CAPTION_SAFE_BOTTOM)
+    if ys and ys[0] - half < top_limit:
+        problems.append(f"អក្សរឡើងដល់ y={ys[0] - half:.0f} (ដែនលើ {top_limit:.0f})")
+    if ys and ys[-1] + half > bottom_limit:
+        problems.append(f"អក្សរចុះដល់ y={ys[-1] + half:.0f} (ដែនក្រោម {bottom_limit:.0f})")
+
+    return problems
