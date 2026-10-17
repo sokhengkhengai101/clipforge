@@ -11,3 +11,7 @@ ollama                    # client ទៅ Ollama (local LLM)
 python-dotenv>=1.0        # អាន ANTHROPIC_API_KEY ពី .env
 pytest>=8.0               # tests
 # anthropic>=0.40         # បើចង់ប្រើ Claude API — uncomment ពេលត្រូវការ
+
+fastapi>=0.115
+uvicorn[standard]>=0.30
+httpx>=0.27
