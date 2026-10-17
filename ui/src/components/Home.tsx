@@ -1,6 +1,5 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { clipThumbUrl, IN_TAURI, type Health, type Project, type Video } from '../api'
-import { useFileDrop } from '../useFileDrop'
 import { PRESETS, type Preset } from '../presets'
 import { Badge } from './Badge'
 import plus from '../assets/figma/plus.svg'
@@ -30,6 +29,8 @@ export function Home({
   onReview,
   onRetry,
   connected,
+  dropOver,
+  dropped,
 }: {
   videos: Video[]
   projects: Project[]
@@ -47,6 +48,8 @@ export function Home({
   onReview: () => void
   onRetry: () => void
   connected: boolean
+  dropOver: boolean // file កំពុងអូសលើ window (Tauri)
+  dropped: string // path ចុងក្រោយដែលទម្លាក់ (App ជាអ្នកស្តាប់)
 }) {
   const [query, setQuery] = useState('')
   const pathInput = useRef<HTMLInputElement>(null)
@@ -100,6 +103,8 @@ export function Home({
         videos={videos}
         onChoose={onChoose}
         onChoosePath={onChoosePath}
+        dropOver={dropOver}
+        dropped={dropped}
       />
 
       <section>
@@ -228,21 +233,25 @@ function DropZone({
   videos,
   onChoose,
   onChoosePath,
+  dropOver,
+  dropped,
 }: {
   pathInput: React.RefObject<HTMLInputElement | null>
   videos: Video[]
   onChoose: (video: Video) => void
   onChoosePath: (path: string) => void
+  dropOver: boolean
+  dropped: string
 }) {
   const [over, setOver] = useState(false)
   const [note, setNote] = useState('')
   const [typed, setTyped] = useState('')
-  // ក្នុង app desktop ការអូសផ្តល់ path ពេញ ដូច្នេះវាដំណើរការភ្លាម
-  const tauriOver = useFileDrop((path) => {
-    onChoosePath(path)
-    setTyped(path)
-    setNote(`Picked ${path}`)
-  })
+  // ក្នុង app desktop `App` ស្តាប់ drop (គ្រប់ទំព័រ) ហើយប្រាប់យើងតាម `dropped`
+  useEffect(() => {
+    if (!dropped) return
+    setTyped(dropped)
+    setNote(`Picked ${dropped}`)
+  }, [dropped])
 
   // Browser មិនឲ្យដឹង path ពេញរបស់ file ដែលអូសចូលទេ (សុវត្ថិភាព) — យើងបានតែ
   // ឈ្មោះ. បើឈ្មោះនោះមានក្នុង samples/ យើងជ្រើសវា បើអត់ សុំ path ពេញ.
@@ -274,7 +283,7 @@ function DropZone({
       onDragLeave={() => setOver(false)}
       onDrop={drop}
       className={`flex flex-col items-center justify-center gap-2.5 rounded-lg border-[1.5px] border-dashed py-7 ${
-        over || tauriOver ? 'border-accent bg-accent-soft' : 'border-accent bg-bg-panel'
+        over || dropOver ? 'border-accent bg-accent-soft' : 'border-accent bg-bg-panel'
       }`}
     >
       <span className="flex size-13 items-center justify-center rounded-full bg-accent-soft">

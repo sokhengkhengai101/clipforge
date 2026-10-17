@@ -213,7 +213,7 @@ browser first, so there is no Rust rebuild loop while the screens take shape.
 that has never been processed, the desktop app takes it from drop to exported clips with no
 terminal, and the developer would post the result. Verified so far: every screen works in the real
 window (below); Start inside the app runs the pipeline to `done` (76 s with warm caches, see the
-incident below); drop gives the full path (1D). Not yet measured: a cold run inside the app, where
+incident below); a real Explorer drop picks the video from any screen (measured, see "Drop only worked on Home" below). Not yet measured: a cold run inside the app, where
 transcribe and highlights take ~16 minutes on the 35-min podcast.
 
 `server/` holds the sidecar, bound to 127.0.0.1 only (the project uploads nothing):
@@ -487,6 +487,31 @@ Both scripts now match the card with `/^(?!Start ).*Taylor_Tomlinson/`, refuse t
 job is running, and check `/health` after the project click and at the end: a job that appears
 is cancelled at once -- it is still in cached steps then, before any clip is written -- and the run
 fails naming the click. Re-run under the same conditions: no job started.
+
+**Drop only worked on Home -- found by the developer, not by a test.** "I can not drop video":
+dragging from Windows File Explorer did nothing while the app was on Review, Models or Processing.
+The Tauri listener lived inside `DropZone`, which only mounts on Home, while Tauri delivers a drop
+for the **whole window**; on every other screen nobody was listening and the drop vanished without
+a sign. 1D had written "dropping a file finally works properly" with no measurement, and the
+Phase 1 gate repeated it -- it had only ever been true on one screen.
+The listener now lives in `App`: a drop on any screen chooses the video and returns to Home, where
+the Start button is. Moving it up exposed a second bug: `App` re-renders on every WebSocket message
+of a running job, and with `onPath` in the effect's deps the listener was torn down and
+re-registered (an IPC round trip to Rust) each time, so a drop landing in that gap was lost. A
+`useRef` keeps one listener for the app's lifetime, and the registration has a `.catch` -- before,
+a failed `listen` would have stopped drops with no trace.
+The diagnosis split the path in two. Emitting `tauri://drag-drop` from JS
+(`__TAURI_INTERNALS__.invoke('plugin:event|emit', ...)`) proved the JS side picked the path; that
+cannot show whether Windows delivers a drop at all, so `ui/scripts/native-drop.ps1` does a real
+OLE `DoDragDrop` with `CF_HDROP` -- what Explorer does -- pressing the mouse on its own small form
+and releasing over the app. `effect=Copy` means Tauri accepted the drop.
+Measured on `npm run app` with the fix: from Models, dropping `Table For Four.mp4` -> Home with
+"Picked D:\Projects\clipforge\samples\Table For Four.mp4"; from Review, `How-AI-agents.mp4` ->
+same; both `effect=Copy`, no console errors, no job started. Two traps on the way, both in the
+test, not the app: a path written through a shell heredoc came out with single instead of doubled backslashes, so JS read them as escapes and dropped them
+(build Windows paths with `String.fromCharCode(92)` in scripts), and `npm run app` rebuilds
+`app.exe` as a dev build that loads `localhost:5173`, so launching that exe without Vite shows
+"connection refused".
 
 ## Later phases (context only — do not build yet)
 

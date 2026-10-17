@@ -3,6 +3,7 @@ import { api, type Clip, type Health, type Project, type Video } from './api'
 import { PRESETS, type Preset } from './presets'
 import { PACKS, type Pack } from './packs'
 import { useJob } from './useJob'
+import { useFileDrop } from './useFileDrop'
 import { Home } from './components/Home'
 import { Processing } from './components/Processing'
 import { Review } from './components/Review'
@@ -91,6 +92,16 @@ export default function App() {
     setError('')
   }, [])
 
+  /** Drop វីដេអូលើ window ពី **ទំព័រណាក៏បាន** — ជ្រើសវា រួចត្រឡប់ទៅ Home
+   *  ដែលប៊ូតុង Start នៅ. វាធ្លាប់ដំណើរការតែលើ Home (listener នៅក្នុង drop zone)
+   *  ហើយ drop លើ Review ឬ Models ត្រូវបោះចោលដោយគ្មានសញ្ញាអ្វីទាំងអស់. */
+  const [dropped, setDropped] = useState('')
+  const dropOver = useFileDrop((path) => {
+    choosePath(path)
+    setDropped(path)
+    setView('home')
+  })
+
   const openProject = useCallback((project: Project) => {
     setChosen({ name: project.name, path: project.video, mb: 0 })
     if (project.clips > 0) setView('review')
@@ -152,6 +163,8 @@ export default function App() {
             onReview={() => setView('review')}
             onRetry={connect}
             connected={health !== null}
+            dropOver={dropOver}
+            dropped={dropped}
           />
         )}
       </div>
