@@ -254,6 +254,17 @@ The Figma tokens live in one `@theme` block in `src/index.css` (`--color-app`, `
 `--color-card`, `--color-accent`, `--color-keyword`), which is what makes `bg-panel` and
 `text-accent` exist as classes; 1E replaces the rest of the styling, not these names.
 
+Starting a job and watching it: `useJob()` (`src/useJob.ts`) posts to `/api/jobs`, then opens the
+WebSocket and keeps `status` and the log lines in state. The six steps are drawn from the same
+list as `server/jobs.py` STEPS.
+Progress now separates **cached from fresh**: the markers are files, so a project that has run
+before showed 6/6 the moment the job started, which is a lie. `Job.cached` is the set of markers
+that already existed at `start()` *minus* the steps `--redo`/`--force`/`--full` will rewrite
+(`steps_redone()`, since `--redo` overwrites files rather than deleting them), and `progress()`
+reports `cached`, `fresh` and `done`. Measured through the Vite proxy on the wildlife video with
+`redo=render`: `cached` = audio/transcribe/highlights/boundaries, `fresh` = captions/render,
+41 log lines and 56 status messages over the WebSocket, `done` in 23.5 s.
+
 ## Later phases (context only — do not build yet)
 
 - Phase 2: MediaPipe face tracking reframe, bilingual EN + Khmer subtitles, interview Q&A finder, long video → 10 clips.

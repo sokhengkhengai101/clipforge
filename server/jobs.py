@@ -33,6 +33,30 @@ STEPS = (
 )
 
 
+# `--redo X` មិនលុប file ទេ — វាសរសេរជាន់លើ. ដូច្នេះដើម្បីដឹងថាជំហានណា
+# **ពិតជាធ្វើថ្មី** យើងត្រូវដឹងថា redo ប៉ះជំហានណាខ្លះ (boundaries មកពី
+# clips.json ដែល highlights សរសេរ; captions សង់ឡើងវិញពេល render).
+REDO_TOUCHES = {
+    "audio": ("audio",),
+    "transcribe": ("transcribe",),
+    "highlights": ("highlights", "boundaries"),
+    "render": ("captions", "render"),
+}
+
+
+def steps_redone(options: dict) -> set[str]:
+    """ជំហានដែល flag `--redo` / `--force` ធ្វើថ្មី."""
+    names = {n.strip().lower() for n in str(options.get("redo") or "").split(",") if n.strip()}
+    if options.get("full"):
+        names |= {"captions", "render"}     # --full render ជាថ្មីរាល់ដង
+    if options.get("force") or "all" in names:
+        names = set(REDO_TOUCHES)
+    touched = set()
+    for name in names:
+        touched |= set(REDO_TOUCHES.get(name, (name,)))
+    return touched
+
+
 @dataclass
 class Job:
     """job មួយ = ការរត់ pipeline មួយលើ video មួយ."""
@@ -47,6 +71,9 @@ class Job:
     error: str = ""
     log: list[str] = field(default_factory=list)
     process: subprocess.Popen | None = None
+    # ជំហានដែលមាន file រួចមុន job នេះចាប់ផ្តើម (cache ពីការរត់មុន). បើគ្មានវា
+    # UI បង្ហាញ 6/6 ភ្លាម ពេលរត់លើ video ដែលធ្លាប់រត់ ហើយវាមិនពិតទេ.
+    cached: tuple[str, ...] = ()
 
     def progress(self) -> dict:
         """ជំហានណាចប់ហើយ — អានពី file ដែលមានលើ disk."""
@@ -61,7 +88,9 @@ class Job:
                 finished = any(clips_dir.glob("*.mp4")) if clips_dir.is_dir() else False
             if finished:
                 done.append(name)
-        return {"done": done, "total": len(STEPS),
+        fresh = [name for name in done if name not in self.cached]
+        return {"done": done, "cached": list(self.cached), "fresh": fresh,
+                "total": len(STEPS),
                 "step": done[-1] if done else "starting"}
 
     def as_dict(self) -> dict:
@@ -105,6 +134,9 @@ class JobRunner:
 
             job = Job(id=uuid.uuid4().hex[:8], video=video,
                       out_dir=PROJECT_ROOT / "output" / video.stem, args=args)
+            redone = steps_redone(options)
+            job.cached = tuple(name for name in job.progress()["done"]
+                               if name not in redone)
             self.jobs[job.id] = job
 
         db.save_job(job.id, video.stem, str(video), job.args, job.started)

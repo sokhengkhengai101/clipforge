@@ -106,6 +106,40 @@ def test_progress_reads_files_from_disk(tmp_path):
     assert "captions" in job.progress()["done"]
 
 
+def test_cached_steps_are_not_counted_as_progress(tmp_path, monkeypatch):
+    """Marker file ពីការរត់មុនមិនត្រូវបង្ហាញជា 6/6 ភ្លាមក្នុង UI."""
+    video = tmp_path / "v.mp4"
+    video.write_bytes(b"x")
+    out = J.PROJECT_ROOT / "output" / "v"
+    (out / "clips").mkdir(parents=True, exist_ok=True)
+    (out / "audio.wav").write_bytes(b"x")
+    (out / "transcript.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(J.JobRunner, "_run", lambda self, job: None)
+    monkeypatch.setattr(J.db, "save_job", lambda *a, **k: None)
+    try:
+        job = runner.start(video)
+        progress = job.progress()
+        assert set(progress["cached"]) == {"audio", "transcribe"}
+        assert progress["fresh"] == []
+        # ជំហានដែល --redo ប៉ះមិនមែន cached ទេ ទោះ file មានស្រាប់
+        runner.jobs.clear()
+        again = runner.start(video, redo="transcribe")
+        assert again.progress()["cached"] == ["audio"]
+    finally:
+        for name in ("audio.wav", "transcript.json"):
+            (out / name).unlink(missing_ok=True)
+
+
+def test_redo_flags_map_to_steps():
+    assert J.steps_redone({}) == set()
+    assert J.steps_redone({"redo": "render"}) == {"captions", "render"}
+    assert J.steps_redone({"redo": "highlights"}) == {"highlights", "boundaries"}
+    assert J.steps_redone({"force": True}) == {
+        "audio", "transcribe", "highlights", "boundaries", "captions", "render"}
+    # --full render ជាថ្មីរាល់ដង ទោះ .mp4 ចាស់មាននៅ
+    assert J.steps_redone({"full": True}) == {"captions", "render"}
+
+
 def test_clips_endpoint_needs_a_project(client):
     assert client.get("/projects/not-a-project/clips").status_code == 404
 
