@@ -207,6 +207,33 @@ def wrap_into_cues(
     def word_count() -> int:
         return sum(len(line) for line in current_lines)
 
+    def unhook_trailing() -> list[Word]:
+        """ដកពាក្យភ្ជាប់នៅចុង cue ចេញ រួចត្រឡប់វាសម្រាប់ cue បន្ទាប់.
+
+        ដកបានច្រើនបំផុត ២ ពាក្យ ហើយ cue ត្រូវនៅសល់យ៉ាងតិច ២ ពាក្យ — បើមិនដូច្នោះ
+        យើងប្តូរបញ្ហាមួយ (ចប់ខុស) ទៅបញ្ហាមួយទៀត (cue ១ ពាក្យភ្លឹបភ្លែត)។
+        """
+        carried: list[Word] = []
+        while len(carried) < 2:
+            filled = [line for line in current_lines if line]
+            if not filled or sum(len(line) for line in filled) <= 2:
+                break
+            if not dangling(filled[-1][-1]):
+                break
+            carried.insert(0, filled[-1].pop())
+            if not current_lines[-1] and len(current_lines) > 1:
+                current_lines.pop()
+        return carried
+
+    def dangling(word: Word) -> bool:
+        """ពាក្យនេះភ្ជាប់ទៅពាក្យបន្ទាប់ឬទេ ("the", "into", "is")?
+
+        cue មិនគួរចប់ដោយពាក្យបែបនេះទេ — អ្នកមើលឃើញ "...behind the" រួចត្រូវ
+        រង់ចាំ cue បន្ទាប់ទើបដឹងថា "the" នោះជាអ្វី។
+        """
+        bare = re.sub(r"[^\w']", "", word.word.strip().lower())
+        return bare in config.CAPTION_NO_BREAK_AFTER
+
     def fits_whole(sentence: list[Word]) -> bool:
         """ប្រយោគនេះសមនឹងទីវ៉ាងដែលនៅសល់ក្នុង cue បច្ចុប្បន្នឬទេ (សាកដាក់មើល)."""
         if word_count() + len(sentence) > max_words:
@@ -263,8 +290,13 @@ def wrap_into_cues(
             full = (sum(line_length(l) for l in current_lines) >= target
                     or word_count() >= words_per_cue)
             if room_left and full:
+                # cue មិនគួរចប់ដោយពាក្យភ្ជាប់ទេ — ទម្លាក់វាទៅ cue បន្ទាប់វិញ
+                # ("...behind the | operation" -> "...behind | the operation")
+                carried = unhook_trailing()
                 flush()
                 current_lines = [[]]
+                for spare in carried:
+                    add_word(spare)
 
     flush()
 

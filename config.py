@@ -233,6 +233,24 @@ CAPTION_COLOR_PRESETS = {
 }
 # cue ឥឡូវខ្លី (16 តួ × 3 បន្ទាត់) ដូច្នេះ ១ ពាក្យក្នុងមួយ cue គ្រប់គ្រាន់។
 # ២ ពាក្យធ្វើឲ្យពាក់កណ្តាល cue ក្លាយជាលឿង ហើយការបំលេចអស់អត្ថន័យ។
+# ពាក្យដែលមិនគួរឈរនៅ **ចុង** cue — វាភ្ជាប់ទៅពាក្យបន្ទាប់ ហើយអ្នកមើលត្រូវរង់ចាំ។
+# វាស់ពិតមុនដាក់ច្បាប់នេះ: 21-27% នៃ cue កាត់ត្រង់កន្លែងបែបនេះ
+# ("He's the brains behind the | operation", "put full holograms into the | world")។
+CAPTION_NO_BREAK_AFTER = frozenset({
+    # article / possessive / demonstrative
+    "a", "an", "the", "my", "your", "his", "her", "its", "our", "their",
+    "this", "that", "these", "those",
+    # preposition
+    "of", "in", "on", "at", "to", "for", "with", "from", "by", "into", "onto",
+    "about", "over", "under", "between", "through", "across", "against",
+    # auxiliary / modal
+    "is", "are", "was", "were", "am", "be", "been", "being", "has", "have",
+    "had", "do", "does", "did", "will", "would", "can", "could", "should",
+    "must", "might", "may", "not",
+    # conjunction
+    "and", "but", "or", "because", "so", "if", "when", "while", "than", "as",
+})
+
 CAPTION_KEYWORDS_PER_CUE = 1
 # cue ត្រូវបិទត្រង់ចុងប្រយោគ តែលុះត្រាតែវាមានអក្សរយ៉ាងតិចប៉ុណ្ណេះ — បើមិនដូច្នោះ
 # ប្រយោគខ្លី ("Yeah.") ក្លាយជា cue ភ្លឹបភ្លែតដាច់ដោយឡែក។

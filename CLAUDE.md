@@ -53,7 +53,13 @@ Pipeline (one module per step, in `pipeline/`):
    than one. The second-pass `rank_clips` is still what orders clips. What the rubric does buy is
    the explanation: per-dimension letters and reasons. It costs about 70% more time in the
    highlights step (182-230 s per chunk against ~126 s), because the model writes more JSON.
-5. `captions.py` — build `.ass` subtitle file per clip (≤ 2 lines, ≤ 32 chars/line, keyword highlight in #FFD23F)
+5. `captions.py` — build `.ass` subtitle file per clip (≤ 2 lines, ≤ 32 chars/line, keyword
+   highlight in #FFD23F). A cue never **ends** on a linking word (`CAPTION_NO_BREAK_AFTER`:
+   articles, prepositions, auxiliaries, conjunctions): the viewer would read "...behind the" and
+   wait for the next cue to learn what "the" was. Splitting evenly by word count did that on 21%
+   of podcast cues and 27% of interview cues; carrying the trailing word into the next cue instead
+   takes both to 1-2%, at the cost of ~8% more cues. Delaying the break by a word does not work,
+   because those cues are already at `--caption-words`.
 6. `render.py` — FFmpeg: trim → center-crop 9:16 → scale 1080×1920 → burn ASS → H.264 MP4
 
 All six steps are implemented and run end to end. Measured on a 35-min 640×360 podcast:

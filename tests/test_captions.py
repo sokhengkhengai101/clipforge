@@ -661,3 +661,53 @@ def test_sentence_detection_still_uses_the_original_text():
                         ("I", 0.7, 0.8), ("think", 0.8, 1.1), ("so", 1.1, 1.4)])
     cues = C.wrap_into_cues(words, clip_start=0.0, max_chars=16, max_lines=3)
     assert cues[0].text().endswith("apps.")
+
+
+# ---------- cue មិនត្រូវចប់ដោយពាក្យភ្ជាប់ ----------
+
+def words_at(text: str, start: float = 0.0, step: float = 0.4) -> list[Word]:
+    return [Word(word=w, start=start + i * step, end=start + (i + 1) * step,
+                 probability=0.9)
+            for i, w in enumerate(text.split())]
+
+
+def last_words(cues) -> list[str]:
+    return [C.display_word(cue.lines[-1][-1].word).lower() for cue in cues]
+
+
+def test_cue_does_not_end_on_an_article():
+    """"He's the brains behind the | operation" -> "behind | the operation"."""
+    words = words_at("he is the brains behind the operation as far as business goes")
+    cues = C.wrap_into_cues(words, 0.0, max_chars=30, max_lines=2, max_words=5)
+    assert "the" not in last_words(cues)[:-1]
+
+
+def test_cue_does_not_end_on_a_preposition():
+    words = words_at("put full holograms into the world with a pretty wild future ahead")
+    cues = C.wrap_into_cues(words, 0.0, max_chars=30, max_lines=2, max_words=5)
+    for last in last_words(cues)[:-1]:
+        assert last not in ("into", "the", "with", "a")
+
+
+def test_carried_word_opens_the_next_cue():
+    words = words_at("one two three four the fifth word here")
+    cues = C.wrap_into_cues(words, 0.0, max_chars=40, max_lines=2, max_words=5)
+    texts = [" ".join(C.display_word(w.word) for line in cue.lines for w in line)
+             for cue in cues]
+    assert not texts[0].lower().endswith(" the")
+
+
+def test_a_cue_is_never_left_with_one_word():
+    """ការដកពាក្យមិនត្រូវបង្កើត cue ១ ពាក្យដែលភ្លឹបភ្លែតទេ."""
+    words = words_at("alpha the of in on at beta gamma delta epsilon zeta")
+    cues = C.wrap_into_cues(words, 0.0, max_chars=40, max_lines=2, max_words=5)
+    counts = [sum(len(line) for line in cue.lines) for cue in cues]
+    assert min(counts[:-1] or [2]) >= 2
+
+
+def test_sentences_still_group_together():
+    """ច្បាប់ថ្មីមិនត្រូវបំផ្លាញការរៀបតាមប្រយោគទេ."""
+    words = words_at("short one. a second sentence follows here now.")
+    cues = C.wrap_into_cues(words, 0.0, max_chars=40, max_lines=2, max_words=5)
+    first = " ".join(C.display_word(w.word) for line in cues[0].lines for w in line)
+    assert first.lower().startswith("short one")
