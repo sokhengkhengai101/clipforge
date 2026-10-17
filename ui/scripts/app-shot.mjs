@@ -75,7 +75,7 @@ if (await project.count()) {
   await project.first().click()
   await page.waitForTimeout(500)
   await noJobStarted('clicking the project card')
-  await page.getByRole('button', { name: /Review \d+ clips/ }).click()
+  await page.getByRole('button', { name: /Review \d+ clips?/ }).click()
   await page.waitForTimeout(2500)
   await page.getByRole('button', { name: /Export clips/ }).click()
   await page.waitForTimeout(1500)

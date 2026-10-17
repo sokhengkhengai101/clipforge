@@ -48,3 +48,15 @@
 body {
   @apply bg-bg-app font-sans text-text-primary;
 }
+
+/* Launch bar ភ្លឺមួយភ្លែតពេលវីដេអូថ្មីត្រូវបានជ្រើស (drop, samples, ឬ path) —
+   ទាញភ្នែកទៅប៊ូតុង Start. `to` គ្មាន background ដូច្នេះវាត្រឡប់ទៅពណ៌ពិតរបស់ធាតុ. */
+@keyframes arrive {
+  from {
+    background-color: var(--color-accent-soft);
+    box-shadow: inset 0 2px 0 0 var(--color-accent);
+  }
+}
+@utility animate-arrive {
+  animation: arrive 1.4s ease-out;
+}

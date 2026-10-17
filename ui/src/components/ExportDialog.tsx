@@ -25,7 +25,7 @@ export function ExportDialog({ project, onClose }: { project: string; onClose: (
   const [result, setResult] = useState<ExportResult | null>(null)
   const [error, setError] = useState('')
 
-  // យើងសុំ kind ទាំងបី​ម្តងជាស្រេច រួចច្រោះខាង client ពេល toggle ប្តូរ —
+  // យើងសុំ kind ទាំងបីម្តងជាស្រេច រួចច្រោះខាង client ពេល toggle ប្តូរ —
   // បើមិនដូច្នោះ toggle នីមួយៗនឹងទៅសួរ server ម្តងទៀតដោយឥតប្រយោជន៍.
   useEffect(() => {
     api

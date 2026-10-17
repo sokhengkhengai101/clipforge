@@ -1,8 +1,11 @@
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { clipThumbUrl, IN_TAURI, type Health, type Project, type Video } from '../api'
 import { PRESETS, type Preset } from '../presets'
+import type { Pack } from '../packs'
 import { Badge } from './Badge'
 import plus from '../assets/figma/plus.svg'
+import clipsIcon from '../assets/figma/clips.svg'
+import startIcon from '../assets/figma/play-card.svg'
 import search from '../assets/figma/search.svg'
 import upload from '../assets/figma/upload.svg'
 import browse from '../assets/figma/browse.svg'
@@ -17,6 +20,7 @@ export function Home({
   projects,
   chosen,
   preset,
+  pack,
   health,
   error,
   busy,
@@ -36,6 +40,7 @@ export function Home({
   projects: Project[]
   chosen: Video | null
   preset: Preset
+  pack: Pack
   health: Health | null
   error: string
   busy: boolean
@@ -56,7 +61,8 @@ export function Home({
   const matches = (text: string) => text.toLowerCase().includes(query.toLowerCase())
 
   return (
-    <div className="flex h-full min-w-0 flex-1 flex-col gap-5 overflow-y-auto px-8 py-6">
+    <div className="flex h-full min-w-0 flex-1 flex-col">
+      <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-8 py-6">
       <header className="flex items-center gap-3">
         <div className="min-w-0 flex-1">
           <p className="text-display text-text-primary">Projects</p>
@@ -99,6 +105,7 @@ export function Home({
       )}
 
       <DropZone
+        key={dropped}
         pathInput={pathInput}
         videos={videos}
         onChoose={onChoose}
@@ -145,29 +152,6 @@ export function Home({
         <div className="mb-3 flex items-center gap-3">
           <p className="text-heading text-text-primary">Videos in samples/</p>
           <Badge label={String(videos.length)} />
-          <div className="flex-1" />
-          {chosen && (
-            <>
-              <p className="text-caption text-text-secondary">
-                {preset.title} · {flagsOf(preset) || 'defaults'}
-              </p>
-              {clips > 0 && (
-                <button
-                  onClick={onReview}
-                  className="rounded-sm border border-border-default bg-bg-card px-4 py-2.5 text-body-strong text-text-primary"
-                >
-                  Review {clips} clips
-                </button>
-              )}
-              <button
-                onClick={onStart}
-                disabled={busy}
-                className="rounded-sm bg-accent px-4 py-2.5 text-body-strong text-on-accent disabled:opacity-40"
-              >
-                {busy ? 'Running...' : `Start ${chosen.name.slice(0, 18)}`}
-              </button>
-            </>
-          )}
         </div>
         <div className="grid grid-cols-2 gap-2.5">
           {videos.filter((video) => matches(video.name)).map((video) => (
@@ -224,6 +208,19 @@ export function Home({
           ))}
         </div>
       </section>
+      </div>
+
+      {chosen && (
+        <LaunchBar
+          chosen={chosen}
+          preset={preset}
+          pack={pack}
+          busy={busy}
+          clips={clips}
+          onStart={onStart}
+          onReview={onReview}
+        />
+      )}
     </div>
   )
 }
@@ -245,13 +242,10 @@ function DropZone({
 }) {
   const [over, setOver] = useState(false)
   const [note, setNote] = useState('')
-  const [typed, setTyped] = useState('')
-  // ក្នុង app desktop `App` ស្តាប់ drop (គ្រប់ទំព័រ) ហើយប្រាប់យើងតាម `dropped`
-  useEffect(() => {
-    if (!dropped) return
-    setTyped(dropped)
-    setNote(`Picked ${dropped}`)
-  }, [dropped])
+  // ក្នុង app desktop `App` ស្តាប់ drop (គ្រប់ទំព័រ). drop ថ្មីនីមួយៗប្តូរ `key`
+  // របស់ DropZone ដូច្នេះវាចាប់ផ្តើមថ្មីជាមួយ path នោះក្នុងប្រអប់ — គ្មាន effect.
+  // launch bar ខាងក្រោមជាអ្នកប្រាប់ថាវីដេអូត្រូវបានជ្រើស.
+  const [typed, setTyped] = useState(dropped)
 
   // Browser មិនឲ្យដឹង path ពេញរបស់ file ដែលអូសចូលទេ (សុវត្ថិភាព) — យើងបានតែ
   // ឈ្មោះ. បើឈ្មោះនោះមានក្នុង samples/ យើងជ្រើសវា បើអត់ សុំ path ពេញ.
@@ -316,7 +310,7 @@ function DropZone({
           onClick={() => typed.trim() && onChoosePath(typed.trim())}
           className="rounded-sm bg-accent px-4 py-2.5 text-body-strong text-on-accent"
         >
-          Use this file
+          Use this path
         </button>
         <span
           title="Batch is Phase 3"
@@ -364,4 +358,83 @@ function flagsOf(preset: Preset): string {
   return Object.entries(preset.options)
     .map(([key, value]) => `--${key.replace(/_/g, '-')} ${value}`)
     .join(' ')
+}
+
+/** ជួរខាងក្រោមដែល **តែងមើលឃើញ**: វីដេអូ + preset + model ដែល Start នឹងរត់.
+ *
+ *  Figma គ្មានស្ថានភាពនេះទេ. Start ធ្លាប់នៅក្បាលបញ្ជី samples ក្រោម preset ១០
+ *  ការ៉េ — ច្រើនតែលើសអេក្រង់ — ហើយក្រោយ drop គ្មានអ្វីប្រាប់ថាត្រូវធ្វើអ្វីបន្ត.
+ *  `key` លើ path ធ្វើឲ្យ animation `arrive` លេងម្តងទៀតរាល់ពេលជ្រើសវីដេអូថ្មី.
+ */
+function LaunchBar({
+  chosen,
+  preset,
+  pack,
+  busy,
+  clips,
+  onStart,
+  onReview,
+}: {
+  chosen: Video
+  preset: Preset
+  pack: Pack
+  busy: boolean
+  clips: number
+  onStart: () => void
+  onReview: () => void
+}) {
+  return (
+    <footer
+      key={chosen.path}
+      className="animate-arrive flex shrink-0 items-center gap-6 border-t border-border-default bg-bg-panel px-8 py-3.5"
+    >
+      <div className="flex min-w-0 flex-1 items-center gap-3">
+        <span className="flex size-10 shrink-0 items-center justify-center rounded-sm bg-accent-soft">
+          <img src={clipsIcon} alt="" width={20} height={20} />
+        </span>
+        <div className="min-w-0">
+          <p className="truncate text-body-strong text-text-primary">{chosen.name}</p>
+          <p className="truncate text-caption text-text-secondary" title={chosen.path}>
+            {chosen.path}
+            {chosen.mb > 0 ? ` · ${chosen.mb} MB` : ''}
+          </p>
+        </div>
+      </div>
+      <Spec label="PRESET" value={preset.title} detail={flagsOf(preset) || 'defaults'} />
+      <Spec
+        label="MODELS"
+        value={pack.label}
+        detail={`${pack.options.whisper_model} · ${pack.options.model}`}
+      />
+      {clips > 0 && (
+        <button
+          onClick={onReview}
+          className="shrink-0 rounded-sm border border-border-default bg-bg-card px-4 py-2.5 text-body-strong text-text-primary hover:bg-bg-hover"
+        >
+          Review {clips} clip{clips === 1 ? '' : 's'}
+        </button>
+      )}
+      <button
+        onClick={onStart}
+        disabled={busy}
+        className="flex shrink-0 items-center gap-2 rounded-sm bg-accent px-5 py-2.5 text-body-strong text-on-accent disabled:opacity-40"
+      >
+        <img src={startIcon} alt="" width={16} height={16} />
+        {busy ? 'Running...' : 'Start'}
+      </button>
+    </footer>
+  )
+}
+
+/** ក្រឡាតូចមួយក្នុង launch bar: ស្លាក, តម្លៃ, និង flag ពិតដែលវានឹងរត់. */
+function Spec({ label, value, detail }: { label: string; value: string; detail: string }) {
+  return (
+    <div className="flex max-w-[200px] min-w-0 shrink-0 flex-col">
+      <span className="text-label text-text-secondary">{label}</span>
+      <span className="truncate text-body text-text-primary">{value}</span>
+      <span className="truncate text-caption text-text-secondary" title={detail}>
+        {detail}
+      </span>
+    </div>
+  )
 }

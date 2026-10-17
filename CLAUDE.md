@@ -513,6 +513,24 @@ test, not the app: a path written through a shell heredoc came out with single i
 `app.exe` as a dev build that loads `localhost:5173`, so launching that exe without Vite shows
 "connection refused".
 
+**The launch bar -- a state the Figma file does not have.** With drop fixed, the next step was
+still lost: Start sat in the header of "Videos in samples/", below the drop zone and ten preset
+cards, at the bottom edge of a 900 px window, while the button beside the path, "Use this file",
+re-chose the file already chosen and changed nothing visible. Home now ends in a bar that is
+always on screen (`LaunchBar` in `Home.tsx`; the page scrolls above it): the chosen video's name
+and path, a PRESET cell and a MODELS cell each with the real flags they add, Review N clips when
+the project has clips, and the only Start button. The page is a recipe -- video, preset, models
+-- and the bar reads it back before anything runs. It replays a 1.4 s `animate-arrive` tint
+(`index.css`) whenever the chosen video changes, keyed on its path, so a drop or a click on a
+sample visibly lands. "Use this file" became "Use this path", which is what it acts on.
+Lint caught the first version setting state in an effect to copy the dropped path into the input;
+`DropZone` is now keyed on `dropped`, so a new drop starts it fresh with that path. It also found a
+zero-width space hidden in a Khmer comment in `ExportDialog.tsx`.
+Measured in `npm run app` with a real OLE drop from Review: Home with the bar reading
+`Rhino Charge Ivan Carter.mp4`, its path, Podcast Clips `--max-clips 5`, Standard
+`medium · qwen2.5:7b-instruct`, Review 1 clip, Start; the screenshot 250 ms after the drop shows
+the tint; no console errors, no job started.
+
 ## Later phases (context only — do not build yet)
 
 - Phase 2: MediaPipe face tracking reframe, bilingual EN + Khmer subtitles, interview Q&A finder, long video → 10 clips.

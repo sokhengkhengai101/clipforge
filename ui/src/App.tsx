@@ -151,6 +151,7 @@ export default function App() {
             projects={projects}
             chosen={chosen}
             preset={preset}
+            pack={pack}
             health={health}
             error={error || job.error}
             busy={job.running}
