@@ -28,6 +28,8 @@ export function Home({
   onStart,
   onOpenProject,
   onReview,
+  onRetry,
+  connected,
 }: {
   videos: Video[]
   projects: Project[]
@@ -43,6 +45,8 @@ export function Home({
   onStart: () => void
   onOpenProject: (project: Project) => void
   onReview: () => void
+  onRetry: () => void
+  connected: boolean
 }) {
   const [query, setQuery] = useState('')
   const pathInput = useRef<HTMLInputElement>(null)
@@ -75,7 +79,21 @@ export function Home({
         </button>
       </header>
 
-      {error && <p className="text-caption text-red-400">{error}</p>}
+      {error && (
+        <div className="flex items-center gap-3 rounded-md border border-border-default bg-bg-card px-4 py-2.5">
+          <span className={`text-caption ${connected ? 'text-red-400' : 'text-text-secondary'}`}>
+            {error}
+          </span>
+          {!connected && (
+            <button
+              onClick={onRetry}
+              className="rounded-sm border border-border-default px-3 py-1.5 text-caption text-text-primary hover:bg-bg-hover"
+            >
+              Retry
+            </button>
+          )}
+        </div>
+      )}
 
       <DropZone
         pathInput={pathInput}

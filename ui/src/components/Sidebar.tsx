@@ -22,7 +22,15 @@ const NAV = [
 
 /** Sidebar (design node 5:23). ឥឡូវមានតែ Projects ដែលដំណើរការ —
  *  ទំព័រឯទៀតជារបស់ phase ក្រោយ ដូច្នេះវាបង្ហាញជាពណ៌ស្រអាប់. */
-export function Sidebar({ device, ffmpeg }: { device: string; ffmpeg: boolean }) {
+export function Sidebar({
+  device,
+  ffmpeg,
+  onNewProject,
+}: {
+  device: string
+  ffmpeg: boolean
+  onNewProject: () => void
+}) {
   return (
     <aside className="flex h-full w-60 shrink-0 flex-col gap-5 border-r border-border-default bg-bg-panel px-4 pt-5 pb-4">
       <div className="flex items-center gap-2.5">
@@ -37,8 +45,8 @@ export function Sidebar({ device, ffmpeg }: { device: string; ffmpeg: boolean })
 
       <button
         type="button"
-        disabled
-        className="flex w-full items-center justify-center gap-2 rounded-sm bg-accent px-4 py-2.5 text-body-strong text-on-accent disabled:opacity-60"
+        onClick={onNewProject}
+        className="flex w-full items-center justify-center gap-2 rounded-sm bg-accent px-4 py-2.5 text-body-strong text-on-accent"
       >
         <img src={plus} alt="" width={16} height={16} />
         New project
@@ -48,8 +56,9 @@ export function Sidebar({ device, ffmpeg }: { device: string; ffmpeg: boolean })
         {NAV.map((item) => (
           <div
             key={item.label}
+            title={item.active ? undefined : 'Not built yet'}
             className={`flex h-9 items-center gap-2.5 rounded-sm px-3 py-2 ${
-              item.active ? 'bg-accent-soft' : ''
+              item.active ? 'bg-accent-soft' : 'opacity-60'
             }`}
           >
             <img src={item.icon} alt="" width={18} height={18} />
@@ -62,6 +71,7 @@ export function Sidebar({ device, ffmpeg }: { device: string; ffmpeg: boolean })
             >
               {item.label}
             </span>
+            {!item.active && <span className="ml-auto text-label text-text-secondary">SOON</span>}
           </div>
         ))}
       </nav>

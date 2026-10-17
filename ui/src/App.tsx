@@ -28,16 +28,30 @@ export default function App() {
       .catch(() => setProjects([]))
   }, [])
 
-  useEffect(() => {
-    Promise.all([api.health(), api.videos()])
-      .then(([h, v]) => {
+  /** App desktop បើក sidecar ខ្លួនឯង ហើយ uvicorn ត្រូវការ ២-៣ វិនាទី —
+   *  ការសួរតែម្តងបរាជ័យ ("Failed to fetch") ហើយទំព័រនៅទទេរហូត។
+   *  ដូច្នេះយើងសួរម្តងទៀតរហូតដល់វាឆ្លើយ. */
+  const connect = useCallback(async () => {
+    setError('')
+    for (let attempt = 0; attempt < 30; attempt++) {
+      try {
+        const [h, v] = await Promise.all([api.health(), api.videos()])
         setHealth(h)
         setVideos(v)
-        if (v.length > 0) setChosen(v[0])
-      })
-      .catch((e: Error) => setError(e.message))
-    loadProjects()
+        setChosen((current) => current ?? v[0] ?? null)
+        loadProjects()
+        return
+      } catch {
+        setError(attempt < 2 ? 'starting the engine...' : `waiting for the sidecar (${attempt}s)`)
+        await new Promise((done) => setTimeout(done, 1000))
+      }
+    }
+    setError('The sidecar is not answering on 127.0.0.1:8765. Press Retry.')
   }, [loadProjects])
+
+  useEffect(() => {
+    void connect()
+  }, [connect])
 
   // clip របស់ project ដែលជ្រើស — ទាញឡើងវិញពេល job ដល់ render ឬចប់
   const projectName = chosen ? stemOf(chosen.name) : ''
@@ -83,7 +97,11 @@ export default function App() {
     <div className="flex h-screen flex-col bg-bg-app">
       <TitleBar title={title} />
       <div className="flex min-h-0 flex-1">
-        <Sidebar device={health?.device ?? '...'} ffmpeg={health?.ffmpeg ?? false} />
+        <Sidebar
+          device={health?.device ?? '...'}
+          ffmpeg={health?.ffmpeg ?? false}
+          onNewProject={() => setView('home')}
+        />
 
         {view === 'job' && job.status ? (
           <Processing
@@ -123,6 +141,8 @@ export default function App() {
             onStart={() => startWith({})}
             onOpenProject={openProject}
             onReview={() => setView('review')}
+            onRetry={connect}
+            connected={health !== null}
           />
         )}
       </div>
