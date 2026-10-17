@@ -1,24 +1,32 @@
 import { useCallback, useEffect, useState } from 'react'
-import { api, type Clip, type Health, type Video } from './api'
+import { api, type Clip, type Health, type Project, type Video } from './api'
+import { PRESETS, type Preset } from './presets'
 import { useJob } from './useJob'
-import { Badge } from './components/Badge'
+import { Home } from './components/Home'
 import { Processing } from './components/Processing'
 import { Review } from './components/Review'
 import { Sidebar } from './components/Sidebar'
 import { TitleBar } from './components/TitleBar'
-import plus from './assets/figma/plus.svg'
 
 export default function App() {
   const [health, setHealth] = useState<Health | null>(null)
   const [videos, setVideos] = useState<Video[]>([])
+  const [projects, setProjects] = useState<Project[]>([])
   const [chosen, setChosen] = useState<Video | null>(null)
-  const [maxClips, setMaxClips] = useState(5)
+  const [preset, setPreset] = useState<Preset>(PRESETS[0])
   const [clips, setClips] = useState<Clip[]>([])
   const [error, setError] = useState('')
   const [view, setView] = useState<'home' | 'job' | 'review'>('home')
   const [captionWords, setCaptionWords] = useState(5)
   const [captionColor, setCaptionColor] = useState('#FFD23F')
   const job = useJob()
+
+  const loadProjects = useCallback(() => {
+    api
+      .projects()
+      .then(setProjects)
+      .catch(() => setProjects([]))
+  }, [])
 
   useEffect(() => {
     Promise.all([api.health(), api.videos()])
@@ -28,34 +36,46 @@ export default function App() {
         if (v.length > 0) setChosen(v[0])
       })
       .catch((e: Error) => setError(e.message))
-  }, [])
+    loadProjects()
+  }, [loadProjects])
 
-  // clip មានតែក្រោយ render — សួរពេលប្តូរវីដេអូ និងពេល job ដល់ជំហាននោះ
+  // clip របស់ project ដែលជ្រើស — ទាញឡើងវិញពេល job ដល់ render ឬចប់
   const projectName = chosen ? stemOf(chosen.name) : ''
   const rendered = job.status?.progress.done.includes('render') ?? false
+  const state = job.status?.state
   useEffect(() => {
     if (!projectName) return
     api.clips(projectName).then(setClips)
-  }, [projectName, rendered, job.status?.state])
+    if (state && state !== 'running') loadProjects()
+  }, [projectName, rendered, state, loadProjects])
 
-  const start = useCallback(() => {
-    if (!chosen) return
-    setView('job')
-    job.start({ video: chosen.path, max_clips: maxClips })
-  }, [chosen, maxClips, job])
+  const startWith = useCallback(
+    (extra: Record<string, unknown>) => {
+      if (!chosen) return
+      setView('job')
+      job.start({ video: chosen.path, ...preset.options, ...extra })
+      setTimeout(loadProjects, 500)
+    },
+    [chosen, preset, job, loadProjects],
+  )
 
   /** ប្តូរ style caption រួច render ជាថ្មី — មិន transcribe ឡើងវិញទេ. */
-  const rerender = useCallback(() => {
-    if (!chosen) return
-    setView('job')
-    job.start({
-      video: chosen.path,
-      max_clips: maxClips,
-      redo: 'render',
-      caption_words: captionWords,
-      caption_color: captionColor,
-    })
-  }, [chosen, maxClips, captionWords, captionColor, job])
+  const rerender = useCallback(
+    () => startWith({ redo: 'render', caption_words: captionWords, caption_color: captionColor }),
+    [startWith, captionWords, captionColor],
+  )
+
+  /** path ដែលវាយដោយដៃ — វីដេអូក្រៅ samples/. */
+  const choosePath = useCallback((path: string) => {
+    const name = path.split(/[\\/]/).pop() ?? path
+    setChosen({ name, path, mb: 0 })
+    setError('')
+  }, [])
+
+  const openProject = useCallback((project: Project) => {
+    setChosen({ name: project.name, path: project.video, mb: 0 })
+    if (project.clips > 0) setView('review')
+  }, [])
 
   const title = chosen ? `ClipForge Studio — ${chosen.name}` : 'ClipForge Studio'
 
@@ -90,113 +110,22 @@ export default function App() {
         ) : (
           <Home
             videos={videos}
+            projects={projects}
             chosen={chosen}
-            onChoose={setChosen}
-            maxClips={maxClips}
-            onMaxClips={setMaxClips}
-            onStart={start}
+            preset={preset}
             health={health}
             error={error || job.error}
             busy={job.running}
-            clips={clips}
+            clips={clips.length}
+            onChoose={setChosen}
+            onChoosePath={choosePath}
+            onPreset={setPreset}
+            onStart={() => startWith({})}
+            onOpenProject={openProject}
             onReview={() => setView('review')}
           />
         )}
       </div>
-    </div>
-  )
-}
-
-function Home({
-  videos,
-  chosen,
-  onChoose,
-  maxClips,
-  onMaxClips,
-  onStart,
-  health,
-  error,
-  busy,
-  clips,
-  onReview,
-}: {
-  videos: Video[]
-  chosen: Video | null
-  onChoose: (video: Video) => void
-  maxClips: number
-  onMaxClips: (count: number) => void
-  onStart: () => void
-  health: Health | null
-  error: string
-  busy: boolean
-  clips: Clip[]
-  onReview: () => void
-}) {
-  return (
-    <div className="flex h-full min-w-0 flex-1 flex-col gap-5 overflow-auto px-8 py-6">
-      <header className="flex w-full items-center gap-3">
-        <div className="min-w-0 flex-1">
-          <p className="text-title text-text-primary">Projects</p>
-          <p className="text-caption text-text-secondary">
-            {health
-              ? `${health.device} · whisper ${health.whisper_model} · ${health.llm_model}`
-              : 'connecting to sidecar...'}
-          </p>
-        </div>
-        <label className="flex items-center gap-2 text-caption text-text-secondary">
-          clips
-          <input
-            type="number"
-            min={1}
-            max={10}
-            value={maxClips}
-            onChange={(e) => onMaxClips(Number(e.target.value))}
-            className="w-16 rounded-sm border border-border-default bg-bg-card px-2 py-1.5 text-body text-text-primary"
-          />
-        </label>
-        {clips.length > 0 && (
-          <button
-            onClick={onReview}
-            className="rounded-sm border border-border-default bg-bg-card px-4 py-2.5 text-body-strong text-text-primary"
-          >
-            Review {clips.length} clips
-          </button>
-        )}
-        <button
-          onClick={onStart}
-          disabled={!chosen || busy}
-          className="flex items-center gap-2 rounded-sm bg-accent px-4 py-2.5 text-body-strong text-on-accent disabled:opacity-40"
-        >
-          <img src={plus} alt="" width={16} height={16} />
-          {busy ? 'Running...' : 'Start'}
-        </button>
-      </header>
-
-      {error && <p className="text-caption text-red-400">{error}</p>}
-
-      <section className="flex w-full flex-col gap-2.5 rounded-lg border border-border-default bg-bg-panel px-5 py-4">
-        <div className="flex items-center gap-2">
-          <p className="text-heading text-text-primary">Videos in samples/</p>
-          <div className="flex-1" />
-          <Badge label={String(videos.length)} />
-        </div>
-        {videos.map((video) => (
-          <button
-            key={video.path}
-            onClick={() => onChoose(video)}
-            className={`flex w-full items-center gap-3 rounded-md border p-2.5 text-left ${
-              chosen?.path === video.path
-                ? 'border-accent bg-accent-soft'
-                : 'border-border-default bg-bg-card hover:bg-bg-hover'
-            }`}
-          >
-            <span className="min-w-0 flex-1 truncate text-body-strong text-text-primary">
-              {video.name}
-            </span>
-            <span className="shrink-0 text-caption text-text-secondary">{video.mb} MB</span>
-          </button>
-        ))}
-      </section>
     </div>
   )
 }

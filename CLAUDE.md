@@ -306,6 +306,27 @@ What the design shows and we do not have: the waveform, speaker labels, per-word
 Reframe and Cleanup tabs (drawn, inert) and the three toggles. Clips scored before the rubric have
 no `grades`, and the panel says so instead of drawing empty bars.
 
+**Screen "02 · Home / Projects" (node 8:238) is implemented** as `components/Home.tsx`: the drop
+zone, the nine preset cards, the samples list and the recent projects.
+The nine presets are in `src/presets.ts` and each one is **the flag bundle it would really run**
+(`Podcast Clips` = `--max-clips 5`, `Caption Studio` = `--redo render --caption-words 4`,
+`Long Video` = `--max-clips 10`, `Auto Reframe` = `--aspect 9:16 --layout auto`,
+`Interview & Webinar` = `--layout fill,split,fit`); hovering a card shows those flags. The four
+that need Phase 2 or 3 work (silence removal, Khmer subtitles, gaming, batch) are drawn at half
+opacity, badged `PHASE 2` / `PHASE 3` and cannot be clicked, instead of pretending to run.
+A browser is not allowed to read a dropped file's path, only its name, so the drop zone matches
+the name against `samples/` and otherwise asks for the full path to be pasted (the Tauri build in
+1D can take the drop itself). `Import folder (batch)` is inert, as batch is Phase 3.
+`GET /projects` now merges the database with the folders in `output/`: the DB only knows about
+runs made through the sidecar, while most projects on this machine were made by the CLI, and the
+UI has to show both (a folder-only project gets `jobs: 0` and no video path, so it can be reviewed
+but not re-run).
+Two things the screen made visible, both now fixed: a job row stays `running` for ever when the
+sidecar is killed mid-run, so `db.interrupt_stale_jobs()` marks those `interrupted` at startup and
+the card reads STOPPED rather than PROCESSING; and `tests/test_server.py` was writing into the
+real `output/clipforge.db`, which is why a project called `v` with 27 runs (from `tmp/v.mp4`)
+appeared in the list -- the fixture now points `db.DB_PATH` at a tmp file.
+
 ## Later phases (context only — do not build yet)
 
 - Phase 2: MediaPipe face tracking reframe, bilingual EN + Khmer subtitles, interview Q&A finder, long video → 10 clips.

@@ -19,6 +19,8 @@
   --color-text-primary: #f2f4f8;
   --color-text-secondary: #9aa1b2;
   --color-success: #3dd68c;
+  --color-warning: #f5a524;
+  --color-warning-soft: #3a2e14;
   --color-keyword: #ffd23f;        /* ពណ៌ keyword របស់ caption */
 
   --radius-sm: 6px;

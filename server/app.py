@@ -26,6 +26,7 @@ config.enable_utf8_output()
 app = FastAPI(title="ClipForge sidecar", version="0.2.0")
 runner = JobRunner()
 db.init_db()
+db.interrupt_stale_jobs()
 
 
 class JobRequest(BaseModel):
@@ -111,8 +112,30 @@ def list_jobs(history: bool = True) -> list[dict]:
 
 @app.get("/projects")
 def list_projects() -> list[dict]:
-    """project ដែលធ្លាប់រត់ — មកពី database មិនមែនការស្កេន folder."""
-    return db.list_projects()
+    """project ទាំងអស់ — database **បូក** folder ក្នុង `output/`.
+
+    Database ដឹងពី job (ពេល, ស្ថានភាព) តែវាទើបមានពេល Phase 1B; project ដែល
+    សង់ដោយ CLI មុននោះមានតែ folder. UI ត្រូវឃើញទាំងពីរ.
+    """
+    projects = db.list_projects()
+    known = {item["name"] for item in projects}
+    out_root = PROJECT_ROOT / "output"
+    for folder in sorted(out_root.iterdir()) if out_root.is_dir() else []:
+        if not folder.is_dir() or folder.name in known:
+            continue
+        found = clips_of_project(folder)
+        if not found:
+            continue
+        projects.append({
+            "id": -len(projects) - 1,          # លេខអវិជ្ជមាន = មិនមានក្នុង database
+            "name": folder.name,
+            "video": "",                        # មិនដឹង path ដើមទេ
+            "created": folder.stat().st_mtime,
+            "clips": len(found),
+            "jobs": 0,
+            "last_state": None,
+        })
+    return projects
 
 
 @app.get("/jobs/{job_id}")

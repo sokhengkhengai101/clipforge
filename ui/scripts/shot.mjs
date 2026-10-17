@@ -24,6 +24,13 @@ page.on('response', (r) => {
 await page.goto('http://127.0.0.1:5173/', { waitUntil: 'networkidle' })
 await page.waitForTimeout(1000)
 await page.screenshot({ path: `${outDir}/home.png` })
+// ផ្នែកដែលត្រូវរំកិលមើល (recent projects) — container ខាងក្នុងទេ មិនមែនទំព័រ
+await page.evaluate(() => {
+  const main = document.querySelector('.overflow-y-auto')
+  if (main) main.scrollTop = main.scrollHeight
+})
+await page.waitForTimeout(500)
+await page.screenshot({ path: `${outDir}/home-bottom.png` })
 
 // Review: ជ្រើស project ដែលមាន clip រួច រួចចូលមើល
 const project = await page.getByRole('button', { name: /Taylor_Tomlinson/ })

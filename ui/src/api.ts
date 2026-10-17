@@ -84,11 +84,25 @@ export type JobOptions = {
   redo?: string
   caption_words?: number
   caption_color?: string
+  aspect?: string
+  layout?: string
+}
+
+/** ជួរមួយក្នុងតារាង `project` របស់ database (server/db.py). */
+export type Project = {
+  id: number
+  name: string
+  video: string
+  created: number
+  clips: number
+  jobs: number
+  last_state: string | null
 }
 
 export const api = {
   health: () => send<Health>('/health'),
   videos: () => send<Video[]>('/videos'),
+  projects: () => send<Project[]>('/projects'),
   startJob: (options: JobOptions) => send<JobStatus>('/jobs', 'POST', options),
   cancelJob: (id: string) => send<JobStatus>(`/jobs/${id}`, 'DELETE'),
   // 404 = project នេះមិនទាន់មាន clip (job ទើបចាប់ផ្តើម) -> បញ្ជីទទេ

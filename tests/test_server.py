@@ -19,7 +19,11 @@ from server.app import app, runner
 
 
 @pytest.fixture(autouse=True)
-def clean_runner():
+def clean_runner(tmp_path, monkeypatch):
+    """Test មិនត្រូវសរសេរចូល database ពិតទេ — វាធ្វើឲ្យ UI បង្ហាញ project ក្លែង
+    ឈ្មោះ `v` (យើងឃើញវាពិតក្នុងបញ្ជី "Recent projects")."""
+    monkeypatch.setattr(DB, "DB_PATH", tmp_path / "test.db")
+    DB.init_db()
     runner.jobs.clear()
     yield
     runner.jobs.clear()
@@ -169,6 +173,33 @@ def test_cached_steps_are_not_counted_as_progress(tmp_path, monkeypatch):
     finally:
         for name in ("audio.wav", "transcript.json"):
             (out / name).unlink(missing_ok=True)
+
+
+def test_projects_include_folders_made_before_the_database(client, monkeypatch):
+    """Project ចាស់ដែលសង់ដោយ CLI មានតែ folder — វាត្រូវតែលេចក្នុងបញ្ជី."""
+    from server import app as APP
+
+    monkeypatch.setattr(APP, "clips_of_project",
+                        lambda folder: [{"index": 1}] if folder.name == "old-cli-project" else [])
+    folder = J.PROJECT_ROOT / "output" / "old-cli-project"
+    folder.mkdir(parents=True, exist_ok=True)
+    try:
+        names = {item["name"]: item for item in client.get("/projects").json()}
+        assert "old-cli-project" in names
+        assert names["old-cli-project"]["clips"] == 1
+        assert names["old-cli-project"]["jobs"] == 0
+    finally:
+        folder.rmdir()
+
+
+def test_a_job_left_running_is_marked_interrupted(tmp_path):
+    """Row `running` ពេល server ចាប់ផ្តើម = job ដែលស្លាប់ ទេមិនមែនកំពុងរត់."""
+    DB.save_job("ghost", "project", "v.mp4", ["x"], time.time())
+    assert DB.list_jobs()[0]["state"] == "running"
+    assert DB.interrupt_stale_jobs() == 1
+    row = DB.list_jobs()[0]
+    assert row["state"] == "interrupted" and row["error"]
+    assert DB.interrupt_stale_jobs() == 0      # ធ្វើម្តងទៀតគ្មានអ្វីប្តូរ
 
 
 def test_redo_flags_map_to_steps():

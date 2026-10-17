@@ -127,6 +127,21 @@ def save_clips(name: str, video: str, clips: list[dict], path: Path | None = Non
     return len(clips)
 
 
+def interrupt_stale_jobs(path: Path | None = None) -> int:
+    """Job ដែល state នៅ `running` ពេល server ចាប់ផ្តើម = job ដែលស្លាប់.
+
+    `JobRunner` ផ្ទុក job ក្នុង memory ដូច្នេះការបិទ server សម្លាប់ process កូន
+    ហើយ row នៅជាប់ `running` ជារៀងរហូត — UI បង្ហាញវាជា "PROCESSING" មិនពិត.
+    """
+    with connect(path) as connection:
+        cursor = connection.execute(
+            "UPDATE job SET state = 'interrupted', error = ?, finished = ?"
+            " WHERE state = 'running'",
+            ("sidecar បានបិទពេល job កំពុងរត់", time.time()),
+        )
+        return cursor.rowcount
+
+
 def list_projects(path: Path | None = None) -> list[dict]:
     """project ទាំងអស់ + ចំនួន clip + job ចុងក្រោយ."""
     with connect(path) as connection:
