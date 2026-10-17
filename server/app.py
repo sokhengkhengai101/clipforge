@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 
 import config
-from server import db, export, media
+from server import db, env, export, media
 from server.clips import clips_of_project
 from server.jobs import PROJECT_ROOT, JobRunner
 
@@ -55,6 +55,8 @@ class JobRequest(BaseModel):
     caption_color: str | None = None
     full: bool | None = None
     redo: str | None = None
+    model: str | None = None            # Ollama model សម្រាប់ highlights
+    whisper_model: str | None = None    # small / medium / large-v3
 
 
 @app.get("/", include_in_schema=False)
@@ -82,6 +84,16 @@ def health() -> dict:
         "llm_model": config.OLLAMA_MODEL,
         "busy": active.id if active else None,
     }
+
+
+@app.get("/env")
+def environment() -> dict:
+    """Hardware និង model ដែលមានពិត — screen "01 · AI models" គូរពីវា.
+
+    វាសួរ nvidia-smi និង Ollama រាល់ដង (មិន cache) ព្រោះចម្លើយផ្លាស់ប្តូរបាន:
+    អ្នកអាច `ollama pull` ពេលទំព័រនៅបើក ហើយ Refresh គួរឃើញវាភ្លាម.
+    """
+    return env.report(DEVICE, WHISPER_MODEL, COMPUTE_TYPE, PROJECT_ROOT / "output")
 
 
 @app.get("/videos")

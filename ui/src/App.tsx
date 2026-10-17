@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, type Clip, type Health, type Project, type Video } from './api'
 import { PRESETS, type Preset } from './presets'
+import { PACKS, type Pack } from './packs'
 import { useJob } from './useJob'
 import { Home } from './components/Home'
 import { Processing } from './components/Processing'
 import { Review } from './components/Review'
-import { Sidebar } from './components/Sidebar'
+import { Models } from './components/Models'
+import { Sidebar, type Page } from './components/Sidebar'
 import { TitleBar } from './components/TitleBar'
 
 export default function App() {
@@ -16,7 +18,10 @@ export default function App() {
   const [preset, setPreset] = useState<Preset>(PRESETS[0])
   const [clips, setClips] = useState<Clip[]>([])
   const [error, setError] = useState('')
-  const [view, setView] = useState<'home' | 'job' | 'review'>('home')
+  const [view, setView] = useState<'home' | 'job' | 'review' | 'models'>('home')
+  // Model pack = flag ដែល *គ្រប់* job ប្រើ. លំនាំដើម Standard, ព្រោះវាជាអ្វី
+  // ដែលម៉ាស៊ីននេះរត់ពិត; ទំព័រ Models បង្ហាញ BEST FIT តាម VRAM ពិត.
+  const [pack, setPack] = useState<Pack>(PACKS[1])
   const [captionWords, setCaptionWords] = useState(5)
   const [captionColor, setCaptionColor] = useState('#FFD23F')
   const job = useJob()
@@ -67,10 +72,10 @@ export default function App() {
     (extra: Record<string, unknown>) => {
       if (!chosen) return
       setView('job')
-      job.start({ video: chosen.path, ...preset.options, ...extra })
+      job.start({ video: chosen.path, ...pack.options, ...preset.options, ...extra })
       setTimeout(loadProjects, 500)
     },
-    [chosen, preset, job, loadProjects],
+    [chosen, preset, pack, job, loadProjects],
   )
 
   /** ប្តូរ style caption រួច render ជាថ្មី — មិន transcribe ឡើងវិញទេ. */
@@ -101,9 +106,13 @@ export default function App() {
           device={health?.device ?? '...'}
           ffmpeg={health?.ffmpeg ?? false}
           onNewProject={() => setView('home')}
+          page={view === 'models' ? 'models' : 'projects'}
+          onPage={(page: Page) => setView(page === 'models' ? 'models' : 'home')}
         />
 
-        {view === 'job' && job.status ? (
+        {view === 'models' ? (
+          <Models pack={pack} onPack={setPack} />
+        ) : view === 'job' && job.status ? (
           <Processing
             status={job.status}
             log={job.log}

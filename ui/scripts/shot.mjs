@@ -93,6 +93,40 @@ if (await project.count()) {
   }
 }
 
+// Screen 01: ទំព័រ Models ក្នុង sidebar — hardware និង pack ពិត.
+// Escape បិទ dialog Export ជាមុន, បើមិនដូច្នោះ scrim បាំង sidebar.
+await page.keyboard.press('Escape')
+await page.waitForTimeout(300)
+await page.getByRole('button', { name: 'Models' }).click()
+await page.waitForTimeout(1500)
+await page.screenshot({ path: `${outDir}/models.png` })
+const models = await page.evaluate(() => {
+  const lines = document.body.innerText.split(/\r?\n/).filter((line) => line.trim())
+  return {
+    chips: lines.filter((line) => /GB|FFmpeg/.test(line)).slice(0, 4),
+    packs: [...document.querySelectorAll('button')]
+      .map((b) => b.innerText.split(/\r?\n/)[0])
+      .filter((name) => ['Lite', 'Standard', 'Pro'].includes(name)),
+    badges: lines.filter((line) => /BEST FIT|TOO BIG/.test(line)),
+    flags: lines.find((line) => line.includes('--whisper-model')) ?? null,
+  }
+})
+console.log('models page:', JSON.stringify(models))
+// ចុច Lite — បន្ទាត់ flag ខាងក្រោមត្រូវប្តូរពិត (pack = flag មិនមែនតែរូប)
+await page.getByRole('button', { name: /^Lite/ }).click()
+await page.waitForTimeout(400)
+console.log(
+  'after picking Lite:',
+  await page.evaluate(
+    () =>
+      document.body.innerText
+        .split(/\r?\n/)
+        .find((line) => line.includes('--whisper-model')) ?? null,
+  ),
+)
+await page.getByRole('button', { name: 'Projects' }).click()
+await page.waitForTimeout(500)
+
 if (withJob) {
   await page.getByRole('button', { name: /Start/ }).click()
   await page.waitForTimeout(9000)

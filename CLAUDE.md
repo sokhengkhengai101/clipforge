@@ -418,6 +418,36 @@ One thing this screen fixed: `/projects` counted every clip in `clips.json`, inc
 were never rendered, so `sample_5s` (a `clips.json` with no `clips/` folder at all) showed READY
 and a thumbnail request that 404'd on every load; it now counts only clips with an `.mp4`.
 
+**Screen "01 - Onboarding · AI models" (node 11:576) is implemented** as `components/Models.tsx`,
+reached from the sidebar's Models entry, which is now a real page rather than a SOON label.
+The design draws it as step 3 of a four-step wizard (Welcome / Hardware / AI models / Preferences)
+whose other three steps do not exist in the file, and the card's own Khmer line says the choice can
+be changed later "in Models" -- so it is built as that page, without the stepper.
+A **model pack is a flag bundle**, the same idea as the Home presets, and `make_clips.py` already
+had the flags: Lite is `--whisper-model small --model qwen2.5:3b`, Standard is
+`medium` + `qwen2.5:7b-instruct`, Pro is `large-v3` + `qwen2.5:14b`. `JobRequest` gained `model`
+and `whisper_model`, and `jobs.py` turns them into flags with no extra code. Picking a pack changes
+what every job runs: measured in the browser, clicking Lite moves the footer line from
+`--whisper-model medium --model qwen2.5:7b-instruct` to `--whisper-model small --model qwen2.5:3b`.
+BEST FIT is computed from real VRAM, not drawn: `server/env.py` asks `nvidia-smi` for the card and
+its memory (ctranslate2 only says how many CUDA devices exist), and Pro is disabled and badged
+TOO BIG on this machine because large-v3 does not fit in 3 GB.
+`GET /env` is the doctor script as JSON -- `check_env.py` prints for a human and returns a count,
+while the UI needs the values. It reports device/model/compute, GPU name and VRAM, RAM
+(`GlobalMemoryStatusEx` through ctypes, since Windows has no `os.sysconf`), free disk, FFmpeg,
+Ollama reachability with the models pulled and their sizes, the Whisper sizes in the Hugging Face
+cache, the three ONNX models with the `curl` line for any that is missing, and whether
+`ANTHROPIC_API_KEY` is set (never the key). A test caught the cache lookup merging every candidate
+folder; huggingface_hub uses exactly one, so the first env var that is *set* wins and the default
+is only a fallback -- otherwise the page lists models Whisper would not find.
+The design's download bar is a progress bar for a download manager we do not have (Whisper pulls
+itself from Hugging Face on first use, LLMs come from `ollama pull`), so the row says what is
+already on the machine and prints the exact command for anything missing.
+Measured on this machine: `NVIDIA GeForce GTX 1060 · 3.0 GB VRAM`, `16.0 GB RAM`, `156.6 GB free`,
+FFmpeg ready; whisper cache base/medium/small/tiny; Ollama has qwen2.5:3b (1.9 GB) and
+qwen2.5:7b-instruct (4.7 GB); all three ONNX models present (0.2 / 38.7 / 35.9 MB). No console
+errors, no broken icons.
+
 ## Later phases (context only — do not build yet)
 
 - Phase 2: MediaPipe face tracking reframe, bilingual EN + Khmer subtitles, interview Q&A finder, long video → 10 clips.

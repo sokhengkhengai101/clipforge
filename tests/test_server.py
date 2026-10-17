@@ -516,3 +516,71 @@ def test_projects_count_only_rendered_clips(client, monkeypatch):
         assert found["half-rendered"]["clips"] == 1
     finally:
         folder.rmdir()
+
+
+# ---------- Env (screen 01 · AI models) ----------
+
+
+def test_gpu_is_read_from_nvidia_smi(monkeypatch):
+    """ctranslate2 ប្រាប់តែថាមាន CUDA; ឈ្មោះ និង VRAM មកពី nvidia-smi."""
+    from server import env as E
+
+    monkeypatch.setattr(E.subprocess, "run", lambda command, **kw: subprocess.CompletedProcess(
+        command, 0, "NVIDIA GeForce GTX 1060, 3072\n"))
+    assert E.gpu() == {"name": "NVIDIA GeForce GTX 1060", "vram_mb": 3072}
+
+    # គ្មាន driver -> nvidia-smi មិនមាន -> None (UI សរសេរ "CPU")
+    def missing(command, **kw):
+        raise FileNotFoundError("nvidia-smi")
+
+    monkeypatch.setattr(E.subprocess, "run", missing)
+    assert E.gpu() is None
+
+
+def test_whisper_cache_lists_downloaded_sizes(tmp_path, monkeypatch):
+    """Folder `models--Systran--faster-whisper-medium` = medium ទាញរួច."""
+    from server import env as E
+
+    hub = tmp_path / "hub"
+    (hub / "models--Systran--faster-whisper-medium").mkdir(parents=True)
+    (hub / "models--Systran--faster-whisper-small").mkdir()
+    (hub / "models--other--thing").mkdir()
+    monkeypatch.setenv("HF_HUB_CACHE", str(hub))
+    assert E.whisper_cache() == ["medium", "small"]
+
+
+def test_ollama_is_not_fatal_when_it_is_down(monkeypatch):
+    """Ollama បិទ -> ទំព័រនៅតែបង្ហាញបាន, គ្រាន់តែ `reachable: False`."""
+    from server import env as E
+
+    def refused(url, timeout=0):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(E.urllib.request, "urlopen", refused)
+    answer = E.ollama()
+    assert answer["reachable"] is False and answer["models"] == []
+
+
+def test_env_endpoint_answers_with_the_machine(client):
+    """`GET /env` ត្រូវឆ្លើយទោះ hardware ជាអ្វីក៏ដោយ — UI គូរពីវា."""
+    body = client.get("/env").json()
+    assert set(body) >= {"device", "gpu", "ram_mb", "disk_free_mb", "ollama",
+                         "whisper_cache", "onnx", "anthropic_key"}
+    assert body["device"] in ("cuda", "cpu")
+    assert len(body["onnx"]) == 3
+    assert isinstance(body["ollama"]["models"], list)
+
+
+def test_model_pack_becomes_cli_flags(tmp_path, monkeypatch):
+    """ជ្រើស pack = `--whisper-model` + `--model` ពិតលើ command line."""
+    video = tmp_path / "v.mp4"
+    video.write_bytes(b"x")
+    captured = {}
+    monkeypatch.setattr(J.JobRunner, "_run",
+                        lambda self, job: captured.update(args=job.args))
+    monkeypatch.setattr(J.db, "save_job", lambda *a, **k: None)
+    runner.start(video, whisper_model="medium", model="qwen2.5:7b-instruct")
+    time.sleep(0.2)
+    args = captured["args"]
+    assert args[args.index("--whisper-model") + 1] == "medium"
+    assert args[args.index("--model") + 1] == "qwen2.5:7b-instruct"

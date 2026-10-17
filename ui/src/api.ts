@@ -91,6 +91,35 @@ export type JobOptions = {
   caption_color?: string
   aspect?: string
   layout?: string
+  model?: string            // Ollama model (model pack)
+  whisper_model?: string    // small / medium / large-v3 (model pack)
+}
+
+/** ---- Env (screen 01 · AI models) ---- */
+
+export type OllamaModel = { name: string; gb: number }
+
+export type OnnxModel = {
+  label: string
+  name: string
+  present: boolean
+  mb: number
+  fix: string
+}
+
+export type Env = {
+  device: string
+  whisper_model: string
+  compute_type: string
+  gpu: { name: string; vram_mb: number } | null
+  ram_mb: number | null
+  disk_free_mb: number | null
+  ffmpeg: boolean
+  ollama: { reachable: boolean; host: string; models: OllamaModel[] }
+  whisper_cache: string[]
+  onnx: OnnxModel[]
+  anthropic_key: boolean
+  anthropic_model: string
 }
 
 /** ---- Export (screen 05) ---- */
@@ -145,6 +174,7 @@ export type Project = {
 export const api = {
   health: () => send<Health>('/health'),
   videos: () => send<Video[]>('/videos'),
+  env: () => send<Env>('/env'),
   projects: () => send<Project[]>('/projects'),
   startJob: (options: JobOptions) => send<JobStatus>('/jobs', 'POST', options),
   cancelJob: (id: string) => send<JobStatus>(`/jobs/${id}`, 'DELETE'),

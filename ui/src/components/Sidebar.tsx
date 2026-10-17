@@ -11,14 +11,17 @@ import statusGpu from '../assets/figma/status-gpu.svg'
 import statusOffline from '../assets/figma/status-offline.svg'
 import statusModels from '../assets/figma/status-models.svg'
 
+/** `page` = ទំព័រដែល nav នេះបើក; `null` = មិនទាន់សង់ (បង្ហាញ SOON). */
 const NAV = [
-  { icon: navProjects, label: 'Projects', active: true },
-  { icon: navPresets, label: 'Presets', active: false },
-  { icon: navBrandKits, label: 'Brand kits', active: false },
-  { icon: navBatchQueue, label: 'Batch queue', active: false },
-  { icon: navModels, label: 'Models', active: false },
-  { icon: navSettings, label: 'Settings', active: false },
-]
+  { icon: navProjects, label: 'Projects', page: 'projects' },
+  { icon: navPresets, label: 'Presets', page: null },
+  { icon: navBrandKits, label: 'Brand kits', page: null },
+  { icon: navBatchQueue, label: 'Batch queue', page: null },
+  { icon: navModels, label: 'Models', page: 'models' },
+  { icon: navSettings, label: 'Settings', page: null },
+] as const
+
+export type Page = 'projects' | 'models'
 
 /** Sidebar (design node 5:23). ឥឡូវមានតែ Projects ដែលដំណើរការ —
  *  ទំព័រឯទៀតជារបស់ phase ក្រោយ ដូច្នេះវាបង្ហាញជាពណ៌ស្រអាប់. */
@@ -26,10 +29,14 @@ export function Sidebar({
   device,
   ffmpeg,
   onNewProject,
+  page,
+  onPage,
 }: {
   device: string
   ffmpeg: boolean
   onNewProject: () => void
+  page: Page
+  onPage: (page: Page) => void
 }) {
   return (
     <aside className="flex h-full w-60 shrink-0 flex-col gap-5 border-r border-border-default bg-bg-panel px-4 pt-5 pb-4">
@@ -53,27 +60,33 @@ export function Sidebar({
       </button>
 
       <nav className="flex w-full flex-col gap-0.5">
-        {NAV.map((item) => (
-          <div
-            key={item.label}
-            title={item.active ? undefined : 'Not built yet'}
-            className={`flex h-9 items-center gap-2.5 rounded-sm px-3 py-2 ${
-              item.active ? 'bg-accent-soft' : 'opacity-60'
-            }`}
-          >
-            <img src={item.icon} alt="" width={18} height={18} />
-            <span
-              className={
-                item.active
-                  ? 'text-body-strong text-text-primary'
-                  : 'text-body text-text-secondary'
-              }
+        {NAV.map((item) => {
+          const here = item.page !== null && item.page === page
+          return (
+            <button
+              key={item.label}
+              type="button"
+              disabled={item.page === null}
+              onClick={() => item.page && onPage(item.page)}
+              title={item.page ? undefined : 'Not built yet'}
+              className={`flex h-9 w-full items-center gap-2.5 rounded-sm px-3 py-2 text-left ${
+                here ? 'bg-accent-soft' : item.page ? 'hover:bg-bg-hover' : 'opacity-60'
+              }`}
             >
-              {item.label}
-            </span>
-            {!item.active && <span className="ml-auto text-label text-text-secondary">SOON</span>}
-          </div>
-        ))}
+              <img src={item.icon} alt="" width={18} height={18} />
+              <span
+                className={
+                  here ? 'text-body-strong text-text-primary' : 'text-body text-text-secondary'
+                }
+              >
+                {item.label}
+              </span>
+              {item.page === null && (
+                <span className="ml-auto text-label text-text-secondary">SOON</span>
+              )}
+            </button>
+          )
+        })}
       </nav>
 
       <div className="flex-1" />
