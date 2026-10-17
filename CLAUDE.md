@@ -190,13 +190,41 @@ clipforge/
 ├─ check_env.py         # doctor script: Python/FFmpeg/GPU/Ollama check
 ├─ pipeline/            # audio, transcribe, highlights, boundaries, captions, render, llm
 ├─ prompts/             # podcast_highlights.md (LLM prompt, versioned)
+├─ server/              # Phase 1 sidecar: app.py (FastAPI), jobs.py (subprocess)
 ├─ tests/
 └─ output/              # git-ignored
 ```
 
+## Phase 1 (started 2026-10-18)
+
+Tauri 2 (Rust) + React/TypeScript + Tailwind + shadcn/ui over a Python sidecar. This machine
+already has Node 24.13 and Rust 1.99, so nothing large needs installing; FastAPI and uvicorn do.
+
+Order: **1A sidecar** (done) -> 1B SQLite -> 1C React in a browser -> 1D wrap in Tauri -> 1E Figma
+styling. The UI is built against the sidecar in a plain browser first, so there is no Rust rebuild
+loop while the screens take shape.
+
+`server/` holds the sidecar, bound to 127.0.0.1 only (the project uploads nothing):
+
+    python -m uvicorn server.app:app --host 127.0.0.1 --port 8765
+    http://127.0.0.1:8765/docs
+
+`GET /health`, `GET /videos`, `POST /jobs`, `GET /jobs/{id}`, `DELETE /jobs/{id}`,
+`GET /projects/{name}/clips`, and `WS /jobs/{id}/events` for live log lines and status.
+
+**The sidecar spawns `make_clips.py` as a subprocess** rather than importing the pipeline. The
+orchestration is 330 lines interleaved with `console.print`, and extracting it now would risk a CLI
+that works. A subprocess also isolates crashes and makes cancelling a kill. Job options map
+straight to CLI flags (`max_clips=3` -> `--max-clips 3`).
+Progress comes from **the files the pipeline already writes** (`audio.wav`, `transcript.json`,
+`highlights.json`, `clips.json`, then `.ass` and `.mp4` in the clips folder), not from parsing
+console text. One job at a time: a second `POST /jobs` returns 409, because Whisper and Ollama
+share one 3 GB GPU.
+Measured end to end through the API: the 56-second wildlife video ran to `done` in 34.3 s with
+6/6 steps and 37 log lines streamed over the WebSocket.
+
 ## Later phases (context only — do not build yet)
 
-- Phase 1 (MVP): Tauri 2 (Rust) + React/TypeScript + Tailwind + shadcn/ui; the Phase 0 pipeline becomes a Python sidecar (FastAPI on 127.0.0.1) with progress over WebSocket; SQLite for projects/clips/jobs.
 - Phase 2: MediaPipe face tracking reframe, bilingual EN + Khmer subtitles, interview Q&A finder, long video → 10 clips.
 - Phase 3: gaming audio signals, brand kits, batch queue, installer.
 - Presets are JSON configs over the same engines (e.g. `presets/podcast.json`).
