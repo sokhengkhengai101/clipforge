@@ -232,6 +232,14 @@ clipforge/
   edge in 12 of 26 sampled frames, the moving box keeps it at x=200-670 of 1080. It costs one frame
   grab per second of moving shot (five clips: 40s -> 54s with warm caches), and only 2 of 44
   segments in those five clips move enough to trigger it.
+- `fit` keeps the whole frame: the source is scaled to the output width and centred over a blurred,
+  scaled-to-cover copy of itself. It is chosen when a shot has no face, no person or animal **and**
+  the picture is still, which is how a slide differs from a blurred animal running past. Measured
+  `motion_level` (mean frame-to-frame difference, 160 px wide): webinar slides 0.03-0.25, the rhino
+  charge 51-66, so `FIT_MOTION_MAX` is 1.0. On a 12-min webinar 7 of 16 sampled shots become `fit`
+  and 8 stay `single` for the webcam; the podcast, interview and wildlife clips plan identically.
+  Without it a 1280x720 slide kept 32% of its width and lost all its text. The caption's normal
+  lower-third position lands on the blurred band below the video block, covering nothing.
 - Split-panel sharpness. Three things decided how soft a panel looks, all measured on a 1280x720
   podcast whose panels are 1080x960: (1) a framed photo on the wall was detected as a face 29 px
   tall and blown up 16.9x for 16 s of a clip, so a detection under `FACE_MIN_HEIGHT_RATIO` (8% of

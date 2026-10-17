@@ -754,11 +754,12 @@ LAYOUT_ALIASES = {
     "three": "three", "four": "four",
     "single": "single", "face": "single", "fill": "single",
     "center": "center", "centre": "center",
+    "fit": "fit",
 }
 # `auto` = អនុញ្ញាតទាំងអស់ ហើយ planner រើសក្នុងមួយ shot (shot មកពី scene detection)។
 # វាស់មុនបើក three/four ក្នុង auto: podcast ៣ នាក់ប្តូរ 34s ពី split ទៅ three
 # (ត្រឹមត្រូវ — មានមនុស្ស ៣ នាក់ក្នុងរូប) ហើយបទសម្ភាសន៍ ២ នាក់មិនប្តូរសោះ។
-ALL_LAYOUTS = frozenset({"split", "three", "four", "single", "center"})
+ALL_LAYOUTS = frozenset({"split", "three", "four", "single", "fit", "center"})
 MULTI_PANEL = ("four", "three", "split")
 
 
@@ -802,14 +803,17 @@ def head_of(subject) -> Face:
                 w=width, h=height, score=subject.score)
 
 
-def fallback_face(video_path: Path, start: float, end: float, size: tuple[int, int],
-                  frames: list, sampled: int) -> Face | None:
-    """រក "មុខ" ជំនួសពី subject ឬចលនា — `None` បើគ្មានអ្វីទាល់តែសោះ.
+def fallback_layout(video_path: Path, start: float, end: float, size: tuple[int, int],
+                    frames: list, sampled: int,
+                    allowed: frozenset[str]) -> Layout | None:
+    """Layout សម្រាប់ shot ដែលគ្មានមុខ — `None` បើគ្មានអ្វីល្អជាង center.
+
+    លំដាប់: **រូបកាយ/សត្វ -> slide ស្ងៀម (fit) -> ចលនា**។
 
     `frames` ជា frame ដែល `plan_shot` ទាញរួចហើយ — យើងប្រើឡើងវិញ ព្រោះការទាញ
     frame ជាផ្នែកដែលថ្លៃបំផុត (ការចាប់វត្ថុខ្លួនឯងត្រឹម ~175ms)។
     """
-    from pipeline.subjects import detect_subjects_in_frame, motion_centre
+    from pipeline.subjects import detect_subjects_in_frame, motion_centre, motion_level
 
     frame_w, frame_h = size
     seen: list = []
@@ -819,16 +823,22 @@ def fallback_face(video_path: Path, start: float, end: float, size: tuple[int, i
             seen.append(max(found, key=lambda s: s.area))
 
     # ដែនវត្តមានដូចមុខដែរ: វត្ថុដែលលេចតែម្តងមិនគួរគ្រប់គ្រង shot ទាំងមូលទេ
-    if seen and len(seen) >= sampled * config.FACE_PRESENCE_MIN:
-        return head_of(max(seen, key=lambda s: s.area))
+    if seen and len(seen) >= sampled * config.FACE_PRESENCE_MIN and "single" in allowed:
+        head = head_of(max(seen, key=lambda s: s.area))
+        return Layout(kind="single", box=single_box(head, frame_w, frame_h))
+
+    # គ្មានមនុស្ស **ហើយរូបស្ងៀម** = slide/អេក្រង់ -> បង្ហាញរូបពេញ កុំកាត់អក្សរ
+    if "fit" in allowed and motion_level(video_path, start, end, size) < config.FIT_MOTION_MAX:
+        return Layout(kind="fit")
 
     centre = motion_centre(video_path, start, end, size)
-    if centre is None:
+    if centre is None or "single" not in allowed:
         return None
     cx, cy = centre
     height = max(2, int(frame_h * 0.15))
-    return Face(x=int(cx - height * 0.375), y=int(cy - height / 2),
+    spot = Face(x=int(cx - height * 0.375), y=int(cy - height / 2),
                 w=int(height * 0.75), h=height, score=0.0)
+    return Layout(kind="single", box=single_box(spot, frame_w, frame_h))
 
 # ---------- ផែនការ layout ----------
 
@@ -949,11 +959,11 @@ def plan_shot(video_path: Path, start: float, end: float, size: tuple[int, int],
         return Layout(kind="single", box=box,
                       person=identify(best_frame, subject, seats))
 
-    # គ្មានមុខដែលទុកចិត្តបាន -> រូបកាយ/សត្វ រួចចលនា។ center ជាទីពឹងចុងក្រោយ។
-    if "single" in allowed and config.USE_SUBJECTS:
-        stand_in = fallback_face(video_path, start, end, size, frames, sampled)
-        if stand_in is not None:
-            return Layout(kind="single", box=single_box(stand_in, frame_w, frame_h))
+    # គ្មានមុខដែលទុកចិត្តបាន -> រូបកាយ/សត្វ, slide, រួចចលនា។ center ជាទីពឹងចុងក្រោយ។
+    if config.USE_SUBJECTS and ({"single", "fit"} & allowed):
+        spare = fallback_layout(video_path, start, end, size, frames, sampled, allowed)
+        if spare is not None:
+            return spare
 
     return Layout(kind="center", box=center_box(frame_w, frame_h))
 

@@ -27,6 +27,8 @@ def no_subject_detector(monkeypatch):
     monkeypatch.setattr(subjects_module, "detect_subjects_in_frame",
                         lambda frame, size: [])
     monkeypatch.setattr(subjects_module, "motion_centre", lambda *a, **k: None)
+    # ខ្ពស់ = "មិនមែន slide" ដូច្នេះ test ចាស់មិនទទួល `fit` ដោយចៃដន្យ
+    monkeypatch.setattr(subjects_module, "motion_level", lambda *a, **k: 50.0)
 
 
 def face(cx: float, cy: float = 400, w: int = 100, h: int = 170, score: float = 0.9) -> R.Face:
@@ -855,9 +857,9 @@ def test_fallback_uses_the_biggest_subject(monkeypatch):
         FakeSubject(x=900, y=100, w=200, h=600),
     ])
     frames = [object(), object(), object()]
-    head = R.fallback_face(None, 0.0, 6.0, SIZE, frames, sampled=3)
-    assert head is not None
-    assert head.cx == pytest.approx(1000, abs=3)
+    layout = R.fallback_layout(None, 0.0, 6.0, SIZE, frames, 3, R.ALL_LAYOUTS)
+    assert layout is not None and layout.kind == "single"
+    assert (layout.box.x + layout.box.w / 2) == pytest.approx(1000, abs=5)
 
 
 def test_fallback_ignores_a_subject_seen_once(monkeypatch):
@@ -871,16 +873,18 @@ def test_fallback_ignores_a_subject_seen_once(monkeypatch):
 
     monkeypatch.setattr(S, "detect_subjects_in_frame", detect)
     monkeypatch.setattr(S, "motion_centre", lambda *a, **k: None)
-    assert R.fallback_face(None, 0.0, 6.0, SIZE, [object()] * 3, sampled=3) is None
+    monkeypatch.setattr(S, "motion_level", lambda *a, **k: 50.0)
+    assert R.fallback_layout(None, 0.0, 6.0, SIZE, [object()] * 3, 3, R.ALL_LAYOUTS) is None
 
 
 def test_fallback_falls_through_to_motion(monkeypatch):
     import pipeline.subjects as S
     monkeypatch.setattr(S, "detect_subjects_in_frame", lambda frame, size: [])
     monkeypatch.setattr(S, "motion_centre", lambda *a, **k: (1500.0, 400.0))
-    head = R.fallback_face(None, 0.0, 6.0, SIZE, [object()] * 3, sampled=3)
-    assert head is not None
-    assert head.cx == pytest.approx(1500, abs=3)
+    monkeypatch.setattr(S, "motion_level", lambda *a, **k: 50.0)
+    layout = R.fallback_layout(None, 0.0, 6.0, SIZE, [object()] * 3, 3, R.ALL_LAYOUTS)
+    assert layout is not None and layout.kind == "single"
+    assert (layout.box.x + layout.box.w / 2) == pytest.approx(1500, abs=5)
 
 
 def test_plan_shot_crops_to_a_body_when_no_face(monkeypatch):
@@ -903,3 +907,61 @@ def test_subjects_can_be_turned_off(monkeypatch):
     monkeypatch.setattr(S, "detect_subjects_in_frame",
                         lambda frame, size: [FakeSubject(x=1400, y=100, w=200, h=600)])
     assert R.plan_shot(None, 10.0, 16.0, SIZE).kind == "center"
+
+
+# ---------- fit layout (slide / អេក្រង់) ----------
+
+def test_fit_is_a_known_layout():
+    assert R.parse_layouts("fit") == frozenset({"fit"})
+    assert "fit" in R.parse_layouts("auto")
+
+
+def test_still_frame_with_no_people_gets_fit(monkeypatch):
+    """Slide: គ្មានមុខ គ្មានមនុស្ស ហើយរូបស្ងៀម -> បង្ហាញរូបពេញ."""
+    import pipeline.subjects as S
+    monkeypatch.setattr(R, "grab_frame", lambda path, t, size: t)
+    monkeypatch.setattr(R, "detect_faces_in_frame", lambda frame, size: [])
+    monkeypatch.setattr(S, "detect_subjects_in_frame", lambda frame, size: [])
+    monkeypatch.setattr(S, "motion_level", lambda *a, **k: 0.05)
+    layout = R.plan_shot(None, 10.0, 16.0, SIZE)
+    assert layout.kind == "fit"
+    assert layout.box is None and not layout.panels
+
+
+def test_moving_frame_with_no_people_follows_motion(monkeypatch):
+    """សកម្មភាពព្រិល (សត្វរត់) មិនមែន slide ទេ — កុំដាក់ fit."""
+    import pipeline.subjects as S
+    monkeypatch.setattr(R, "grab_frame", lambda path, t, size: t)
+    monkeypatch.setattr(R, "detect_faces_in_frame", lambda frame, size: [])
+    monkeypatch.setattr(S, "detect_subjects_in_frame", lambda frame, size: [])
+    monkeypatch.setattr(S, "motion_level", lambda *a, **k: 55.0)
+    monkeypatch.setattr(S, "motion_centre", lambda *a, **k: (1500.0, 400.0))
+    layout = R.plan_shot(None, 10.0, 16.0, SIZE)
+    assert layout.kind == "single"
+    assert abs((layout.box.x + layout.box.w / 2) - 1500) < 60
+
+
+def test_fit_can_be_forbidden(monkeypatch):
+    import pipeline.subjects as S
+    monkeypatch.setattr(R, "grab_frame", lambda path, t, size: t)
+    monkeypatch.setattr(R, "detect_faces_in_frame", lambda frame, size: [])
+    monkeypatch.setattr(S, "detect_subjects_in_frame", lambda frame, size: [])
+    monkeypatch.setattr(S, "motion_level", lambda *a, **k: 0.05)
+    monkeypatch.setattr(S, "motion_centre", lambda *a, **k: None)
+    assert R.plan_shot(None, 10.0, 16.0, SIZE,
+                       allowed=R.parse_layouts("fill,split")).kind == "center"
+
+
+def test_people_beat_fit(monkeypatch):
+    """មានមនុស្សក្នុងរូបស្ងៀម -> តាមមនុស្ស មិនមែន fit."""
+    import pipeline.subjects as S
+
+    class Body:
+        x, y, w, h, label, score = 900, 100, 200, 600, "person", 0.9
+        cx, area = 1000, 120000
+
+    monkeypatch.setattr(R, "grab_frame", lambda path, t, size: t)
+    monkeypatch.setattr(R, "detect_faces_in_frame", lambda frame, size: [])
+    monkeypatch.setattr(S, "detect_subjects_in_frame", lambda frame, size: [Body()])
+    monkeypatch.setattr(S, "motion_level", lambda *a, **k: 0.05)
+    assert R.plan_shot(None, 10.0, 16.0, SIZE).kind == "single"

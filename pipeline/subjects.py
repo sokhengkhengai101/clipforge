@@ -228,3 +228,32 @@ def motion_centre(video_path: Path, start: float, end: float, size: tuple[int, i
     cx = float((xs * weights[ys, xs]).sum() / total) * frame_w / small_w
     cy = float((ys * weights[ys, xs]).sum() / total) * frame_h / small_h
     return cx, cy
+
+
+def motion_level(video_path: Path, start: float, end: float, size: tuple[int, int],
+                 samples: int | None = None) -> float:
+    """ចលនាមធ្យមក្នុង shot (0-255) — តូច = រូបស្ងៀម (slide, អេក្រង់).
+
+    ផ្សេងពី `motion_centre()` ដែលប្រាប់ *ទីណា* — មួយនេះប្រាប់ *ប៉ុន្មាន*។
+    វាស់លើ video ពិត: slide ក្នុង webinar 0.03-0.25, សត្វរត់ក្នុងធូលី 51-66។
+    """
+    import cv2
+    import numpy as np
+
+    samples = config.MOTION_SAMPLES if samples is None else samples
+    frame_w, frame_h = size
+    small_w = config.MOTION_WIDTH
+    small_h = max(2, int(small_w * frame_h / frame_w))
+
+    greys = []
+    for index in range(samples):
+        moment = start + (end - start) * (index + 0.5) / samples
+        frame = grab_frame(video_path, moment, size)
+        if frame is None:
+            continue
+        small = cv2.resize(frame, (small_w, small_h), interpolation=cv2.INTER_AREA)
+        greys.append(cv2.cvtColor(small, cv2.COLOR_BGR2GRAY).astype(np.int16))
+
+    if len(greys) < 2:
+        return 0.0
+    return float(np.mean([np.abs(b - a).mean() for a, b in zip(greys, greys[1:])]))

@@ -558,3 +558,18 @@ def test_mask_input_is_split_per_segment_that_uses_it():
     assert f.count("overlay=0:0") == 2
     # caption ត្រូវដុតក្រោយ overlay ដើម្បីកុំឲ្យ mask កាត់អក្សរ
     assert f.index("overlay=0:0") < f.index("ass=c.ass")
+
+
+def test_fit_keeps_the_whole_frame_over_a_blurred_copy():
+    """Slide មិនត្រូវកាត់ទេ — រូបពេញនៅកណ្តាល ផ្ទៃខាងក្រោយជាច្បាប់ចម្លងព្រិល."""
+    f = R.build_layout_filter(Layout(kind="fit"), "c.ass")
+    assert "crop=1080:1920" in f            # crop លើ **ផ្ទៃខាងក្រោយ** ប៉ុណ្ណោះ
+    assert "boxblur" in f
+    assert "overlay=(W-w)/2:(H-h)/2" in f
+    assert "force_original_aspect_ratio=increase" in f
+    assert f.index("overlay") < f.index("ass=c.ass")
+
+
+def test_fit_needs_no_crop_box():
+    """Layout `fit` គ្មានប្រអប់ — វាមិនត្រូវបោះ error ទេ."""
+    assert R.build_layout_filter(Layout(kind="fit")).endswith("[v]")

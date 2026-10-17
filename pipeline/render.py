@@ -143,6 +143,19 @@ def layout_chain(layout: Layout, index: int, source_label: str, out_label: str,
             parts.append(f"{joined}{stack},setsar=1{suffix}[{out_label}]")
         return ";".join(parts)
 
+    if layout.kind == "fit":
+        # រូបពេញនៅកណ្តាល + ច្បាប់ចម្លងព្រិលជាផ្ទៃខាងក្រោយ (slide មិនត្រូវកាត់)។
+        # ផ្ទៃខាងក្រោយ scale ឲ្យ **គ្រប** រួច crop — បើ scale ត្រង់ រូបនឹងលាតខុស។
+        return (
+            f"[{source_label}]split=2[f{index}][g{index}];"
+            f"[f{index}]scale={out_width}:{out_height}:"
+            f"force_original_aspect_ratio=increase,"
+            f"crop={out_width}:{out_height},{config.FIT_BLUR}[bg{index}];"
+            f"[g{index}]scale={out_width}:-2:flags=lanczos[fg{index}];"
+            f"[bg{index}][fg{index}]overlay=(W-w)/2:(H-h)/2,"
+            f"setsar=1{suffix}[{out_label}]"
+        )
+
     box = layout.box
     if box is None:
         raise RenderError(f"layout '{layout.kind}' គ្មានប្រអប់ crop")
