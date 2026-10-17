@@ -35,6 +35,13 @@ def test_health_reports_ok(client):
     assert body["busy"] is None
 
 
+def test_root_redirects_to_docs(client):
+    """បើក `/` ក្នុង browser មិនត្រូវជួប 404 ទេ."""
+    answer = client.get("/", follow_redirects=False)
+    assert answer.status_code in (307, 308)
+    assert answer.headers["location"] == "/docs"
+
+
 def test_videos_lists_samples(client):
     found = client.get("/videos").json()
     assert isinstance(found, list)

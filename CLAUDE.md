@@ -209,6 +209,7 @@ loop while the screens take shape.
     python -m uvicorn server.app:app --host 127.0.0.1 --port 8765
     http://127.0.0.1:8765/docs
 
+`GET /` redirects to `/docs`, so opening the port in a browser is not a 404.
 `GET /health`, `GET /videos`, `POST /jobs`, `GET /jobs` (session + history),
 `GET /jobs/{id}`, `DELETE /jobs/{id}`, `GET /projects`, `GET /projects/{name}/clips`, and
 `WS /jobs/{id}/events` for live log lines and status.

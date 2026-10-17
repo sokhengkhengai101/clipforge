@@ -9,9 +9,11 @@
 
 import asyncio
 import json
+import shutil
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 import config
@@ -39,6 +41,12 @@ class JobRequest(BaseModel):
     redo: str | None = None
 
 
+@app.get("/", include_in_schema=False)
+def root() -> RedirectResponse:
+    """បើក `/` ក្នុង browser -> ទៅ `/docs` ដែលមានបញ្ជី route ទាំងអស់ សាកបាន."""
+    return RedirectResponse("/docs")
+
+
 @app.get("/health")
 def health() -> dict:
     """UI ហៅវាដើម្បីដឹងថា sidecar រស់ឬនៅ."""
@@ -46,7 +54,8 @@ def health() -> dict:
     return {
         "ok": True,
         "version": app.version,
-        "ffmpeg": bool(config.FFMPEG_OK) if hasattr(config, "FFMPEG_OK") else None,
+        # `shutil.which` រក binary ក្នុង PATH — UI ត្រូវដឹងមុនពេល start job
+        "ffmpeg": shutil.which("ffmpeg") is not None,
         "busy": active.id if active else None,
     }
 
