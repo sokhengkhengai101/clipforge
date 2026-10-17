@@ -191,6 +191,7 @@ clipforge/
 ├─ pipeline/            # audio, transcribe, highlights, boundaries, captions, render, llm
 ├─ prompts/             # podcast_highlights.md (LLM prompt, versioned)
 ├─ server/              # Phase 1 sidecar: app.py (FastAPI), jobs.py (subprocess), db.py (SQLite)
+├─ ui/                  # Phase 1 React UI (Vite + Tailwind), node_modules git-ignored
 ├─ tests/
 └─ output/              # git-ignored
 ```
@@ -200,7 +201,7 @@ clipforge/
 Tauri 2 (Rust) + React/TypeScript + Tailwind + shadcn/ui over a Python sidecar. This machine
 already has Node 24.13 and Rust 1.99, so nothing large needs installing; FastAPI and uvicorn do.
 
-Order: **1A sidecar** and **1B SQLite** (done) -> 1C React in a browser -> 1D wrap in Tauri -> 1E Figma
+Order: **1A sidecar** and **1B SQLite** (done) -> 1C React in a browser (started) -> 1D wrap in Tauri -> 1E Figma
 styling. The UI is built against the sidecar in a plain browser first, so there is no Rust rebuild
 loop while the screens take shape.
 
@@ -242,6 +243,16 @@ Measured end to end: a job through the API wrote one project, one `job` row (35.
 `render`) and one clip (`Daily Rhino Monitoring`, 11.2-53.1 s, 70 C+); after killing and
 restarting uvicorn, `GET /jobs` still returns that job with `from_history: true` while
 `GET /jobs?history=false` returns `[]`.
+
+**`ui/` — React (1C).** Vite 8 + React 19 + TypeScript + Tailwind 4, scaffolded with
+`npm create vite@latest ui -- --template react-ts`. `npm run dev` serves port 5173 and
+**proxies `/api/*` to 127.0.0.1:8765** with `ws: true`, so the browser sees one origin (no CORS
+header to add on the Python side) and `src/api.ts` only ever writes `fetch('/api/health')`.
+Tailwind is the `@tailwindcss/vite` plugin, not PostCSS, and it must be **4.3 or newer**: 4.1
+declares `peer vite@^5 || ^6 || ^7` and npm refuses to install it next to Vite 8.
+The Figma tokens live in one `@theme` block in `src/index.css` (`--color-app`, `--color-panel`,
+`--color-card`, `--color-accent`, `--color-keyword`), which is what makes `bg-panel` and
+`text-accent` exist as classes; 1E replaces the rest of the styling, not these names.
 
 ## Later phases (context only — do not build yet)
 

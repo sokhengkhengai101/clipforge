@@ -1,0 +1,16 @@
+@import 'tailwindcss';
+
+/* Token ពី Figma (CLAUDE.md "Design references") — ប្រើជា class
+   `bg-app`, `text-accent` ... បាន ដោយ Tailwind 4 អាន `@theme` នេះ. */
+@theme {
+  --color-app: #0f1115;
+  --color-panel: #171a21;
+  --color-card: #232733;
+  --color-accent: #7c5cff;
+  --color-keyword: #ffd23f;
+  --font-sans: 'Inter', system-ui, sans-serif;
+}
+
+body {
+  @apply bg-app text-slate-200;
+}
