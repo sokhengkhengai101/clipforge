@@ -44,8 +44,13 @@ export const STEPS = [
   'render',
 ] as const
 
+/** ក្នុង Tauri ទំព័រមិនមកពី Vite ទេ (គ្មាន proxy) ដូច្នេះត្រូវហៅ sidecar ត្រង់.
+ *  ក្នុង browser យើងប្រើ `/api` ដែល Vite បញ្ជូនបន្ត. */
+export const IN_TAURI = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+export const API_BASE = IN_TAURI ? 'http://127.0.0.1:8765' : '/api'
+
 async function send<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
-  const answer = await fetch(`/api${path}`, {
+  const answer = await fetch(`${API_BASE}${path}`, {
     method,
     headers: body ? { 'Content-Type': 'application/json' } : undefined,
     body: body ? JSON.stringify(body) : undefined,
@@ -114,15 +119,16 @@ export const api = {
 
 /** URL របស់ file មួយក្នុង clip — `<video src>` និង `<img src>` ប្រើវាផ្ទាល់. */
 export function clipFileUrl(project: string, index: number, kind: string): string {
-  return `/api/projects/${encodeURIComponent(project)}/clips/${index}/file?kind=${kind}`
+  return `${API_BASE}/projects/${encodeURIComponent(project)}/clips/${index}/file?kind=${kind}`
 }
 
 export function clipThumbUrl(project: string, index: number): string {
-  return `/api/projects/${encodeURIComponent(project)}/clips/${index}/thumb`
+  return `${API_BASE}/projects/${encodeURIComponent(project)}/clips/${index}/thumb`
 }
 
 /** URL របស់ WebSocket. `location.host` = 5173, ហើយ proxy បញ្ជូនបន្តទៅ 8765. */
 export function eventsUrl(jobId: string): string {
+  if (IN_TAURI) return `ws://127.0.0.1:8765/jobs/${jobId}/events`
   const scheme = location.protocol === 'https:' ? 'wss' : 'ws'
   return `${scheme}://${location.host}/api/jobs/${jobId}/events`
 }

@@ -192,7 +192,8 @@ clipforge/
 ├─ prompts/             # podcast_highlights.md (LLM prompt, versioned)
 ├─ server/              # Phase 1 sidecar: app.py (FastAPI), jobs.py (subprocess), db.py (SQLite)
 ├─ ui/                  # Phase 1 React UI (Vite + Tailwind + Figma tokens/assets)
-│  └─ scripts/shot.mjs # Playwright screenshot check for the UI
+│  ├─ src-tauri/       # Phase 1D desktop shell (Rust): window + starts the sidecar
+│  └─ scripts/         # shot.mjs (Playwright), window-shot.ps1 (desktop window)
 ├─ tests/
 └─ output/              # git-ignored
 ```
@@ -202,8 +203,8 @@ clipforge/
 Tauri 2 (Rust) + React/TypeScript + Tailwind + shadcn/ui over a Python sidecar. This machine
 already has Node 24.13 and Rust 1.99, so nothing large needs installing; FastAPI and uvicorn do.
 
-Order: **1A sidecar** and **1B SQLite** (done) -> 1C React in a browser (started) -> 1D wrap in Tauri -> 1E Figma
-styling. The UI is built against the sidecar in a plain browser first, so there is no Rust rebuild
+Order: **1A sidecar**, **1B SQLite**, **1C React** and **1D Tauri** (done) -> 1E the rest of the Figma
+screens. The UI is built against the sidecar in a plain browser first, so there is no Rust rebuild
 loop while the screens take shape.
 
 `server/` holds the sidecar, bound to 127.0.0.1 only (the project uploads nothing):
@@ -326,6 +327,32 @@ sidecar is killed mid-run, so `db.interrupt_stale_jobs()` marks those `interrupt
 the card reads STOPPED rather than PROCESSING; and `tests/test_server.py` was writing into the
 real `output/clipforge.db`, which is why a project called `v` with 27 runs (from `tmp/v.mp4`)
 appeared in the list -- the fixture now points `db.DB_PATH` at a tmp file.
+
+**1D: the desktop app.** `ui/src-tauri/` is a Tauri 2 shell (Rust 1.99, WebView2 155 on this
+machine). `npm run app` opens it, `npm run app:build` would build an installer.
+The Rust side does two things. It **starts the Python sidecar itself** (`src/sidecar.rs`): it
+walks up from the working directory and the exe looking for a folder that holds both
+`server/app.py` and `.venv`, runs `uvicorn` there with `CREATE_NO_WINDOW` so no console flashes,
+and skips all of it when port 8765 already answers (so `uvicorn` started by hand keeps working).
+On `RunEvent::Exit` it kills the child. Measured: the app's uvicorn is a child of `app.exe`, and
+closing the window leaves no python process and port 8765 free. A crash or Task Manager kill
+skips that handler and would leave uvicorn running -- a job object would fix it if it ever bites.
+Nothing is bundled yet: an installer built today would not find Python, since packaging the
+interpreter (PyInstaller or similar) is its own job.
+The window has `decorations: false`, so the title bar **from the design** is the real one:
+`data-tauri-drag-region` moves the window and the three coloured dots close, minimise and
+maximise it.
+In the app the page is served from `tauri.localhost`, so there is no Vite proxy: `src/api.ts`
+switches between `/api` (browser) and `http://127.0.0.1:8765` (desktop) by looking for
+`__TAURI_INTERNALS__`, and the sidecar now carries `CORSMiddleware` that allows **only** the Tauri
+and dev-server origins -- measured: `http://tauri.localhost` gets the allow header and
+`https://evil.example.com` does not.
+Dropping a file finally works properly: a browser is only given the file's name, but Tauri's
+`onDragDropEvent` gives the full path, so `src/useFileDrop.ts` listens for it when running in the
+app (imported dynamically, so the browser build puts it in a chunk it never loads).
+`ui/scripts/window-shot.ps1` captures the desktop window with `PrintWindow(..., PW_RENDERFULLCONTENT)`;
+`CopyFromScreen` was wrong, because Windows refuses to raise a window on request and the capture
+then shows whatever is actually in front.
 
 ## Later phases (context only — do not build yet)
 

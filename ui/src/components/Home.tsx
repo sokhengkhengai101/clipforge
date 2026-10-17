@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react'
-import { clipThumbUrl, type Health, type Project, type Video } from '../api'
+import { clipThumbUrl, IN_TAURI, type Health, type Project, type Video } from '../api'
+import { useFileDrop } from '../useFileDrop'
 import { PRESETS, type Preset } from '../presets'
 import { Badge } from './Badge'
 import plus from '../assets/figma/plus.svg'
@@ -218,6 +219,12 @@ function DropZone({
   const [over, setOver] = useState(false)
   const [note, setNote] = useState('')
   const [typed, setTyped] = useState('')
+  // ក្នុង app desktop ការអូសផ្តល់ path ពេញ ដូច្នេះវាដំណើរការភ្លាម
+  const tauriOver = useFileDrop((path) => {
+    onChoosePath(path)
+    setTyped(path)
+    setNote(`Picked ${path}`)
+  })
 
   // Browser មិនឲ្យដឹង path ពេញរបស់ file ដែលអូសចូលទេ (សុវត្ថិភាព) — យើងបានតែ
   // ឈ្មោះ. បើឈ្មោះនោះមានក្នុង samples/ យើងជ្រើសវា បើអត់ សុំ path ពេញ.
@@ -249,7 +256,7 @@ function DropZone({
       onDragLeave={() => setOver(false)}
       onDrop={drop}
       className={`flex flex-col items-center justify-center gap-2.5 rounded-lg border-[1.5px] border-dashed py-7 ${
-        over ? 'border-accent bg-accent-soft' : 'border-accent bg-bg-panel'
+        over || tauriOver ? 'border-accent bg-accent-soft' : 'border-accent bg-bg-panel'
       }`}
     >
       <span className="flex size-13 items-center justify-center rounded-full bg-accent-soft">
@@ -260,7 +267,9 @@ function DropZone({
         MP4 · MOV · MKV · MP3 · WAV — whatever FFmpeg can read
       </p>
       <p className="font-khmer text-body text-text-secondary">
-        ឬ បិទភ្ជាប់ path ពេញរបស់ file ខាងក្រោម
+        {IN_TAURI
+          ? 'អូស file ចូលទីនេះ — app desktop អានpath ពេញបាន'
+          : 'ឬ បិទភ្ជាប់ path ពេញរបស់ file ខាងក្រោម'}
       </p>
       <div className="flex items-center gap-2">
         <div className="flex items-center gap-2 rounded-sm border border-border-default bg-bg-card px-4 py-2.5">

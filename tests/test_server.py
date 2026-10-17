@@ -40,6 +40,15 @@ def test_health_reports_ok(client):
     assert body["busy"] is None
 
 
+def test_only_local_origins_are_allowed(client):
+    """App desktop ហៅ 127.0.0.1 ពី origin `tauri.localhost` — វាត្រូវអនុញ្ញាត,
+    ចំណែក website ខាងក្រៅមិនត្រូវ (គោលការណ៍ local-first)."""
+    allowed = client.get("/health", headers={"Origin": "http://tauri.localhost"})
+    assert allowed.headers.get("access-control-allow-origin") == "http://tauri.localhost"
+    blocked = client.get("/health", headers={"Origin": "https://evil.example.com"})
+    assert "access-control-allow-origin" not in blocked.headers
+
+
 def test_root_redirects_to_docs(client):
     """បើក `/` ក្នុង browser មិនត្រូវជួប 404 ទេ."""
     answer = client.get("/", follow_redirects=False)

@@ -13,6 +13,7 @@ import shutil
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 
@@ -27,6 +28,20 @@ app = FastAPI(title="ClipForge sidecar", version="0.2.0")
 runner = JobRunner()
 db.init_db()
 db.interrupt_stale_jobs()
+
+# App desktop (Tauri) ផ្ទុកទំព័រពី `tauri.localhost` មិនមែនពី Vite ទេ ដូច្នេះ
+# browser ចាត់ទុកការហៅ 127.0.0.1:8765 ជា "cross-origin" ហើយ block វា។
+# យើងអនុញ្ញាតតែ origin ក្នុងម៉ាស៊ីន — គ្មាន website ខាងក្រៅទេ.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://tauri.localhost", "https://tauri.localhost",   # Windows/Linux
+        "tauri://localhost",                                   # macOS
+        "http://localhost:5173", "http://127.0.0.1:5173",      # dev ក្នុង browser
+    ],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 class JobRequest(BaseModel):
