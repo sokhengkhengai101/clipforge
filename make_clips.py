@@ -103,6 +103,10 @@ def main(
                                help="សមាមាត្រ output: 9:16, 4:5, 1:1, 16:9"),
     caption_words: int = typer.Option(config.CAPTION_MAX_WORDS_PER_CUE, "--caption-words",
                                       help="ពាក្យអតិបរមាក្នុងមួយ cue (2-8)"),
+    panel_gap: int = typer.Option(config.PANEL_GAP, "--panel-gap",
+                                  help="គម្លាតរវាងផ្ទាំង split/three/four ជា px (0 = ជាប់គ្នា)"),
+    panel_color: str = typer.Option(config.PANEL_BACKGROUND, "--panel-color",
+                                    help="ពណ៌គម្លាតផ្ទាំង (ឈ្មោះ ឬ #RRGGBB)"),
     caption_color: str = typer.Option(config.CAPTION_KEYWORD_COLOR, "--caption-color",
                                       help="ពណ៌ពាក្យសកម្ម: yellow, green, cyan, orange, "
                                            "white ឬ #RRGGBB"),
@@ -166,7 +170,10 @@ def main(
     console.print(f"  max clips   : {max_clips}")
     console.print(f"  whisper     : {whisper_model} on {device} ({compute})")
     console.print(f"  llm         : {model}")
-    console.print(f"  layout      : {layout} ({', '.join(sorted(allowed_layouts))})")
+    config.PANEL_GAP = max(0, panel_gap)
+    config.PANEL_BACKGROUND = panel_color
+    gap_note = f"គម្លាត {config.PANEL_GAP}px {panel_color}" if config.PANEL_GAP else "គ្មានគម្លាត"
+    console.print(f"  layout      : {layout} ({', '.join(sorted(allowed_layouts))}), {gap_note}")
     console.print(f"  aspect      : {aspect}  ({out_width}x{out_height})")
     console.print(f"  caption     : {caption_words} ពាក្យ/cue, "
                   f"ពណ៌ {config.CAPTION_KEYWORD_COLOR}")

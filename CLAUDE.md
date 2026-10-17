@@ -212,9 +212,10 @@ clipforge/
   frames): the shot at 478 s renders three panels at 2.98x, and clip 4 is three panels end to end.
   Captions move to the seam between the last two panels for any multi-panel layout
   (`caption_margin_for`), which is the only band that covers nobody's face.
-  Multi-panel layouts are drawn as cards: `PANEL_GAP` (24 px) shrinks each panel's image and
-  `pad` fills the gap with `PANEL_BACKGROUND`, so the sharpness maths uses `panel_inner()`, not the
-  panel rect. `PANEL_CORNER_RADIUS` (28 px) rounds the corners through a mask PNG that
+  Multi-panel layouts can be drawn as cards: `--panel-gap <px>` shrinks each panel's image and
+  `pad` fills the gap with `--panel-color`, so the sharpness maths uses `panel_inner()`, not the
+  panel rect. The gap is **off by default**: on dark footage the white border read louder than the
+  picture. `PANEL_CORNER_RADIUS` (28 px) rounds the corners through a mask PNG that
   `corner_mask()` builds once per layout kind and overlays before the captions are burned -- `geq`
   would evaluate a per-pixel expression on every frame (1080x1920 x 780 frames for a 26 s clip),
   while the mask costs one extra input and about 15% of render time. A mask input can only be

@@ -96,7 +96,7 @@ def test_filter_uses_vstack_for_portrait():
     assert "vstack=inputs=2" in f
     inner_w, inner_h = R.panel_inner((0, 0, 1080, 960))
     assert f"scale={inner_w}:{inner_h}" in f
-    assert "pad=1080:960" in f
+    # គម្លាតផ្ទាំង (pad) មាន test ដោយឡែកក្នុង test_render.py ដែលកំណត់ PANEL_GAP
 
 
 def test_filter_uses_hstack_for_landscape():
