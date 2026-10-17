@@ -767,3 +767,67 @@ def test_short_cue_is_extended_when_there_is_room():
     cues = C.wrap_into_cues(words, 0.0, max_chars=30, max_lines=2, max_words=5)
     assert cues[0].end - cues[0].start >= config.CAPTION_MIN_CUE_SEC
     assert cues[0].end <= cues[1].start + 0.001
+
+
+# ---------- SRT / VTT ----------
+
+def test_timestamp_format():
+    assert C.timestamp(0) == "00:00:00,000"
+    assert C.timestamp(1.5) == "00:00:01,500"
+    assert C.timestamp(3661.25) == "01:01:01,250"
+    assert C.timestamp(1.5, ".") == "00:00:01.500"
+    assert C.timestamp(-5) == "00:00:00,000"
+
+
+def test_srt_shape():
+    cues = [cue_of("Hello there.", 0.0, 1.2), cue_of("Second line here.", 1.2, 2.4)]
+    text = C.build_srt(cues)
+    lines = text.split("\n")
+    assert lines[0] == "1"
+    assert lines[1] == "00:00:00,000 --> 00:00:01,200"
+    assert lines[2] == "Hello there."
+    assert lines[3] == ""              # បន្ទាត់ទទេបែងចែក block
+    assert lines[4] == "2"
+
+
+def test_vtt_has_the_header_and_dots():
+    text = C.build_vtt([cue_of("Hi.", 0.0, 1.0)])
+    assert text.startswith("WEBVTT\n")
+    assert "00:00:00.000 --> 00:00:01.000" in text
+    assert "," not in text.split("-->")[0]
+
+
+def test_sidecar_keeps_punctuation_and_case():
+    """`.ass` ប្រើអក្សរធំគ្មានវណ្ណយុត្តិ — file caption ត្រូវរក្សាអត្ថបទពិត."""
+    cue = cue_of("It's the other way.", 0.0, 1.0)
+    assert C.cue_plain_text(cue) == "It's the other way."
+
+
+def test_sidecar_joins_display_lines():
+    """ការបំបែក ១៦ តួជាលក្ខណៈនៃអេក្រង់ — file ត្រូវមានបន្ទាត់តែមួយ."""
+    words = [Word(word=w, start=i * 0.3, end=i * 0.3 + 0.3, probability=0.9)
+             for i, w in enumerate("one two three four".split())]
+    cue = C.Cue(start=0.0, end=1.2, lines=[words[:2], words[2:]])
+    assert C.cue_plain_text(cue) == "one two three four"
+
+
+def test_write_sidecars_creates_both_files(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "CAPTION_SIDECARS", ("srt", "vtt"))
+    words = [Word(word="Hello", start=10.0, end=10.4, probability=0.9),
+             Word(word="world.", start=10.4, end=10.9, probability=0.9)]
+    transcript = transcript_with(words)
+    clip = Clip(start=10.0, end=25.0, title="t", hook="h", type="story",
+                score=8.0, reason="r")
+    ass = tmp_path / "clip_01.ass"
+    ass.write_text("x", encoding="utf-8")
+    written = C.write_sidecars(clip, transcript, ass)
+    assert [p.suffix for p in written] == [".srt", ".vtt"]
+    assert "Hello world." in written[0].read_text(encoding="utf-8")
+
+
+def test_sidecars_can_be_turned_off(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "CAPTION_SIDECARS", ())
+    transcript = transcript_with([Word(word="Hi", start=10.0, end=10.4, probability=0.9)])
+    clip = Clip(start=10.0, end=25.0, title="t", hook="h", type="story",
+                score=8.0, reason="r")
+    assert C.write_sidecars(clip, transcript, tmp_path / "c.ass") == []

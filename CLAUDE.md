@@ -68,6 +68,10 @@ Pipeline (one module per step, in `pipeline/`):
    clips it reports 3 problems in 123 cues and 3 in 95; the podcast one that stays is the word
    "yet" ending a sentence in 0.14 s, where merging forward would mix two sentences and merging
    back would break the word limit.
+   Each clip also gets `.srt` and `.vtt` next to its `.mp4` (`CAPTION_SIDECARS`), for uploading to
+   a platform or reading with a screen reader. Those files keep the real text -- original case and
+   punctuation, display line breaks joined -- while the burned `.ass` stays uppercase and stripped,
+   because the 16-character lines are a vertical-video layout, not a caption format.
 6. `render.py` — FFmpeg: trim → center-crop 9:16 → scale 1080×1920 → burn ASS → H.264 MP4
 
 All six steps are implemented and run end to end. Measured on a 35-min 640×360 podcast:

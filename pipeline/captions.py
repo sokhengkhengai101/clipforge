@@ -601,10 +601,71 @@ def build_all_captions(
     for index, clip in enumerate(clips, start=1):
         margin = margins[index - 1] if margins is not None and index <= len(margins) else None
         segments = plans[index - 1] if plans is not None and index <= len(plans) else None
-        paths.append(build_ass(clip, transcript, out_dir / f"clip_{index:02d}.ass",
-                               font=font, margin_v=margin, segments=segments))
+        ass_path = build_ass(clip, transcript, out_dir / f"clip_{index:02d}.ass",
+                             font=font, margin_v=margin, segments=segments)
+        paths.append(ass_path)
+        write_sidecars(clip, transcript, ass_path)
     return paths
 
+
+
+# ---------- SRT / VTT (file សម្រាប់ upload, §11) ----------
+
+def timestamp(seconds: float, separator: str = ",") -> str:
+    """HH:MM:SS,mmm (SRT) ឬ HH:MM:SS.mmm (VTT)."""
+    seconds = max(0.0, seconds)
+    milliseconds = int(round(seconds * 1000))
+    hours, milliseconds = divmod(milliseconds, 3_600_000)
+    minutes, milliseconds = divmod(milliseconds, 60_000)
+    whole, milliseconds = divmod(milliseconds, 1000)
+    return f"{hours:02d}:{minutes:02d}:{whole:02d}{separator}{milliseconds:03d}"
+
+
+def cue_plain_text(cue: Cue) -> str:
+    """អត្ថបទធម្មតា — **រក្សាវណ្ណយុត្តិ និងអក្សរតូច/ធំដើម**.
+
+    `.ass` ដែលដុតចូលវីដេអូប្រើអក្សរធំគ្មានវណ្ណយុត្តិ (style short-form) តែ file
+    caption សម្រាប់ upload គួរជាអត្ថបទពិត — platform និង screen reader អានវា។
+
+    បន្ទាត់ត្រូវភ្ជាប់គ្នា ព្រោះការបំបែក ១៦ តួជាលក្ខណៈនៃអេក្រង់បញ្ឈរ មិនមែន
+    ជាទម្រង់នៃ file caption ទេ (platform រៀបបន្ទាត់ខ្លួនឯង)។
+    """
+    return " ".join(w.word.strip() for line in cue.lines for w in line)
+
+
+def build_srt(cues: list[Cue]) -> str:
+    """SRT: លេខរៀង, ពេល, អត្ថបទ, បន្ទាត់ទទេ."""
+    blocks = []
+    for index, cue in enumerate(cues, start=1):
+        blocks.append(f"{index}\n"
+                      f"{timestamp(cue.start)} --> {timestamp(cue.end)}\n"
+                      f"{cue_plain_text(cue)}\n")
+    return "\n".join(blocks)
+
+
+def build_vtt(cues: list[Cue]) -> str:
+    """WebVTT: ដូច SRT តែមាន header ហើយប្រើ `.` ជំនួស `,`."""
+    blocks = ["WEBVTT\n"]
+    for cue in cues:
+        blocks.append(f"{timestamp(cue.start, '.')} --> {timestamp(cue.end, '.')}\n"
+                      f"{cue_plain_text(cue)}\n")
+    return "\n".join(blocks)
+
+
+def write_sidecars(clip: Clip, transcript: Transcript, ass_path: Path) -> list[Path]:
+    """សរសេរ `.srt` / `.vtt` ក្បែរ `.ass` តាម `config.CAPTION_SIDECARS`."""
+    words = words_in_clip(clip, transcript)
+    cues = wrap_into_cues(words, clip.start)
+    written: list[Path] = []
+    builders = {"srt": build_srt, "vtt": build_vtt}
+    for suffix in config.CAPTION_SIDECARS:
+        build = builders.get(suffix)
+        if build is None:
+            continue
+        path = Path(ass_path).with_suffix(f".{suffix}")
+        path.write_text(build(cues), encoding="utf-8")
+        written.append(path)
+    return written
 
 # ---------- QA (checklist §12) ----------
 
