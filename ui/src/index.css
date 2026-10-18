@@ -31,6 +31,69 @@
   --font-khmer: 'Kantumruy Pro', 'Inter', sans-serif;
 }
 
+/* ---- Khmer Clip Studio (design/TOKENS.md) — UI ថ្មី ----
+   design/ ជាប្រភពពិតជំនួស Figma. Token ខាងលើនៅរស់រហូតដល់ screen ចុងក្រោយ
+   ត្រូវប្តូរ, ដូច្នេះ screen ចាស់មិនប្រែពណ៌ពាក់កណ្តាលផ្លូវ. ឈ្មោះដូច TOKENS.md
+   លើកលែងតែ ៣ ដែលជាន់ token ចាស់: accent -> gold, success -> ok, warning -> warn.
+   ពេល migration ចប់ យើងលុប block ខាងលើ ហើយប្តូរ gold/ok/warn ទៅឈ្មោះដើមវិញ.
+   ពណ៌ដែលសម្គាល់ "not in TOKENS.md" ត្រូវបានវាស់ពី screens/*.html (ចំនួនដងប្រើ). */
+@theme {
+  --color-bg: #101318;
+  --color-chrome: #0b0d11; /* top bar, footer bar, preview stage */
+  --color-sidebar: #0e1116;
+  --color-card: #171b22; /* card, dialog, section */
+  --color-field: #1f2430; /* input, select, secondary button, nav ដែលជ្រើស */
+  --color-raised: #232936; /* segmented ដែលមិនជ្រើស, chip */
+  --color-raised-2: #2a303c; /* thumbnail, hover */
+  --color-raised-3: #3a4152; /* not in TOKENS.md (22×): ស៊ុម swatch, switch off */
+  --color-raised-4: #4a5266; /* not in TOKENS.md (22×): រូបរាងជំនួស (placeholder) */
+  --color-line: #262c38; /* បន្ទាត់ចែក panel — មិនមែនលើ form control */
+
+  --color-text: #f3f4f6;
+  --color-text-2: #d4d8df; /* TOKENS.md ឲ្យពីរ; #D4D8DF ប្រើ 173× */
+  --color-text-2-dim: #c3c8d1; /* ...ហើយ #C3C8D1 37× */
+  --color-text-3: #a9b0bc; /* label, metadata */
+  --color-text-4: #8a93a3; /* hint */
+  --color-text-5: #5a6278; /* not in TOKENS.md (33×): សញ្ញា "/", disabled */
+
+  --color-gold: #ffd23f; /* TOKENS "accent": ប៊ូតុងចម្បង, ការជ្រើស */
+  --color-on-gold: #101318; /* អក្សរលើ gold */
+  --color-gold-tint: #2a2a1c; /* TOKENS "accent-tint" */
+  --color-segment: #f3f4f6; /* segment ដែលជ្រើស (អក្សរ: --color-bg) */
+  --color-info: #8ec5ff;
+  --color-info-ink: #0b1b33; /* not in TOKENS.md (7×) */
+  --color-ok: #4ade80; /* TOKENS "success" */
+  --color-ok-text: #86efac; /* not in TOKENS.md (8×) */
+  --color-ok-bg: #1e3a2b;
+  --color-warn: #fb923c; /* TOKENS "warning" */
+  --color-warn-text: #fdba74;
+  --color-warn-bg: #1f1712;
+  --color-danger: #f05252;
+  --color-scrim: rgb(5 7 10 / 0.74); /* ផ្ទៃខ្មៅក្រោម dialog */
+
+  --radius-chip: 6px;
+  --radius-field: 8px;
+  --radius-button: 10px;
+  --radius-card: 14px;
+  --radius-dialog: 18px;
+
+  /* bundle ពី @fontsource (main.tsx) — app desktop មិនពឹង Google Fonts ពេលរត់ */
+  --font-kantumruy: 'Kantumruy Pro', system-ui, sans-serif;
+}
+
+/* ទំហំអក្សរ UI ថ្មី — វាស់ពី screens: 14px (189×), 13px (132×), 15px (89×) ...
+   អក្សរខ្មែរត្រូវការ line-height ខ្ពស់ (1.6-1.7) ដើម្បីកុំឲ្យជើងអក្សរ (coeng)
+   ប៉ះបន្ទាត់ខាងក្រោម. ចំណងជើងប្រើ 1.4-1.5. */
+@utility type-page { font-size: 28px; line-height: 1.4; font-weight: 700; }
+@utility type-hero { font-size: 24px; line-height: 1.4; font-weight: 700; }
+@utility type-dialog { font-size: 22px; line-height: 1.45; font-weight: 700; }
+@utility type-section { font-size: 16px; line-height: 1.5; font-weight: 700; }
+@utility type-body-lg { font-size: 15px; line-height: 1.7; }
+@utility type-body { font-size: 14px; line-height: 1.6; }
+@utility type-label { font-size: 13px; line-height: 1.5; }
+@utility type-hint { font-size: 12.5px; line-height: 1.55; }
+@utility type-chip { font-size: 11.5px; line-height: 1.4; font-weight: 700; }
+
 /* Type scale ពី Figma (ទំហំ/កម្ពស់បន្ទាត់/ចន្លោះអក្សរ) */
 @utility text-display { font-size: 28px; line-height: 36px; font-weight: 600; }
 @utility text-title { font-size: 20px; line-height: 28px; font-weight: 600; }

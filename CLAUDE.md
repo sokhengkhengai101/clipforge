@@ -191,7 +191,8 @@ clipforge/
 ├─ pipeline/            # audio, transcribe, highlights, boundaries, captions, render, llm
 ├─ prompts/             # podcast_highlights.md (LLM prompt, versioned)
 ├─ server/              # Phase 1 sidecar: app.py (FastAPI), jobs.py (subprocess), db.py (SQLite)
-├─ ui/                  # Phase 1 React UI (Vite + Tailwind + Figma tokens/assets)
+├─ design/              # 1F source of truth: HANDOFF.md, TOKENS.md, screens/*.html
+├─ ui/                  # Phase 1 React UI (Vite + Tailwind); src/kit/ = 1F components
 │  ├─ src-tauri/       # Phase 1D desktop shell (Rust): window + starts the sidecar
 │  └─ scripts/         # shot.mjs (Playwright), window-shot.ps1 (desktop window)
 ├─ tests/
@@ -354,9 +355,14 @@ closing the window leaves no python process and port 8765 free. A crash or Task 
 skips that handler and would leave uvicorn running -- a job object would fix it if it ever bites.
 Nothing is bundled yet: an installer built today would not find Python, since packaging the
 interpreter (PyInstaller or similar) is its own job.
-The window has `decorations: false`, so the title bar **from the design** is the real one:
-`data-tauri-drag-region` moves the window and the three coloured dots close, minimise and
-maximise it.
+The window has `decorations: false`, so the title bar **from the design** is the real one, with
+`data-tauri-drag-region` and three coloured dots for close, minimise and maximise. **Neither ever
+worked** until the 1F kit, and nothing measured it: Tauri 2's `core:default` grants only read-only
+window commands, so `minimize`, `toggle_maximize` and `start_dragging` came back "not allowed"
+(checked by invoking them through CDP; `is_maximized` was allowed as the control), and the title
+bar called them with no `.catch`. `capabilities/default.json` now adds exactly
+`core:window:allow-close`, `-minimize`, `-toggle-maximize` and `-start-dragging`; measured after:
+maximise toggles `false -> true -> false`, minimise reports minimised, drag is allowed.
 In the app the page is served from `tauri.localhost`, so there is no Vite proxy: `src/api.ts`
 switches between `/api` (browser) and `http://127.0.0.1:8765` (desktop) by looking for
 `__TAURI_INTERNALS__`, and the sidecar now carries `CORSMiddleware` that allows **only** the Tauri
@@ -531,6 +537,48 @@ Measured in `npm run app` with a real OLE drop from Review: Home with the bar re
 `medium · qwen2.5:7b-instruct`, Review 1 clip, Start; the screenshot 250 ms after the drop shows
 the tint; no console errors, no job started.
 
+**1F: the Khmer Clip Studio UI (`design/`), started 2026-10-18.** The handoff was written for a
+PyQt5 app (`QWebEngineView`, `QThread`, folders `analysis/` and `reframe/`), and this project is
+none of that: a grep finds no Qt at all. Its "Option B" -- Python backend, HTML UI in a web view, a
+bridge for calls and progress -- is what 1A-1D already built under other names (Tauri + WebView2
+for the view, FastAPI HTTP + WebSocket for the bridge, a subprocess for the worker, `DELETE
+/jobs/{id}` for cancel). `pipeline/` imports no web/CLI/console code and prints nothing; the one
+place logic and output mix is `make_clips.py` (431 lines, 54 `console.print`), which the sidecar
+already sidesteps. So 1F **re-skins the React screens** rather than choosing A or B, and leaves
+`pipeline/`, `make_clips.py` and the API alone except for thin adapters it names.
+Decisions taken with the developer: re-skin Tauri + React; `design/` replaces Figma (product name
+Khmer Clip Studio, gold accent, Kantumruy Pro, Khmer UI text); the sign-in / OTP / minutes /
+billing / upgrade screens are **stubs with no network**, because metering minutes of local work
+needs a server and CLAUDE.md promises no uploads. Features the screens draw that the backend lacks
+-- Khmer ASR and EN->KM (Phase 2), pause, a multi-project queue (Phase 3), editing cues, trimming,
+manual crop, "time saved" -- are listed in the plan and get adapters or stubs, not new algorithms.
+
+**Step 0, the foundation, changes no existing screen.** Tokens from `TOKENS.md` sit in a second
+`@theme` block in `index.css`, named as in `TOKENS.md` except where they would collide with the
+Figma tokens still serving old screens: accent -> `gold`, success -> `ok`, warning -> `warn`
+(renamed back once the last screen moves). Five colours the screens use but `TOKENS.md` omits were
+measured and added (`raised-3` #3A4152, `raised-4` #4A5266, `text-5` #5A6278, `ok-text`,
+`info-ink`). The type scale is `type-page` ... `type-chip`, sized from what the screens use (14px
+189x, 13px 132x, 15px 89x; weight 700 dominates at 181x) with 1.6-1.7 line height for Khmer body
+text, so stacked consonants clear the next line.
+Kantumruy Pro is **bundled** from `@fontsource/kantumruy-pro` 5.3.0 (OFL-1.1, pinned): Vite copies
+the khmer and latin `.woff2` subsets into `dist/`, and a check of the kit page found the faces
+loaded from the local server with **no** request leaving the machine; the screens themselves load
+Google Fonts, which the handoff forbids at runtime.
+`ui/src/kit/` holds the components, each value taken from the HTML: `Button` (primary 44 px,
+`0 22px`, radius 10), `TextField` (46 px, filled, no border), `Select`, `Segmented` (light / gold /
+pill), `Switch` (46x26), `Chip`, `Progress` (10 px), `Dialog` (scrim `rgba(5,7,10,.74)`, radius 18,
+40 px close), `TopBar` with `WindowControls` (44x36), and the design's inline SVG icons with their
+paths copied, not redrawn. The design has no switch "off" state; it is drawn from tokens
+(`raised-3` track, `text-4` knob) and says so. `ui/kit.html` (dev only, not in the build) shows all
+of them with strings from the screens: `http://localhost:5173/kit.html`.
+Three things the checks caught: the Vite server `tauri dev` had started before the CSS edit kept
+serving the old stylesheet (every new rule absent, the build fine -- restart it after a `@theme`
+change); keyboard focus was invisible, because in Tailwind 4 `outline-none` sets
+`--tw-outline-style: none` and `focus-visible:outline-2` inherits it, so the kit adds
+`focus-visible:outline-solid` (measured after: solid 2 px gold on every control); and the window
+permissions above.
+
 ## Later phases (context only — do not build yet)
 
 - Phase 2: MediaPipe face tracking reframe, bilingual EN + Khmer subtitles, interview Q&A finder, long video → 10 clips.
@@ -539,8 +587,12 @@ the tint; no console errors, no job started.
 
 ## Design references
 
-- Figma UI: https://www.figma.com/design/SycDviWBBpHlK901HhvFWK (8 screens, components, Dark/Light color variables)
-- Tokens: bg/app #0F1115, bg/panel #171A21, bg/card #232733, accent #7C5CFF, caption keyword #FFD23F. Fonts: Inter (UI), Kantumruy Pro (Khmer UI), Montserrat ExtraBold + Battambang Bold (captions).
+- **Source of truth since 2026-10-18: `design/`** (Khmer Clip Studio handoff). `design/HANDOFF.md`
+  holds the rules and the screen order, `design/TOKENS.md` the colours, type and components, and
+  `design/screens/*.html` one static screen each (open `design/index.html`, compare at 1280x800).
+  It replaces the Figma file for the UI; the Figma-built screens stay until each is migrated (1F).
+- Figma UI (superseded, kept for history): https://www.figma.com/design/SycDviWBBpHlK901HhvFWK
+- Caption fonts are unchanged: Montserrat ExtraBold + Battambang Bold, keyword #FFD23F.
 
 ## Commands
 
