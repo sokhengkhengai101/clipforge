@@ -14,15 +14,15 @@ from rich.table import Table
 import config
 from pipeline.audio import FFmpegError, extract_audio, probe_duration
 from pipeline.boundaries import clip_text, snap_boundaries
-from pipeline.captions import (CaptionError, build_all_captions, build_ass, check_cues,
-                               resolve_font, wrap_into_cues)
+from pipeline.captions import (CaptionError, build_all_captions, check_cues, resolve_font,
+                               wrap_into_cues)
 from pipeline.highlights import (HighlightsError, find_highlights, full_video_clip,
                                  load_clips, rank_clips, save_clips)
 from pipeline.llm import LLMError
 from pipeline.reframe import (ReframeError, caption_margin_for, describe,
                              dominant_kind, find_seats, parse_layouts, plan_clip)
-from pipeline.render import (RenderError, compute_crop, encoder_args,
-                             probe_dimensions, render_all, render_clip, verify_clip)
+from pipeline.render import (RenderError, encoder_args, probe_dimensions, render_all,
+                             verify_clip)
 from pipeline.transcribe import TranscribeError, load_transcript, transcribe
 
 config.enable_utf8_output()  # ត្រូវហៅមុន Console() ដើម្បីឲ្យ rich ចាំ encoding ត្រឹមត្រូវ
@@ -115,6 +115,16 @@ def main(
     caption_color: str = typer.Option(config.CAPTION_KEYWORD_COLOR, "--caption-color",
                                       help="ពណ៌ពាក្យសកម្ម: yellow, green, cyan, orange, "
                                            "white ឬ #RRGGBB"),
+    caption_size: int = typer.Option(100, "--caption-size",
+                                     help="ទំហំ caption ជា % (70-120)"),
+    caption_outline: int = typer.Option(config.CAPTION_OUTLINE, "--caption-outline",
+                                        help="កម្រាស់គ្រោងខ្មៅ px (0-8)"),
+    caption_case: str = typer.Option("upper", "--caption-case",
+                                     help="upper (អក្សរធំ) ឬ original (ដូចដែលនិយាយ)"),
+    caption_position: str = typer.Option("auto", "--caption-position",
+                                         help="auto (lower third / ស្នាម split), top, middle, bottom"),
+    no_captions: bool = typer.Option(False, "--no-captions",
+                                     help="render ដោយគ្មាន caption ដុត (.srt/.vtt នៅតែសរសេរ)"),
     encoder: str = typer.Option(config.VIDEO_ENCODER, "--encoder",
                                 help="auto (GPU បើមាន), nvenc (GPU), x264 (CPU)"),
     full: bool = typer.Option(False, "--full",
@@ -144,6 +154,8 @@ def main(
     try:
         out_width, out_height = config.apply_aspect(aspect)
         config.CAPTION_KEYWORD_COLOR = config.resolve_caption_color(caption_color)
+        config.apply_caption_style(caption_size, caption_outline, caption_case,
+                                   caption_position)
     except ValueError as e:
         console.print(f"[red]{e}[/red]")
         raise typer.Exit(code=2)
@@ -362,7 +374,8 @@ def main(
             for index, (clip, segments) in enumerate(zip(final, plans), start=1):
                 console.print(f"[dim]  #{index} {len(segments):2} shots — "
                               f"{describe(segments)}[/dim]")
-                margins[index - 1] = caption_margin_for(dominant_kind(segments))
+                if config.CAPTION_POSITION == "auto":
+                    margins[index - 1] = caption_margin_for(dominant_kind(segments))
         except ReframeError as e:
             console.print(f"[yellow]⚠ reframe បរាជ័យ:[/yellow] {e}")
             console.print("[yellow]  -> ប្រើ center-crop ជំនួស[/yellow]")
@@ -408,8 +421,12 @@ def main(
                 progress.update(task, completed=index - 1, total=total,
                                 description=clip.title)
 
-            rendered = render_all(video, final, clips_dir, ass_files,
-                                  force=redo_render, plans=plans, on_progress=tick)
+            # --no-captions: .ass ត្រូវបានសង់ (សម្រាប់ .srt/.vtt) តែមិនដុតចូល video ទេ.
+            # force ព្រោះ render_clip រំលង .mp4 ដែលមាន ពេលគ្មាន .ass ថ្មីជាងវា
+            rendered = render_all(video, final, clips_dir,
+                                  None if no_captions else ass_files,
+                                  force=redo_render or no_captions, plans=plans,
+                                  on_progress=tick)
             progress.update(task, completed=len(final))
 
         console.print(f"[green]✔ 6/6 render[/green]      {len(rendered)} MP4 ក្នុង "

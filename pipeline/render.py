@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Callable
 
 import config
-from pipeline.audio import FFmpegError, probe_duration, require_ffmpeg
+from pipeline.audio import probe_duration, require_ffmpeg
 from pipeline.highlights import Clip
 from pipeline.reframe import Box, Layout, Segment, panel_inner, panel_rects
 

@@ -579,6 +579,241 @@ change); keyboard focus was invisible, because in Tailwind 4 `outline-none` sets
 `focus-visible:outline-solid` (measured after: solid 2 px gold on every control); and the window
 permissions above.
 
+**Step 1, Home (`design/screens/Home.html`), is built** as `screens/HomeScreen.tsx` with
+`screens/AppSidebar.tsx`, and the app now opens on it. `screens/` holds the 1F screens and
+`components/` the Figma-era ones, so the migration shows in the tree. The new Home takes the whole
+window -- sidebar, window controls and drag area are its own -- while the screens not yet migrated
+keep the old title bar and sidebar, whose logo now leads back to the new Home.
+The new Home is a landing page, not the import page: the drop zone, samples, recent projects and
+launch bar live on the old Home, now the view `projects` ("Projects របស់ខ្ញុំ"), until step 2
+(`Main.html`) replaces it. Every way in leads there with something real: a tool card or "Import
+វីដេអូ" picks its preset and opens it, a drop anywhere opens it with the file chosen.
+The eight tool cards (`screens/tools.ts`) carry the design's Khmer strings and point at presets
+in `presets.ts`, which stays the single source of whether something runs: Podcast Clips, វីដេអូវែង
+-> ១០ Clips (`--max-clips 10`, matching the card), Auto Reframe and Interview & Webinar run; Silence,
+English -> ខ្មែរ and Agency Batch take their PHASE badge from their preset; Auto Subtitles, the
+Subtitle Studio hero and "Subtitles ខ្មែរ" in quick access are Khmer subtitles, which is Phase 2, so
+they are dimmed with a badge rather than pointed at the English caption restyle. The Auto Clip
+hero keeps the design's line about accurate Khmer subtitles; until Phase 2 that line is ahead of
+the pipeline.
+Design gaps filled from the tokens: the sidebar gains Settings (from `Projects.html`'s sidebar, the
+same component) because Models had no other way in from Home; the Free plan card, Upgrade,
+ចូលគណនី, ជំនួយ and Menu open `PreviewDialog`, which says the app needs no account and that these are
+not built, instead of being dead buttons; the hero `basis` is 420 rather than 380, because at the
+1100 px minimum window 380 just fits and both titles and buttons wrapped; chips never wrap.
+Measured: in the browser, 8 tools with 4 enabled, Upgrade opens "គណនី និង Billing", the
+"កែវីដេអូ" tab leaves 2, clicking Auto Reframe lands on Projects with PRESET Auto Reframe and no
+job started, no horizontal scroll at 1100 px. In `npm run app`: the Home's Maximize button
+toggles `false -> true -> false`, Minimize minimises, a real mouse drag on the empty top row moved
+the window by exactly the mouse's (120, 80) twice, a real OLE drop on Home opened Projects with
+`Out of Pocket.mp4` chosen, and `app-shot.mjs` (which now reloads to Home and reaches Models
+through Settings) still runs Review and Export with no problems.
+One test trap: a script that minimised the window and then dragged it got (0, 0) -- the same drag
+from a normal window works every time.
+**Scrollbars, found by the developer** ("when minimize form i see vertical scroll bar"): headless
+screenshots draw no scrollbars, WebView2 does. Measured in the app with the window restored
+down: the document never scrolled, but the Home's `main` did (828 px in 794 at 1426x794, 1081 in
+694 at the 1100x700 minimum), with Windows' default 15 px light scrollbar on the dark UI, because
+`color-scheme` was `normal`. Worse, the top row with the window buttons and the drag area sat inside
+that scroller, so scrolling down took the Close button and the drag area off screen. Now `:root`
+has `color-scheme: dark` and every element a thin `raised-3` scrollbar (10 px), the top row is
+outside the scroller, and the content keeps `scrollbar-gutter: stable` so the cards do not jump
+when the bar appears; measured after, scrolling 387 px to the bottom leaves Close at y = 20.
+The project has no formatter configured: `npx prettier` fetched one with its defaults and turned a
+file to semicolons and double quotes; the house style is no semicolons, single quotes, ~100 cols. And one leftover worth fixing later: choosing a video that
+has never been processed asks `/projects/<name>/clips`, which 404s by design, and the browser logs
+that 404 although the client handles it.
+
+**Cleanup before step 2** (asked for: "optimize code and clean code"). Every removal was checked,
+not guessed: lint went from 4 warnings to 0 -- `stepStates` (logic, not a component) moved out of
+`Pipeline.tsx` into `src/progress.ts`, the Review transcript resets through a `key` instead of
+`setState` in an effect, and `connect()` no longer clears the error before its first `await` (the
+Retry click does; the one remaining lint hit on calling it from the mount effect is a false positive,
+silenced on that line with the reason). The focus ring the kit needed in ten places is
+`kit/styles.ts` `focusRing`, so the Tailwind 4 `outline-solid` fix lives once. Three SVGs nothing
+imported were deleted (`pause`, `play-big`, `step-check`), and an AST scan found five Python imports
+nothing used (`build_ass`, `compute_crop`, `render_clip` in `make_clips.py`, `FFmpegError` in
+`render.py`, `config` in `jobs.py`), each confirmed not re-imported through those modules. After:
+490 tests pass, `make_clips.py --help` runs, `shot.mjs` reports no problems.
+
+**Step 2, Import (`design/screens/Main.html`), is built** as `screens/ImportScreen.tsx`, the view
+`projects` ("Projects របស់ខ្ញុំ"). It replaces the Figma-era Home, which is deleted along with its
+launch bar; `flagsOf` moved to `presets.ts`. It takes the whole window like Home: the kit `TopBar`
+(whose logo now leads back to Home -- Main.html has no other way back), the "Projects ថ្មីៗ" sidebar
+with real projects and Khmer relative days ("ថ្ងៃនេះ", "ម្សិលមិញ", "៣ ថ្ងៃមុន" from
+`screens/khmer.ts`), and the real output folder, which `/health` now reports as `output_dir`.
+**"ជ្រើសឯកសារពីកុំព្យូទ័រ" is a real Windows Open dialog**: `tauri-plugin-dialog` and
+`@tauri-apps/plugin-dialog`, both pinned to 2.8.1 (17 days old; 2.8.3 was four days old and the
+newest crate is a 3.0 alpha), with the capability granting only `dialog:allow-open`. In a browser
+the button says it cannot read a path and focuses the path field.
+What the design draws that the pipeline lacks, and what the screen does instead: the YouTube link
+became the file-path field (the app downloads nothing); video language and subtitles offer English
+and show ខ្មែរ / mixed dimmed as Phase 2; clip length has no flag, so its three options are disabled
+under "AI picks 15-90 s"; "[២៣] នាទីនៅសល់" is hidden (no accounts); the hardware line names the
+real device and model pack instead of an invented "about 5 minutes per hour"; ImportLowMinutes.html
+is not built, there being no minutes. Clip count 5/10/15 is real (`--max-clips`) and starts from the
+tool chosen on Home (Long Video -> 10), which a "ឧបករណ៍ ... ប្ដូរ" line now shows, since the design
+gives the chosen tool no place. The app no longer picks the first sample as the chosen video; the
+drop zone starts empty and shows a chosen state (tick, name, path) that the design does not draw.
+Two layout bugs caught by measuring, both fixed: with the tool line and the samples row the start
+button fell below a 1440x900 window, so the footer is `sticky`; and `sticky bottom-0` sat 40 px
+above the bottom with content scrolling beneath it, because Chromium measures it from the scroll
+container's content box and `main` had `pb-10` -- `main` now has no bottom padding.
+Measured: in the browser, nothing chosen -> Start disabled, 7 options disabled, clips ៥ from Auto
+Reframe; a sample chosen -> Start enabled, no job; the CTA stays on screen at 1280x800 and at the
+1100x700 minimum. In `npm run app`: the Open dialog appears in 0.2 s, typing a path and Enter chose
+`How-AI-agents.mp4`, Escape left the choice alone, a real OLE drop on Home landed on Import with
+`Out of Pocket.mp4` and Start enabled, and `app-shot.mjs` still reaches Review and Export. One test
+trap: `execFileSync` blocks Node's event loop, so a Playwright click started before it is not sent
+until it returns -- click, await, then drive the dialog.
+
+**White border and a window taller than the screen -- found by the developer** (screenshot: "why
+have white border around form"). Two things in one picture. The 1px white line around the window is
+Tauri's `shadow`, on by default: its own schema says that on Windows `true` "will make undecorated
+window have a 1px white border" (on Windows 11 it means rounded corners instead). It is now `false`;
+measured from screen pixels after, the outermost columns and rows are the app's own `#0B0D11` /
+`#101318`. The cost is no shadow and square corners on Windows 11. The same screenshot showed the
+start button under the taskbar: the window was 1440x900 logical, and a 1920x1080 screen at 125%
+leaves 1536x824 above the taskbar, so 95 physical px hung below it -- the sticky footer was on screen
+in the page and off screen in Windows. A smaller fixed size would only move the problem (150% leaves
+less), so the window now starts hidden (`visible: false`) and `fit_to_work_area` in `lib.rs` clamps it
+to the monitor's work area, centres it, then shows it; `minHeight` went from 700 to 640 so 150%
+fits too. Measured after: 1800x1030 at x=60 on a 1920x1030 work area, `fits: True`.
+
+**Step 3, Processing (`design/screens/Processing.html`), is built** as `screens/ProcessingScreen.tsx`,
+the view `job`, full-window like Home and Import (keyed on the job id, so a new job starts clean).
+The design's steps are our six, each with a Khmer line for what it does now; the headline follows
+the job state (running / done / failed / cancelled); elapsed time is a client-side clock. The live
+panel has two tabs: **Transcript** -- the first lines of `transcript.json`, which a new
+`GET /projects/{name}/transcript` returns once transcribe is done (name guarded like the other
+project routes), with the lines inside the chosen clips highlighted gold once highlights are done --
+and **Log**, the pipeline's own lines from the WebSocket. Not drawn because we do not have them: a
+percentage and an ETA (the step times vary from 0.1 s to 8 min, so any number would be invented).
+"You can close this window" became "do not close the app while it runs", because closing kills the
+sidecar and the job with it. Pause is drawn disabled (no pause in the pipeline). Queued.html is not
+built: one job at a time is a rule (`409`), and a queue is Phase 3 batch. Import's Start button
+reads "មើលការដំណើរការ" while a job runs and leads back here.
+**Progress was lying on every re-run, fixed in `server/jobs.py`.** Starting a video that had run
+before showed "ជំហាន ៦ / ៦" and every step "cached" at 0 s while the job then rendered for 26 s.
+Three causes: (1) captions and render are never cached -- `make_clips` rebuilds every `.ass`, and an
+`.ass` newer than its `.mp4` makes `render_clip` render again -- so `steps_redone()` now always
+includes them; (2) a step that is not cached counted as done because its file *existed*, which an
+overwrite from the last run satisfies, so `steps_on_disk(out_dir, since)` counts a file only when
+its mtime is at or after the job's start (1 s slack for the Windows file clock); (3) FFmpeg writes
+the `.mp4` in place, so it exists from the first frame and render read "done" 8 s early -- render,
+the last step, now finishes when the process does. Measured on the wildlife video with warm caches:
+0 s "៤ / ៦" with Subtitles active, 10 s "៥ / ៦" with Render active, 20 s "Clips រួចរាល់ហើយ!" and
+"៦ / ៦"; cancelling right after Start reads "បានបោះបង់" with "៤ / ៦" and returns to Import; no
+console errors, no failed requests. Checked in the browser against the real sidecar; not yet in
+the desktop window.
+
+**Step 4, Review (`design/screens/Review.html`), is built** as `screens/ReviewScreen.tsx` with
+`screens/ReviewDialogs.tsx`, full-window, replacing the Figma-era `Review.tsx` and `ExportDialog.tsx`
+(deleted with the 12 SVGs only they used). The list shows only clips with an `.mp4` -- `clips.json`
+also holds the ranked clips past `--max-clips` -- each with a checkbox for export, the real thumbnail
+with its rank, the letters, and the score coloured as in the design (80+ gold, 70s `raised-2`, below
+`raised-3`). Sorting offers **លំដាប់ AI** (the default), ពិន្ទុ and ពេលវេលា: the design's "score"
+order is not the ranking, because the rubric clusters and `rank_clips` orders the clips -- on
+`Taylor_Tomlinson` clips #3 and #4 score 90 under #1 at 80. The design's "ពិន្ទុជាលេខគំរូ" note is
+dropped, since these scores are real. "រក clips បន្ថែម" is real too: it re-runs with
+`--max-clips` raised by up to 5 from the ranked list, so no transcribe and no LLM; it is disabled
+with "AI found N clips -- all rendered" when the list has nothing more.
+The preview is the real `<video>` with the design's buttons (previous / play-pause / next, time),
+sized 9:16 to the window instead of a fixed 270x480, plus a thin seek bar the design lacks (reviewing
+a clip needs to jump). The detail panel shows the "why AI picked this" card with the real Hook /
+Flow / Value letters and the LLM's reasons (clips scored before the rubric say so), and the clip's
+real cut points in the source with a bar of where it sits; the title and both cut fields are
+read-only and say why -- the pipeline has no flag for a manual trim or a title edit. "កែ Subtitles"
+opens a dialog with the two caption settings the pipeline has (`--caption-words`, `--caption-color`
+from `CAPTION_COLOR_PRESETS`) that re-renders every clip, until Subtitles.html (step 5) exists.
+The footer exports for real: the destination field starts at the sidecar's default, Export writes
+MP4 + SRT (ExportDone.html's "MP4 9:16 1080p + SRT") for the ticked clips, and a dialog lists the
+files with an Open folder button, until ExportDone.html (step 6).
+Two sidecar bugs this screen turned up, both fixed with tests: (1) `/projects` took a DB project's
+clip count from the database, which only a `done` job writes, so `The-Future-Mark-Zuckerberg` (an
+interrupted job, then rendered by the CLI) showed 0 clips with five `.mp4`s on disk -- every
+project now counts rendered clips from disk; (2) **Open folder on a file never worked**: the old
+dialog revealed the folder, so the `/select` branch had never run. `subprocess` with a list quotes
+`"/select,C:\...\01 - Comedy vs. Real Life (2).mp4"` as one argument when the path has spaces,
+and Explorer then opens **Documents** -- measured through `Shell.Application().Windows()`. The
+command is now a string, `explorer /select,"<path>"` (`export.explorer_select`), and the same check
+after shows a window on the export folder.
+Measured: in the browser, 5 rows and 5 thumbnails, the video 1080x1920 and at 1.5 s after Play,
+next/previous, time sort `#2 #3 #5 #1 #4`, score sort `#3=90 #4=90 #1=80 #2=80 #5=80`, unticking
+four reads "បានជ្រើស ១ ក្នុងចំណោម ៥ clips" / "Export ១ Clips", exporting wrote
+`01 - Comedy vs. Real Life.mp4` + `.srt` and a second export added `(2)` beside them; no horizontal
+scroll at 1440, 1280 and the 1100x700 minimum, footer on screen; no job started, no console errors.
+In the desktop app (`tauri.localhost`, uvicorn started by `app.exe`): the same Review, play, export,
+and Open folder opening Explorer on the export folder; closing the window freed 8765 and 9222.
+`shot.mjs` and `app-shot.mjs` drive the new Review (and reach Models through Home -> Settings, since
+Review has no sidebar). `src/vtt.ts` has no importer now and is kept for the Subtitles screen.
+
+**Step 5, Subtitles (`design/screens/Subtitles.html`), is built** as `screens/SubtitlesScreen.tsx`,
+opened by "កែ Subtitles របស់ clip នេះ" on Review (the interim caption dialog is gone). Decided with
+the developer: **thin flags** for style, and cue text **read-only** for now.
+The pipeline had two caption flags; the screen draws a dozen settings. Five thin flags were added,
+each only setting a `config` value that already existed (`config.apply_caption_style`, called after
+`apply_aspect`): `--caption-size` (70-120 % of the computed font; past 120 a 16-character line no
+longer fits 1080 px), `--caption-outline` (0-8 px), `--caption-case upper|original`,
+`--caption-position auto|top|middle|bottom` (top sits under `CAPTION_SAFE_TOP` + 4 %; a forced
+position also makes `anchor_for` ignore the split seam, which is the only line changed in
+`captions.py`), and `--no-captions`, which still writes `.ass/.srt/.vtt` but passes no `.ass` to
+render and forces it (render otherwise keeps an `.mp4` that no newer `.ass` invalidates).
+`JobRequest` carries them, and a test checks they reach the command line. Measured on the rhino
+clip at a spoken cue: default lower third in capitals, `top` + 85 % + original case + 2 px outline
+at the top, and `--no-captions` with none.
+The screen: the left column is the clip's `.vtt` (28 cues on `Taylor_Tomlinson` clip 1) with the
+playing cue marked "កំពុងចាក់" and followed while the video plays, a click seeks; the timeline in
+the footer draws every cue as a block, gold for the playing one, and seeks on click or arrow keys;
+Safe zone toggles bands drawn from `CAPTION_SAFE_TOP`/`CAPTION_SAFE_BOTTOM` (8 % / 18 %, the
+numbers `check_cues` uses) rather than the design's 11 % / 22 %. Style lives in `src/captionStyle.ts`
+as one `CaptionStyle` in `App`: Presets are flag bundles (គ្មាន captions, Bold លឿង, Karaoke = green,
+ស្អាត ស = white, original case, 2 px, 90 %) and a style matching none reads "style ផ្ទាល់ខ្លួន";
+Font has size, capitals and stroke; Effects has position, words per cue and the active-word colour.
+Drawn but disabled, each saying why: editing text and search/replace (cues are rebuilt from the
+transcript on every render), "AI is unsure of this word", font family (Khmer font comes with Phase 2
+subtitles), shadow (fixed 1 px), animations other than the real Pop (active word at 110 %), Box and
+Neon presets (need ASS box/glow), Khmer line splitting (Phase 2), the Layout/Background/Tracker
+toolbar (Reframe is step 7), and the editor-tools column except Captions. "ប្រើ style នេះលើ clips
+ទាំង N" is ticked and locked: one run renders every clip with one style. The preview plays the
+**rendered** clip and says new style shows after Save; Save is `--redo render` with the style.
+Three bugs found while measuring, fixed: (1) a re-render passed the preset's `--max-clips 5`, so a
+10-clip project would have been cut to 5 -- re-render now sends the rendered count; (2) during
+`POST /jobs` the app kept the **previous** job's status, so Processing flashed "Clips រួចរាល់ហើយ!"
+from the last job (and a first job flashed Import) -- `useJob.start` clears the status and `App`
+shows "កំពុងចាប់ផ្តើម job..." while `starting`; measured after: headlines go blank -> កំពុងបង្កើត
+Clips -> Clips រួចរាល់ហើយ!; (3) the leftover `animate-arrive` CSS of the deleted launch bar.
+Measured: in the browser 28 cues and 28 timeline blocks, the playing cue moves with playback,
+clicking cue 6 seeks to 6.4 s, safe zone 2 bands -> 0, Bold preset selected by default, Karaoke
+turns the colour green, a custom style deselects every preset, no horizontal scroll at 1440/1280/
+1100x700 with the footer on screen, back returns to Review, no job without Save, no console
+errors. Saving from the UI ran `--max-clips 1 ... --caption-position top --redo render` on the
+rhino clip and the next save restored `auto` (both read back from the `job` table). In the desktop
+app (`tauri.localhost`, own uvicorn) the same screen loads 28 cues with no problems, and closing the
+window freed 8765. `shot.mjs` and `app-shot.mjs` open Subtitles from Review on every run.
+Not known to the app: which style an existing clip was rendered with (the pipeline records no
+style), so the screen starts from the `config.py` defaults.
+
+**Step 6, Export done (`design/screens/ExportDone.html`), is built** as
+`screens/ExportDoneScreen.tsx`, the view `exported`: Export on Review now opens it with the real
+`ExportResult` (the interim `ReviewDialogs.tsx` is deleted). Header: "Clips N រួចរាល់ហើយ!", the
+real folder and what was written ("MP4 9:16 1080p + SRT", aspect and short side from `ffprobe`),
+បើក Folder (`/reveal`, Explorer on the folder) and Project ថ្មី (Import with nothing chosen); the
+crumb leads back to Review. Three panels of the design have no data behind them and hold real
+numbers in the same shape instead: "time saved, 1 h 40 min vs about 2 h by hand" became **what AI
+picked out of the video** -- the exported clips' total against the source length from
+`transcript.json`, as two bars (`Taylor_Tomlinson`: 34 s out of 1:09:51); "AI-suggested TikTok
+caption" became **the hook the LLM wrote** for the selected clip (`Clip.hook`, in the video's
+language; a Khmer post caption does not exist); "Free plan minutes" became **the files written**,
+with sizes and anything skipped. Each card has the real thumbnail, duration and resolution, and
+"ចម្លង caption" copies title + hook.
+Measured: in the browser after a real export, heading "Clips ១ រួចរាល់ហើយ!", subtitle
+"... · MP4 9:16 1080p + SRT", "៣៤ វិនាទី", one card, two files, no problems. In the desktop app the
+same, and the two things a browser test cannot show: "ចម្លង caption" put
+"Comedy vs. Real Life\nAll of your time is spent..." on the Windows clipboard (read back with
+`Get-Clipboard`), and បើក Folder opened Explorer on the export folder. Both check scripts now wait
+for this screen instead of a dialog.
+
 ## Later phases (context only — do not build yet)
 
 - Phase 2: MediaPipe face tracking reframe, bilingual EN + Khmer subtitles, interview Q&A finder, long video → 10 clips.
@@ -672,7 +907,9 @@ permissions above.
   people against the panel edge. Seats still decide *who* is who. `SHARPEN` (`unsharp`) runs once
   after scaling and before the captions are burned. Worst upscale across the five clips: 1.97x.
 - Captions: `--caption-words 2..8` (default 5) and `--caption-color yellow|green|cyan|orange|white|#RRGGBB`
-  (default #FFD23F from the design tokens; OpusClip uses green)
+  (default #FFD23F from the design tokens; OpusClip uses green). Style (screen Subtitles):
+  `--caption-size 70..120` (%), `--caption-outline 0..8` (px), `--caption-case upper|original`,
+  `--caption-position auto|top|middle|bottom`, `--no-captions` (sidecars still written)
 - Encoder: `--encoder auto|nvenc|x264` (default auto: NVENC when the GPU accepts it).
   Measured on a 17.5s clip at 1080x1920, VMAF against lossless: libx264 medium 12.6s/6.7MB/97.96,
   h264_nvenc p5 cq26 2.9s/7.0MB/98.02. Rendering five clips went from 1m25s to 19s.

@@ -5,6 +5,7 @@
 """
 
 import json
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -175,13 +176,47 @@ def test_cached_steps_are_not_counted_as_progress(tmp_path, monkeypatch):
         progress = job.progress()
         assert set(progress["cached"]) == {"audio", "transcribe"}
         assert progress["fresh"] == []
+        # .ass/.mp4 ពីការ run មុនមិនមែន cached ទេ: ជំហានទាំងពីរនោះតែងរត់ម្តងទៀត
+        (out / "clips" / "clip_01.ass").write_text("x", encoding="utf-8")
+        (out / "clips" / "clip_01.mp4").write_bytes(b"x")
+        runner.jobs.clear()
+        rerun = runner.start(video)
+        assert not {"captions", "render"} & set(rerun.progress()["cached"])
+        # file ចាស់ពីការ run មុន != ចប់
+        old = rerun.started - 60
+        for name in ("clip_01.ass", "clip_01.mp4"):
+            os.utime(out / "clips" / name, (old, old))
+        assert rerun.progress()["done"] == ["audio", "transcribe"]
+        # ពេល run នេះសរសេរ .ass ហើយ .mp4 ថ្មី ទើបជំហានទាំងពីររាប់ថាចប់
+        later = rerun.started + 5
+        os.utime(out / "clips" / "clip_01.ass", (later, later))
+        assert rerun.progress()["fresh"] == ["captions"]
+        os.utime(out / "clips" / "clip_01.mp4", (later, later))
+        # .mp4 មានតាំងពី FFmpeg ចាប់ផ្តើម: render ចប់តែពេល job ចប់
+        assert rerun.progress()["fresh"] == ["captions"]
+        rerun.state = "done"
+        assert rerun.progress()["fresh"] == ["captions", "render"]
         # ជំហានដែល --redo ប៉ះមិនមែន cached ទេ ទោះ file មានស្រាប់
         runner.jobs.clear()
         again = runner.start(video, redo="transcribe")
         assert again.progress()["cached"] == ["audio"]
     finally:
-        for name in ("audio.wav", "transcript.json"):
+        for name in ("audio.wav", "transcript.json", "clips/clip_01.ass", "clips/clip_01.mp4"):
             (out / name).unlink(missing_ok=True)
+
+
+def test_project_clip_count_comes_from_disk_not_the_database(client, monkeypatch):
+    """job ដែលមិនចប់ `done` មិនសរសេរ clip ក្នុង database — CLI ដែល render ក្រោយត្រូវតែរាប់."""
+    from server import app as APP
+
+    DB.save_job("stale", "rendered-by-cli", "v.mp4", ["x"], time.time())
+    monkeypatch.setattr(APP, "clips_of_project",
+                        lambda folder: [{"index": i, "files": {"mp4": f"clip_0{i}.mp4"}}
+                                        for i in (1, 2)] + [{"index": 3, "files": {}}]
+                        if folder.name == "rendered-by-cli" else [])
+    names = {item["name"]: item for item in client.get("/projects").json()}
+    assert names["rendered-by-cli"]["clips"] == 2      # clip ទី ៣ មិនទាន់ render
+    assert names["rendered-by-cli"]["jobs"] == 1
 
 
 def test_projects_include_folders_made_before_the_database(client, monkeypatch):
@@ -214,12 +249,13 @@ def test_a_job_left_running_is_marked_interrupted(tmp_path):
 
 
 def test_redo_flags_map_to_steps():
-    assert J.steps_redone({}) == set()
+    # captions + render ធ្វើថ្មីរាល់ការ run (.ass សង់ឡើងវិញ -> render ម្តងទៀត)
+    assert J.steps_redone({}) == {"captions", "render"}
     assert J.steps_redone({"redo": "render"}) == {"captions", "render"}
-    assert J.steps_redone({"redo": "highlights"}) == {"highlights", "boundaries"}
+    assert J.steps_redone({"redo": "highlights"}) == {
+        "highlights", "boundaries", "captions", "render"}
     assert J.steps_redone({"force": True}) == {
         "audio", "transcribe", "highlights", "boundaries", "captions", "render"}
-    # --full render ជាថ្មីរាល់ដង ទោះ .mp4 ចាស់មាននៅ
     assert J.steps_redone({"full": True}) == {"captions", "render"}
 
 
@@ -584,3 +620,73 @@ def test_model_pack_becomes_cli_flags(tmp_path, monkeypatch):
     args = captured["args"]
     assert args[args.index("--whisper-model") + 1] == "medium"
     assert args[args.index("--model") + 1] == "qwen2.5:7b-instruct"
+
+
+def test_health_says_where_output_goes(client):
+    """screen Import បង្ហាញ folder ពិត — វាត្រូវតែជា output/ របស់ project."""
+    body = client.get("/health").json()
+    assert body["output_dir"].endswith("output")
+
+
+# ---------- Transcript preview (screen Processing) ----------
+
+
+def test_transcript_preview_drops_words_and_marks_candidates(tmp_path):
+    """Processing ត្រូវការតែ start/end/text — words ធ្វើឲ្យ file ធំ ២ MB."""
+    from pipeline.highlights import save_clips
+    from server.clips import transcript_preview
+    from tests.test_highlights import make_clip
+
+    (tmp_path / "transcript.json").write_text(json.dumps({
+        "duration": 3000.5, "device": "cuda",
+        "segments": [{"id": 0, "start": 1.0, "end": 4.0, "text": " Hello there ",
+                      "words": [{"word": "Hello", "start": 1.0, "end": 1.4}]}],
+    }), encoding="utf-8")
+    save_clips([make_clip(0, 30, title="A moment")], tmp_path / "highlights.json", model="m", prompt="p")
+
+    preview = transcript_preview(tmp_path)
+    assert preview["duration"] == 3000.5 and preview["device"] == "cuda"
+    assert preview["segments"] == [{"start": 1.0, "end": 4.0, "text": "Hello there"}]
+    assert preview["candidates"][0]["title"] == "A moment"
+
+
+def test_transcript_preview_is_empty_before_the_files_exist(tmp_path):
+    """job ទើបចាប់ផ្តើម: គ្មាន file ទេ — បញ្ជីទទេ មិនមែន error."""
+    from server.clips import transcript_preview
+
+    assert transcript_preview(tmp_path / "not-yet") == {
+        "duration": None, "device": None, "segments": [], "candidates": []}
+
+
+def test_transcript_endpoint_answers_for_a_new_project_and_refuses_paths(client):
+    assert client.get("/projects/never-ran-yet/transcript").status_code == 200
+    assert client.get("/projects/../transcript").status_code in (400, 404)
+    assert client.get("/projects/%2E%2E/transcript").status_code == 400
+
+
+def test_explorer_select_quotes_only_the_path():
+    """list -> Python quote "/select,..." ទាំងមូល ហើយ Explorer បើក Documents ជំនួស."""
+    from server import export
+    path = Path(r"C:\clips\01 - Comedy vs. Real Life (2).mp4")
+    assert export.explorer_select(path) == r'explorer /select,"C:\clips\01 - Comedy vs. Real Life (2).mp4"'
+
+
+def test_caption_style_reaches_the_command_line(client, tmp_path, monkeypatch):
+    """screen Subtitles ផ្ញើ style តាម POST /jobs — JobRequest មិនត្រូវទម្លាក់វាចោលទេ."""
+    video = tmp_path / "v.mp4"
+    video.write_bytes(b"x")
+    captured = {}
+    monkeypatch.setattr(J.JobRunner, "_run", lambda self, job: captured.update(args=job.args))
+    monkeypatch.setattr(J.db, "save_job", lambda *a, **k: None)
+    answer = client.post("/jobs", json={
+        "video": str(video), "redo": "render", "caption_size": 85, "caption_outline": 2,
+        "caption_case": "original", "caption_position": "top", "no_captions": True,
+    })
+    assert answer.status_code == 200
+    time.sleep(0.2)
+    args = captured["args"]
+    assert args[args.index("--caption-size") + 1] == "85"
+    assert args[args.index("--caption-outline") + 1] == "2"
+    assert args[args.index("--caption-case") + 1] == "original"
+    assert args[args.index("--caption-position") + 1] == "top"
+    assert "--no-captions" in args

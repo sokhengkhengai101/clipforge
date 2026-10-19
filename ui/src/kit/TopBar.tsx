@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { IN_TAURI } from '../api'
 import { CloseIcon, MaximizeIcon, MinimizeIcon, PlayMark } from './icons'
+import { focusRing } from './styles'
 
 /** របារខាងលើរបស់ screen ទាំងអស់ (Review.html `<header>`): ផ្ទៃ `chrome`,
  *  បន្ទាត់ `line` ខាងក្រោម, logo + ឈ្មោះ + breadcrumb ខាងឆ្វេង, window controls ខាងស្តាំ.
@@ -9,19 +10,33 @@ import { CloseIcon, MaximizeIcon, MinimizeIcon, PlayMark } from './icons'
  *  `data-tauri-drag-region` ដំណើរការតែលើធាតុដែលមាន attribute នោះផ្ទាល់ មិនមែនលើកូនវា
  *  ទេ — ដូច្នេះអក្សរ និងចន្លោះទទេក៏ត្រូវមានវាដែរ. វាត្រូវការ permission
  *  `core:window:allow-start-dragging` (capabilities/default.json). */
-export function TopBar({ crumb, children }: { crumb?: ReactNode; children?: ReactNode }) {
+export function TopBar({
+  crumb,
+  onHome,
+  children,
+}: {
+  crumb?: ReactNode
+  onHome?: () => void // logo + ឈ្មោះ = ត្រឡប់ទៅ Home (design គ្មានផ្លូវត្រឡប់ផ្សេងពី Import)
+  children?: ReactNode
+}) {
   return (
     <header
       data-tauri-drag-region
       className="flex shrink-0 items-center justify-between gap-3 border-b border-line bg-chrome py-2.5 pr-2 pl-5 font-kantumruy text-text"
     >
       <div data-tauri-drag-region className="flex min-w-0 items-center gap-2.5">
-        <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-[7px] bg-gold text-on-gold">
-          <PlayMark />
-        </span>
-        <span data-tauri-drag-region className="text-[15px] font-bold whitespace-nowrap">
-          Khmer Clip Studio
-        </span>
+        <button
+          type="button"
+          onClick={onHome}
+          disabled={!onHome}
+          title={onHome ? 'ទំព័រដើម' : undefined}
+          className={`flex cursor-pointer items-center gap-2.5 rounded-field border-0 bg-transparent p-0 text-text disabled:cursor-default ${focusRing}`}
+        >
+          <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-[7px] bg-gold text-on-gold">
+            <PlayMark />
+          </span>
+          <span className="text-[15px] font-bold whitespace-nowrap">Khmer Clip Studio</span>
+        </button>
         {crumb && (
           <>
             <span data-tauri-drag-region className="text-text-5">
@@ -60,7 +75,7 @@ export function WindowControls() {
   }
 
   const base =
-    'inline-flex h-9 w-11 cursor-pointer items-center justify-center rounded-[6px] border-0 bg-transparent text-text-2 outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-gold'
+    `inline-flex h-9 w-11 cursor-pointer items-center justify-center rounded-[6px] border-0 bg-transparent text-text-2 ${focusRing}`
   return (
     <div aria-label="Window controls" className="ml-1.5 flex items-center gap-0.5">
       <button type="button" aria-label="Minimize" onClick={() => act('minimize')} className={`${base} hover:bg-field`}>

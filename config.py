@@ -463,3 +463,50 @@ def resolve_caption_color(value: str) -> str:
         f"ពណ៌មិនស្គាល់: {value!r} "
         f"(ប្រើ {', '.join(CAPTION_COLOR_PRESETS)} ឬ #RRGGBB)"
     )
+
+
+# ---------- style caption ពី CLI (screen Subtitles) ----------
+# flag ទាំងនេះគ្រាន់តែកំណត់តម្លៃខាងលើ — មិនប្តូររបៀបបំបែក cue ឬ render ទេ។
+CAPTION_SIZE_RANGE = (70, 120)      # % នៃទំហំដែល apply_aspect គណនា; ធំជាង 120% ប្លុក
+                                    # ១៦ តួអក្សររត់ចេញក្រៅទទឹង 1080 ដក margin
+CAPTION_OUTLINE_RANGE = (0, 8)
+CAPTION_POSITIONS = ("auto", "top", "middle", "bottom")
+CAPTION_POSITION = "auto"           # auto = lower third, ឬស្នាមរបស់ split (reframe)
+
+
+def apply_caption_style(size_percent: int = 100, outline: int = CAPTION_OUTLINE,
+                        case: str = "upper", position: str = "auto") -> None:
+    """កំណត់ទំហំ, គ្រោង, អក្សរធំ/ដើម និងទីតាំង caption.
+
+    ហៅ **ក្រោយ** apply_aspect(), ព្រោះទំហំ font និង margin គណនាពីទំហំ output។
+    `position`: auto ទុកឲ្យ reframe ដាក់លើស្នាម split; top/middle/bottom បង្ខំកន្លែងតែមួយ
+    សម្រាប់គ្រប់ layout (MarginV = ចម្ងាយពីបាតទៅបាតប្លុក)។
+    """
+    global CAPTION_FONT_SIZE, CAPTION_LINE_GAP, CAPTION_OUTLINE, CAPTION_UPPERCASE
+    global CAPTION_MARGIN_V, CAPTION_POSITION
+
+    low, high = CAPTION_SIZE_RANGE
+    if not low <= size_percent <= high:
+        raise ValueError(f"--caption-size ត្រូវនៅចន្លោះ {low}-{high} (ទទួលបាន {size_percent})")
+    low, high = CAPTION_OUTLINE_RANGE
+    if not low <= outline <= high:
+        raise ValueError(f"--caption-outline ត្រូវនៅចន្លោះ {low}-{high} (ទទួលបាន {outline})")
+    if case not in ("upper", "original"):
+        raise ValueError(f"--caption-case មិនស្គាល់: {case} (upper ឬ original)")
+    if position not in CAPTION_POSITIONS:
+        raise ValueError(f"--caption-position មិនស្គាល់: {position} "
+                         f"({', '.join(CAPTION_POSITIONS)})")
+
+    CAPTION_FONT_SIZE = int(CAPTION_FONT_SIZE * size_percent / 100)
+    CAPTION_LINE_GAP = int(CAPTION_FONT_SIZE * 0.82)       # សមាមាត្រដូច apply_aspect
+    CAPTION_OUTLINE = outline
+    CAPTION_UPPERCASE = case == "upper"
+    CAPTION_POSITION = position
+
+    block = CAPTION_MAX_LINES * CAPTION_FONT_SIZE * 1.1
+    if position == "top":
+        # កំពូលប្លុកនៅក្រោមតំបន់ UI ខាងលើរបស់ platform (CAPTION_SAFE_TOP) + 4%
+        CAPTION_MARGIN_V = int(OUT_HEIGHT * (1 - CAPTION_SAFE_TOP - 0.04) - block)
+    elif position == "middle":
+        CAPTION_MARGIN_V = int(OUT_HEIGHT / 2 - block / 2)
+    # bottom និង auto ទុក lower third ពី apply_aspect

@@ -105,3 +105,11 @@ export const PRESETS: Preset[] = [
     options: {},
   },
 ]
+
+/** flag ដែល preset បន្ថែម ជាអក្សរ: `{ max_clips: 5 }` -> "--max-clips 5".
+ *  ដូចគ្នានឹងអ្វីដែល server/jobs.py ធ្វើ ដូច្នេះអ្វីដែល UI បង្ហាញ = អ្វីដែល job រត់. */
+export function flagsOf(preset: Preset): string {
+  return Object.entries(preset.options)
+    .map(([key, value]) => `--${key.replace(/_/g, '-')} ${value}`)
+    .join(' ')
+}

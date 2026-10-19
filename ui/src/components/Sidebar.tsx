@@ -29,18 +29,21 @@ export function Sidebar({
   device,
   ffmpeg,
   onNewProject,
+  onHome,
   page,
   onPage,
 }: {
   device: string
   ffmpeg: boolean
   onNewProject: () => void
+  onHome: () => void // 1F: logo ត្រឡប់ទៅ Home ថ្មី
   page: Page
   onPage: (page: Page) => void
 }) {
   return (
     <aside className="flex h-full w-60 shrink-0 flex-col gap-5 border-r border-border-default bg-bg-panel px-4 pt-5 pb-4">
-      <div className="flex items-center gap-2.5">
+      {/* 1F: screen នេះនៅជារចនាចាស់; logo ជាផ្លូវត្រឡប់ទៅ Home ថ្មី រហូតដល់វាត្រូវប្តូរ */}
+      <button type="button" onClick={onHome} title="ទំព័រដើម" className="flex items-center gap-2.5 text-left">
         <div className="flex size-8 items-center justify-center rounded-sm bg-accent">
           <img src={logoMark} alt="" width={18} height={18} />
         </div>
@@ -48,7 +51,7 @@ export function Sidebar({
           <p className="text-heading text-text-primary">ClipForge</p>
           <p className="text-caption text-text-secondary">Studio · local AI</p>
         </div>
-      </div>
+      </button>
 
       <button
         type="button"

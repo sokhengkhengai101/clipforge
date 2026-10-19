@@ -10,6 +10,8 @@ export function useJob() {
   const [status, setStatus] = useState<JobStatus | null>(null)
   const [log, setLog] = useState<string[]>([])
   const [error, setError] = useState('')
+  // ពេល POST /jobs កំពុងរត់ — screen បង្ហាញ "កំពុងចាប់ផ្តើម" មិនមែន status របស់ job មុនទេ
+  const [starting, setStarting] = useState(false)
   const socket = useRef<WebSocket | null>(null)
 
   const listen = useCallback((jobId: string) => {
@@ -29,12 +31,18 @@ export function useJob() {
     async (options: JobOptions) => {
       setError('')
       setLog([])
+      // status ចាស់ (job មុន ដែល `done`) ធ្លាប់នៅលើ screen រហូតដល់ POST ឆ្លើយ ហើយ Processing
+      // បង្ហាញ "Clips រួចរាល់ហើយ!" មួយភ្លែត មុន job ថ្មីចាប់ផ្តើម (ឃើញក្នុង test)
+      setStatus(null)
+      setStarting(true)
       try {
         const job = await api.startJob(options)
         setStatus(job)
         listen(job.id)
       } catch (e) {
         setError((e as Error).message)
+      } finally {
+        setStarting(false)
       }
     },
     [listen],
@@ -52,5 +60,5 @@ export function useJob() {
   // បិទ socket ពេល component រលាយ ដើម្បីកុំទុក connection ចោល
   useEffect(() => () => socket.current?.close(), [])
 
-  return { status, log, error, start, cancel, running: status?.state === 'running' }
+  return { status, log, error, start, cancel, starting, running: status?.state === 'running' }
 }

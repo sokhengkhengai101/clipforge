@@ -112,14 +112,20 @@ body {
   @apply bg-bg-app font-sans text-text-primary;
 }
 
-/* Launch bar ភ្លឺមួយភ្លែតពេលវីដេអូថ្មីត្រូវបានជ្រើស (drop, samples, ឬ path) —
-   ទាញភ្នែកទៅប៊ូតុង Start. `to` គ្មាន background ដូច្នេះវាត្រឡប់ទៅពណ៌ពិតរបស់ធាតុ. */
-@keyframes arrive {
-  from {
-    background-color: var(--color-accent-soft);
-    box-shadow: inset 0 2px 0 0 var(--color-accent);
-  }
+/* App ងងឹតទាំងមូល: `color-scheme: dark` ប្រាប់ WebView2 ឲ្យគូរ control ដើមរបស់វា
+   (scrollbar, select dropdown) ជាពណ៌ងងឹត — បើគ្មានវា scrollbar របស់ Windows ភ្លឺ
+   ស/ប្រផេះ 15px លើ UI ងងឹត (វាស់ក្នុង app: color-scheme "normal", bar 15px).
+   scrollbar ស្តើង ពណ៌ raised-3 ដូចធាតុស្ងប់ៗផ្សេងទៀតក្នុង design. */
+:root {
+  color-scheme: dark;
 }
-@utility animate-arrive {
-  animation: arrive 1.4s ease-out;
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-raised-3) transparent;
+}
+
+/* Safe zone លើ preview (Subtitles.html): ឆ្នូតក្រហមថ្លា — តំបន់ដែល UI របស់ platform បាំង */
+@utility safe-band {
+  background: repeating-linear-gradient(135deg, rgb(240 82 82 / 0.28) 0 6px, rgb(240 82 82 / 0.12) 6px 12px);
+  z-index: 2;
 }

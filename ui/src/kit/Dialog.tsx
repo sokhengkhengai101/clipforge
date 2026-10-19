@@ -1,5 +1,6 @@
 import { useEffect, useId, type ReactNode } from 'react'
 import { CloseIcon } from './icons'
+import { focusRing } from './styles'
 
 /** Dialog (SignInModal.html): ផ្ទៃ `card`, radius 18, padding 28, ពីលើ scrim
  *  `rgba(5,7,10,0.74)`, ប៊ូតុងបិទ 40×40 នៅជ្រុងស្តាំខាងលើ.
@@ -39,7 +40,7 @@ export function Dialog({
           type="button"
           aria-label="បិទ"
           onClick={onClose}
-          className="absolute top-3 right-3 inline-flex size-10 cursor-pointer items-center justify-center rounded-button border-0 bg-transparent text-text-2 outline-none hover:bg-field focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-gold"
+          className={`absolute top-3 right-3 inline-flex size-10 cursor-pointer items-center justify-center rounded-button border-0 bg-transparent text-text-2 hover:bg-field ${focusRing}`}
         >
           <CloseIcon size={14} weight={1.5} />
         </button>

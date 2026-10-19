@@ -19,7 +19,7 @@ from pydantic import BaseModel
 
 import config
 from server import db, env, export, media
-from server.clips import clips_of_project
+from server.clips import clips_of_project, transcript_preview
 from server.jobs import PROJECT_ROOT, JobRunner
 
 config.enable_utf8_output()
@@ -53,6 +53,11 @@ class JobRequest(BaseModel):
     aspect: str | None = None
     caption_words: int | None = None
     caption_color: str | None = None
+    caption_size: int | None = None     # % (70-120) — screen Subtitles
+    caption_outline: int | None = None  # px (0-8)
+    caption_case: str | None = None     # upper / original
+    caption_position: str | None = None # auto / top / middle / bottom
+    no_captions: bool | None = None
     full: bool | None = None
     redo: str | None = None
     model: str | None = None            # Ollama model សម្រាប់ highlights
@@ -83,6 +88,8 @@ def health() -> dict:
         "whisper_model": WHISPER_MODEL,
         "llm_model": config.OLLAMA_MODEL,
         "busy": active.id if active else None,
+        # screen Import បង្ហាញ "Folder រក្សាទុក" — path ពិត មិនមែន Documents\... ក្នុង design
+        "output_dir": str(PROJECT_ROOT / "output"),
     }
 
 
@@ -144,25 +151,30 @@ def list_projects() -> list[dict]:
     Database ដឹងពី job (ពេល, ស្ថានភាព) តែវាទើបមានពេល Phase 1B; project ដែល
     សង់ដោយ CLI មុននោះមានតែ folder. UI ត្រូវឃើញទាំងពីរ.
     """
-    projects = db.list_projects()
-    known = {item["name"] for item in projects}
     out_root = PROJECT_ROOT / "output"
-    for folder in sorted(out_root.iterdir()) if out_root.is_dir() else []:
-        if not folder.is_dir() or folder.name in known:
-            continue
-        found = clips_of_project(folder)
-        if not found:
-            continue
+
+    def rendered(folder: Path) -> int:
         # រាប់តែ clip ដែល **render រួច**: `clips.json` ជាបញ្ជីដែល LLM ជ្រើស ហើយ
         # វាអាចមានមុន render ទាល់តែសោះ (`sample_5s` មាន clips.json តែគ្មាន
         # folder `clips/`). បើរាប់ទាំងនោះ ការ៉េបង្ហាញ READY រួច Review បើកទទេ.
-        rendered = sum(1 for clip in found if clip.get("files", {}).get("mp4"))
+        return sum(1 for clip in clips_of_project(folder) if clip.get("files", {}).get("mp4"))
+
+    projects = db.list_projects()
+    # ចំនួន clip មកពី disk សម្រាប់ project ក្នុង database ដែរ: database សរសេរ clip តែពេល
+    # job តាម sidecar ចប់ `done` — job ដែលបោះបង់ រួច CLI render ក្រោយ ទុកលេខ 0 ចាស់
+    # (ឃើញពិត: The-Future-Mark-Zuckerberg បង្ហាញ 0 ទោះមាន .mp4 ៥).
+    for item in projects:
+        item["clips"] = rendered(out_root / item["name"])
+    known = {item["name"] for item in projects}
+    for folder in sorted(out_root.iterdir()) if out_root.is_dir() else []:
+        if not folder.is_dir() or folder.name in known or not clips_of_project(folder):
+            continue
         projects.append({
             "id": -len(projects) - 1,          # លេខអវិជ្ជមាន = មិនមានក្នុង database
             "name": folder.name,
             "video": "",                        # មិនដឹង path ដើមទេ
             "created": folder.stat().st_mtime,
-            "clips": rendered,
+            "clips": rendered(folder),
             "jobs": 0,
             "last_state": None,
         })
@@ -256,6 +268,19 @@ def _export_plan(name: str, kinds: tuple[str, ...],
     if not clips and not (PROJECT_ROOT / "output" / name).is_dir():
         raise HTTPException(status_code=404, detail="រកមិនឃើញ project នេះ")
     return export.plan(clips, indexes, kinds)
+
+
+@app.get("/projects/{name}/transcript")
+def project_transcript(name: str) -> dict:
+    """Transcript ផ្ទាល់សម្រាប់ screen Processing (start/end/text + clip ដែល AI ពិចារណា).
+
+    ឆ្លើយ 200 ជានិច្ច ទោះ file មិនទាន់មាន: project ថ្មីមិនទាន់មាន folder ពេល job ចាប់ផ្តើម
+    ហើយ 404 រាល់ពេលសួរគ្រាន់តែបំពេញ console. ឈ្មោះមិនអាចមាន `..` ឬ `/` ទេ
+    ដូច្នេះ URL មិនអាចអាន file ក្រៅ output/ បាន.
+    """
+    if name in ("", ".", "..") or "/" in name or "\\" in name:
+        raise HTTPException(status_code=400, detail="ឈ្មោះ project មិនត្រឹមត្រូវ")
+    return {"name": name, **transcript_preview(PROJECT_ROOT / "output" / name)}
 
 
 @app.get("/projects/{name}/export")

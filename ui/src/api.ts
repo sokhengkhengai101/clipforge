@@ -8,6 +8,7 @@ export type Health = {
   whisper_model: string
   llm_model: string
   busy: string | null
+  output_dir: string // កន្លែងដែល pipeline សរសេរ (output/)
 }
 
 export type Video = {
@@ -89,6 +90,11 @@ export type JobOptions = {
   redo?: string
   caption_words?: number
   caption_color?: string
+  caption_size?: number // % (screen Subtitles)
+  caption_outline?: number
+  caption_case?: 'upper' | 'original'
+  caption_position?: 'auto' | 'top' | 'middle' | 'bottom'
+  no_captions?: boolean
   aspect?: string
   layout?: string
   model?: string            // Ollama model (model pack)
@@ -120,6 +126,16 @@ export type Env = {
   onnx: OnnxModel[]
   anthropic_key: boolean
   anthropic_model: string
+}
+
+/** ---- Transcript ផ្ទាល់ (screen Processing) ---- */
+
+export type TranscriptPreview = {
+  name: string
+  duration: number | null // វិនាទីរបស់វីដេអូដើម (transcript.json)
+  device: string | null // cuda / cpu ដែល Whisper ប្រើពិត
+  segments: { start: number; end: number; text: string }[]
+  candidates: { start: number; end: number; title: string }[] // clip ដែល AI ពិចារណា
 }
 
 /** ---- Export (screen 05) ---- */
@@ -183,6 +199,10 @@ export const api = {
     send<{ name: string; clips: Clip[] }>(`/projects/${encodeURIComponent(name)}/clips`)
       .then((answer) => answer.clips)
       .catch(() => [] as Clip[]),
+
+  /** transcript + clip ដែល AI ពិចារណា — 200 ជានិច្ច (បញ្ជីទទេមុន file មាន). */
+  transcript: (name: string) =>
+    send<TranscriptPreview>(`/projects/${encodeURIComponent(name)}/transcript`),
 
   /** អ្វីដែល export *នឹង* សរសេរ — មិនប៉ះ disk ទេ. */
   exportPreview: (name: string, kinds: string[]) =>

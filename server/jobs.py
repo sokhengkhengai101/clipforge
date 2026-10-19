@@ -17,7 +17,6 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import config
 from server import db
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -45,16 +44,42 @@ REDO_TOUCHES = {
 
 
 def steps_redone(options: dict) -> set[str]:
-    """ជំហានដែល flag `--redo` / `--force` ធ្វើថ្មី."""
+    """ជំហានដែល run នេះធ្វើថ្មី ទោះ marker file មានស្រាប់.
+
+    captions និង render ធ្វើថ្មី **រាល់ដង**: make_clips សង់ .ass ឡើងវិញរាល់ការ run
+    ហើយ .ass ដែលថ្មីជាង .mp4 ធ្វើឲ្យ render_clip render ម្តងទៀត (វាស់: 26 s
+    លើ video 56 s ដោយគ្មាន --redo) ។ បើយើងរាប់វាជា cached, UI បង្ហាញ "៦ / ៦"
+    ពេល job ទើបចាប់ផ្តើម.
+    """
     names = {n.strip().lower() for n in str(options.get("redo") or "").split(",") if n.strip()}
-    if options.get("full"):
-        names |= {"captions", "render"}     # --full render ជាថ្មីរាល់ដង
+    names.add("render")
     if options.get("force") or "all" in names:
         names = set(REDO_TOUCHES)
     touched = set()
     for name in names:
         touched |= set(REDO_TOUCHES.get(name, (name,)))
     return touched
+
+
+# នាឡិកា file របស់ Windows អាចយឺតជាង time.time() បន្តិច: file ដែលសរសេរភ្លាមក្រោយ
+# job ចាប់ផ្តើម អាចមាន mtime មុន `started` ពីរបីមីលីវិនាទី.
+MTIME_SLACK = 1.0
+
+
+def steps_on_disk(out_dir: Path, since: float = 0.0) -> set[str]:
+    """ជំហានដែល marker file មាន ហើយសរសេរនៅ ឬក្រោយ `since` (epoch វិនាទី)."""
+    def new(path: Path) -> bool:
+        return path.is_file() and path.stat().st_mtime >= since
+
+    clips_dir = out_dir / "clips"
+    ass = [p for p in clips_dir.glob("*.ass") if new(p)] if clips_dir.is_dir() else []
+    found = {name for name, marker in STEPS if marker is not None and new(out_dir / marker)}
+    if ass:
+        found.add("captions")
+        # render ចប់ពេល .ass នីមួយៗមាន .mp4 របស់វា (មិនមែនពេល clip ទី 1 ចេញទេ)
+        if all(new(p.with_suffix(".mp4")) for p in ass):
+            found.add("render")
+    return found
 
 
 @dataclass
@@ -76,18 +101,18 @@ class Job:
     cached: tuple[str, ...] = ()
 
     def progress(self) -> dict:
-        """ជំហានណាចប់ហើយ — អានពី file ដែលមានលើ disk."""
-        done = []
-        clips_dir = self.out_dir / "clips"
-        for name, marker in STEPS:
-            if marker is not None:
-                finished = (self.out_dir / marker).is_file()
-            elif name == "captions":
-                finished = any(clips_dir.glob("*.ass")) if clips_dir.is_dir() else False
-            else:
-                finished = any(clips_dir.glob("*.mp4")) if clips_dir.is_dir() else False
-            if finished:
-                done.append(name)
+        """ជំហានណាចប់ហើយ — អានពី file ដែលមានលើ disk.
+
+        ជំហាន cached ចប់តាំងពីមុន. ជំហានផ្សេងទៀតចប់ តែពេល file របស់វាត្រូវបាន
+        សរសេរ **ក្រោយ** job នេះចាប់ផ្តើម (mtime): `--redo` និង render សរសេរជាន់លើ
+        file ចាស់ ដូច្នេះ "file មាន" តែឯងមិនបានន័យថា run នេះធ្វើវារួចទេ.
+        """
+        written = steps_on_disk(self.out_dir, since=self.started - MTIME_SLACK)
+        if self.state == "running":
+            # FFmpeg សរសេរ .mp4 នៅកន្លែងតែម្តង ដូច្នេះ file លេចមកតាំងពី render ទើបចាប់ផ្តើម
+            # (វាស់: "render រួចរាល់" 8 s មុន job ចប់). render ជាជំហានចុងក្រោយ: វាចប់ពេល process ចប់.
+            written.discard("render")
+        done = [name for name, _ in STEPS if name in self.cached or name in written]
         fresh = [name for name in done if name not in self.cached]
         return {"done": done, "cached": list(self.cached), "fresh": fresh,
                 "total": len(STEPS),
@@ -135,8 +160,9 @@ class JobRunner:
             job = Job(id=uuid.uuid4().hex[:8], video=video,
                       out_dir=PROJECT_ROOT / "output" / video.stem, args=args)
             redone = steps_redone(options)
-            job.cached = tuple(name for name in job.progress()["done"]
-                               if name not in redone)
+            on_disk = steps_on_disk(job.out_dir)
+            job.cached = tuple(name for name, _ in STEPS
+                               if name in on_disk and name not in redone)
             self.jobs[job.id] = job
 
         db.save_job(job.id, video.stem, str(video), job.args, job.started)

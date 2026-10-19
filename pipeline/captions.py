@@ -384,7 +384,8 @@ def anchor_for(cue: Cue, clip_start: float, segments: list | None) -> str:
     OpusClip ដាក់អក្សរត្រង់ស្នាមរវាងផ្ទាំងពីរ ប៉ុន្តែតែ**ពេលមាន** split ប៉ុណ្ណោះ។
     យើងប្រៀបធៀបពេលកណ្តាលនៃ cue នឹងផែនការ layout។
     """
-    if not segments:
+    # --caption-position top/middle/bottom = កន្លែងតែមួយសម្រាប់គ្រប់ layout
+    if not segments or config.CAPTION_POSITION != "auto":
         return "normal"
     middle = clip_start + (cue.start + cue.end) / 2
     for segment in segments:
