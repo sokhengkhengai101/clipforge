@@ -95,6 +95,7 @@ export type JobOptions = {
   caption_case?: 'upper' | 'original'
   caption_position?: 'auto' | 'top' | 'middle' | 'bottom'
   no_captions?: boolean
+  clean_only?: boolean // render តែ clip_XX_clean.mp4 (preview)
   aspect?: string
   layout?: string
   model?: string            // Ollama model (model pack)
@@ -136,6 +137,25 @@ export type TranscriptPreview = {
   device: string | null // cuda / cpu ដែល Whisper ប្រើពិត
   segments: { start: number; end: number; text: string }[]
   candidates: { start: number; end: number; title: string }[] // clip ដែល AI ពិចារណា
+}
+
+/** ---- Cue សម្រាប់ preview ផ្ទាល់ (screen Subtitles) — ពី captions.py ពិត ---- */
+
+export type PreviewWord = { text: string; start: number; end: number } // វិនាទីពីដើម clip
+export type PreviewCue = {
+  start: number
+  end: number
+  lines: { y: number; words: PreviewWord[] }[] // y = កណ្តាលបន្ទាត់ ជា px លើ height
+}
+export type PreviewCues = {
+  width: number // 1080
+  height: number // 1920
+  font_size: number // px លើ height (ក្រោយ --caption-size)
+  active_scale: number // 1.1 = Pop
+  safe_top: number
+  safe_bottom: number
+  layout_known: boolean // false = clip ចាស់: មិនដឹងថា shot ណាជា split
+  cues: PreviewCue[]
 }
 
 /** ---- Export (screen 05) ---- */
@@ -203,6 +223,12 @@ export const api = {
   /** transcript + clip ដែល AI ពិចារណា — 200 ជានិច្ច (បញ្ជីទទេមុន file មាន). */
   transcript: (name: string) =>
     send<TranscriptPreview>(`/projects/${encodeURIComponent(name)}/transcript`),
+
+  /** cue ដូចដែល render នឹងគូរ ជាមួយ words/size/position — គ្មាន render. */
+  cues: (name: string, index: number, style: { words: number; size: number; position: string }) =>
+    send<PreviewCues>(
+      `/projects/${encodeURIComponent(name)}/clips/${index}/cues?words=${style.words}&size=${style.size}&position=${style.position}`,
+    ),
 
   /** អ្វីដែល export *នឹង* សរសេរ — មិនប៉ះ disk ទេ. */
   exportPreview: (name: string, kinds: string[]) =>

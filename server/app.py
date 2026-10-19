@@ -19,7 +19,7 @@ from pydantic import BaseModel
 
 import config
 from server import db, env, export, media
-from server.clips import clips_of_project, transcript_preview
+from server.clips import clips_of_project, preview_cues, transcript_preview
 from server.jobs import PROJECT_ROOT, JobRunner
 
 config.enable_utf8_output()
@@ -58,6 +58,7 @@ class JobRequest(BaseModel):
     caption_case: str | None = None     # upper / original
     caption_position: str | None = None # auto / top / middle / bottom
     no_captions: bool | None = None
+    clean_only: bool | None = None      # preview គ្មាន caption (screen Subtitles)
     full: bool | None = None
     redo: str | None = None
     model: str | None = None            # Ollama model សម្រាប់ highlights
@@ -196,9 +197,30 @@ def cancel_job(job_id: str) -> dict:
     return runner.cancel(job_id).as_dict()
 
 
+def _project_folder(name: str) -> Path:
+    """`output/<name>` — ឈ្មោះមិនអាចមាន `..`, `/` ឬ backslash ទេ ដូច្នេះ URL អានក្រៅ output/ មិនបាន."""
+    if name in ("", ".", "..") or "/" in name or "\\" in name:
+        raise HTTPException(status_code=400, detail="ឈ្មោះ project មិនត្រឹមត្រូវ")
+    return PROJECT_ROOT / "output" / name
+
+
 def _clips_of(name: str) -> list[dict]:
     items = clips_of_project(PROJECT_ROOT / "output" / name)
     return items or db.project_clips(name)
+
+
+@app.get("/projects/{name}/clips/{index}/cues")
+def clip_cues(name: str, index: int, words: int = 5, size: int = 100,
+              position: str = "auto") -> dict:
+    """Cue សម្រាប់ preview ផ្ទាល់លើ screen Subtitles — គណនាដោយ captions.py ពិត, គ្មាន render."""
+    folder = _project_folder(name)
+    try:
+        cues = preview_cues(folder, index, words, size, position)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    if cues is None:
+        raise HTTPException(status_code=404, detail=f"គ្មាន clip {index} ឬ transcript")
+    return cues
 
 
 @app.get("/projects/{name}/clips/{index}/file")
@@ -255,8 +277,8 @@ class RevealRequest(BaseModel):
 
 
 def _export_kinds(kinds: list[str]) -> tuple[str, ...]:
-    """ទទួលតែ kind ដែល `media.KINDS` ស្គាល់ — UI មិនអាចសុំចម្លង `.exe` បានទេ."""
-    chosen = tuple(kind for kind in kinds if kind in media.KINDS)
+    """ទទួលតែ kind ក្នុង `media.EXPORTABLE` — UI មិនអាចសុំចម្លង `.exe` (ឬ preview) បានទេ."""
+    chosen = tuple(kind for kind in kinds if kind in media.EXPORTABLE)
     if not chosen:
         raise HTTPException(status_code=400, detail=f"kind មិនស្គាល់: {kinds}")
     return chosen
@@ -278,9 +300,7 @@ def project_transcript(name: str) -> dict:
     ហើយ 404 រាល់ពេលសួរគ្រាន់តែបំពេញ console. ឈ្មោះមិនអាចមាន `..` ឬ `/` ទេ
     ដូច្នេះ URL មិនអាចអាន file ក្រៅ output/ បាន.
     """
-    if name in ("", ".", "..") or "/" in name or "\\" in name:
-        raise HTTPException(status_code=400, detail="ឈ្មោះ project មិនត្រឹមត្រូវ")
-    return {"name": name, **transcript_preview(PROJECT_ROOT / "output" / name)}
+    return {"name": name, **transcript_preview(_project_folder(name))}
 
 
 @app.get("/projects/{name}/export")

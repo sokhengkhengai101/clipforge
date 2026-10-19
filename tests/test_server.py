@@ -690,3 +690,37 @@ def test_caption_style_reaches_the_command_line(client, tmp_path, monkeypatch):
     assert args[args.index("--caption-case") + 1] == "original"
     assert args[args.index("--caption-position") + 1] == "top"
     assert "--no-captions" in args
+
+
+def test_cues_endpoint_guards_the_name_and_values(client, monkeypatch):
+    """/cues ប្រើ _project_folder ដូច /transcript — គ្មាន ../ — ហើយ 400 លើតម្លៃក្រៅដែន."""
+    from server import app as APP
+
+    assert client.get("/projects/../clips/1/cues").status_code in (400, 404)
+    assert client.get("/projects/..%5Cx/clips/1/cues").status_code == 400
+    monkeypatch.setattr(APP, "preview_cues", lambda *a, **k: (_ for _ in ()).throw(ValueError("x")))
+    assert client.get("/projects/p/clips/1/cues?words=1").status_code == 400
+    monkeypatch.setattr(APP, "preview_cues", lambda *a, **k: None)
+    assert client.get("/projects/p/clips/1/cues").status_code == 404
+    seen = {}
+    monkeypatch.setattr(APP, "preview_cues",
+                        lambda folder, index, words, size, position: seen.update(
+                            index=index, words=words, size=size, position=position) or {"cues": []})
+    assert client.get("/projects/p/clips/2/cues?words=3&size=85&position=top").json() == {"cues": []}
+    assert seen == {"index": 2, "words": 3, "size": 85, "position": "top"}
+
+
+def test_clean_only_reaches_the_command_line(client, tmp_path, monkeypatch):
+    video = tmp_path / "v.mp4"
+    video.write_bytes(b"x")
+    captured = {}
+    monkeypatch.setattr(J.JobRunner, "_run", lambda self, job: captured.update(args=job.args))
+    monkeypatch.setattr(J.db, "save_job", lambda *a, **k: None)
+    assert client.post("/jobs", json={"video": str(video), "clean_only": True,
+                                      "max_clips": 5}).status_code == 200
+    time.sleep(0.2)
+    assert "--clean-only" in captured["args"]
+
+
+def test_export_refuses_the_preview_kind(client):
+    assert client.get("/projects/p/export?kinds=clean").status_code == 400

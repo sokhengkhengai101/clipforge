@@ -125,6 +125,9 @@ if (await project.count()) {
         blocks: document.querySelectorAll('[role="slider"] > div.absolute.inset-y-2').length,
         safeBands: document.querySelectorAll('.safe-band').length,
         presetsDisabled: document.querySelectorAll('aside button[disabled]').length,
+        // preview ផ្ទាល់: clean = video គ្មាន caption + overlay ពី /cues; mp4 = caption ដុតរួច
+        preview: document.querySelector('section[aria-label="Preview"] video')?.getAttribute('src')?.match(/kind=(\w+)/)?.[1] ?? null,
+        overlayLines: document.querySelectorAll('section[aria-label="Preview"] p.absolute').length,
       })),
     ),
   )

@@ -6,6 +6,8 @@ import '@fontsource/kantumruy-pro/400.css'
 import '@fontsource/kantumruy-pro/500.css'
 import '@fontsource/kantumruy-pro/600.css'
 import '@fontsource/kantumruy-pro/700.css'
+// font របស់ caption ដែល render (config.CAPTION_FONT) — preview ផ្ទាល់លើ Subtitles
+import '@fontsource/montserrat/latin-800.css'
 import './index.css'
 import App from './App.tsx'
 

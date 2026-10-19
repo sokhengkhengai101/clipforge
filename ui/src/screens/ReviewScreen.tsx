@@ -6,6 +6,7 @@ import { focusRing } from '../kit/styles'
 import { TopBar } from '../kit/TopBar'
 import { AccountButton } from './AccountButton'
 import { clock, clockTenths, khmerNumber } from './khmer'
+import type { Order, ReviewChoices } from './reviewChoices'
 
 /** Screen "ពិនិត្យ Clips" (design/screens/Review.html), ភ្ជាប់ទៅ clip ពិតរបស់ project.
  *
@@ -19,12 +20,16 @@ export function ReviewScreen({
   project,
   clips,
   busy,
+  choices,
+  onChoices,
   onSubtitles,
   onExported,
   onMore,
   onHome,
 }: {
   project: string
+  choices: ReviewChoices // រស់នៅក្នុង App: ការចេញទៅ Subtitles ឬ Export រួចរាល់ មិនបាត់វាទេ
+  onChoices: (change: Partial<ReviewChoices>) => void
   clips: Clip[] // បញ្ជីតាមលំដាប់ពិន្ទុទាំងមូលពី clips.json — រួមទាំង clip ដែលមិនទាន់ render
   busy: boolean
   onSubtitles: (index: number) => void
@@ -36,28 +41,30 @@ export function ReviewScreen({
   const rendered = useMemo(() => clips.filter((clip) => clip.files.mp4), [clips])
   // "លំដាប់ AI" = clips.json (rank_clips) ដែលមិនដូចពិន្ទុទេ: rubric ផ្តល់ពិន្ទុជិតៗគ្នា
   // ហើយ AI ប្រៀបធៀប clip ម្តងទៀតដើម្បីតម្រៀប (CLAUDE.md) — ឧ. #3 មាន 90 នៅក្រោម #1 ដែលមាន 80
-  const [order, setOrder] = useState<Order>('rank')
+  const { order, destination } = choices
   const shown = useMemo(() => sortClips(rendered, order), [rendered, order])
-  const [selectedIndex, setSelectedIndex] = useState(rendered[0]?.index ?? 1)
-  const clip = rendered.find((item) => item.index === selectedIndex) ?? rendered[0]
-  // ជ្រើសសម្រាប់ export: clip ទាំងអស់ជាលំនាំដើម (design ធីក ៣ ក្នុង ៥ ជាឧទាហរណ៍)
-  const [picked, setPicked] = useState(() => new Set(rendered.map((item) => item.index)))
+  const clip = rendered.find((item) => item.index === choices.selected) ?? rendered[0]
+  // ជ្រើសសម្រាប់ export: clip ទាំងអស់ជាលំនាំដើម (design ធីក ៣ ក្នុង ៥ ជាឧទាហរណ៍) — App ទុកតែ
+  // clip ដែលអ្នក**ដក** ដូច្នេះ clip ថ្មីពី "រក clips បន្ថែម" ចាប់ផ្តើមជាជ្រើស
+  const picked = new Set(rendered.map((item) => item.index).filter((index) => !choices.unpicked.includes(index)))
 
-  const [destination, setDestination] = useState('')
   const [exporting, setExporting] = useState(false)
   const [exportError, setExportError] = useState('')
 
   // កន្លែង export លំនាំដើម គណនាក្នុង Python (~/Videos/ClipForge/<project>)
+  // (តែពេលអ្នកមិនទាន់វាយ folder ផ្ទាល់ខ្លួន)
+  const needsDestination = destination === ''
   useEffect(() => {
+    if (!needsDestination) return
     let stale = false
     api
       .exportPreview(project, ['mp4'])
-      .then((answer) => !stale && setDestination((current) => current || answer.destination))
+      .then((answer) => !stale && onChoices({ destination: answer.destination }))
       .catch(() => {})
     return () => {
       stale = true
     }
-  }, [project])
+  }, [project, needsDestination, onChoices])
 
   // រយៈពេលវីដេអូដើម — សម្រាប់គូររបារកាត់ (clip នៅត្រង់ណាក្នុងវីដេអូ)
   const [sourceSeconds, setSourceSeconds] = useState<number | null>(null)
@@ -77,14 +84,13 @@ export function ReviewScreen({
   const position = shown.findIndex((item) => item.index === clip.index)
   const step = (by: number) => {
     const next = shown[position + by]
-    if (next) setSelectedIndex(next.index)
+    if (next) onChoices({ selected: next.index })
   }
   const toggle = (index: number) =>
-    setPicked((current) => {
-      const next = new Set(current)
-      if (next.has(index)) next.delete(index)
-      else next.add(index)
-      return next
+    onChoices({
+      unpicked: choices.unpicked.includes(index)
+        ? choices.unpicked.filter((item) => item !== index)
+        : [...choices.unpicked, index],
     })
 
   const chosen = rendered.filter((item) => picked.has(item.index)).map((item) => item.index)
@@ -127,7 +133,7 @@ export function ReviewScreen({
             </h2>
             <label className="flex items-center gap-1.5 text-[12px] text-text-3">
               តម្រៀប
-              <Select size="sm" value={order} onChange={(event) => setOrder(event.target.value as Order)}>
+              <Select size="sm" value={order} onChange={(event) => onChoices({ order: event.target.value as Order })}>
                 <option value="rank">លំដាប់ AI</option>
                 <option value="score">ពិន្ទុ</option>
                 <option value="time">ពេលវេលា</option>
@@ -142,7 +148,7 @@ export function ReviewScreen({
               clip={item}
               active={item.index === clip.index}
               checked={picked.has(item.index)}
-              onSelect={() => setSelectedIndex(item.index)}
+              onSelect={() => onChoices({ selected: item.index })}
               onToggle={() => toggle(item.index)}
             />
           ))}
@@ -213,7 +219,7 @@ export function ReviewScreen({
           <TextField
             id="export-folder"
             value={destination}
-            onChange={(event) => setDestination(event.target.value)}
+            onChange={(event) => onChoices({ destination: event.target.value })}
             className="min-h-11 w-[320px] type-label text-text-2"
           />
           <Button variant="primary" disabled={chosen.length === 0 || exporting} onClick={runExport}>
@@ -226,7 +232,6 @@ export function ReviewScreen({
   )
 }
 
-type Order = 'rank' | 'score' | 'time'
 
 function sortClips(clips: Clip[], order: Order): Clip[] {
   if (order === 'rank') return clips

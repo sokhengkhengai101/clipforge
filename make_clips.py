@@ -19,8 +19,8 @@ from pipeline.captions import (CaptionError, build_all_captions, check_cues, res
 from pipeline.highlights import (HighlightsError, find_highlights, full_video_clip,
                                  load_clips, rank_clips, save_clips)
 from pipeline.llm import LLMError
-from pipeline.reframe import (ReframeError, caption_margin_for, describe,
-                             dominant_kind, find_seats, parse_layouts, plan_clip)
+from pipeline.reframe import (ReframeError, describe, find_seats, parse_layouts, plan_clip,
+                             save_layout_summary)
 from pipeline.render import (RenderError, encoder_args, probe_dimensions, render_all,
                              verify_clip)
 from pipeline.transcribe import TranscribeError, load_transcript, transcribe
@@ -123,6 +123,9 @@ def main(
                                      help="upper (អក្សរធំ) ឬ original (ដូចដែលនិយាយ)"),
     caption_position: str = typer.Option("auto", "--caption-position",
                                          help="auto (lower third / ស្នាម split), top, middle, bottom"),
+    clean_only: bool = typer.Option(False, "--clean-only",
+                                    help="render តែ clip_XX_clean.mp4 (គ្មាន caption) សម្រាប់ "
+                                         "preview — មិនប៉ះ clip_XX.mp4 ឬ .ass/.srt/.vtt"),
     no_captions: bool = typer.Option(False, "--no-captions",
                                      help="render ដោយគ្មាន caption ដុត (.srt/.vtt នៅតែសរសេរ)"),
     encoder: str = typer.Option(config.VIDEO_ENCODER, "--encoder",
@@ -374,41 +377,46 @@ def main(
             for index, (clip, segments) in enumerate(zip(final, plans), start=1):
                 console.print(f"[dim]  #{index} {len(segments):2} shots — "
                               f"{describe(segments)}[/dim]")
-                if config.CAPTION_POSITION == "auto":
-                    margins[index - 1] = caption_margin_for(dominant_kind(segments))
+                # ទីតាំង caption សម្រេចតាម shot នីមួយៗក្នុង captions.anchor_for (មិនមែនតាម
+                # layout ភាគច្រើនរបស់ clip ទៀតទេ) ដូច្នេះ margins នៅ None
+                save_layout_summary(segments, clips_dir / f"clip_{index:02d}_layout.json")
         except ReframeError as e:
             console.print(f"[yellow]⚠ reframe បរាជ័យ:[/yellow] {e}")
             console.print("[yellow]  -> ប្រើ center-crop ជំនួស[/yellow]")
             plans = None
 
     # ---------- Step 5: captions ----------
-    console.print("")
-    caption_font, font_is_wanted = resolve_font()
-    if not font_is_wanted:
-        console.print(f"[yellow]⚠ font '{config.CAPTION_FONT}' គ្មានលើម៉ាស៊ីន[/yellow] "
-                      f"-> ប្រើ '{caption_font}' ជំនួស")
-    try:
-        ass_files = build_all_captions(final, transcript, clips_dir,
-                                       font=caption_font, margins=margins,
-                                       plans=plans)
-        cue_count = sum(
-            1 for path in ass_files
-            for line in path.read_text(encoding="utf-8").splitlines()
-            if line.startswith("Dialogue:")
-        )
-        console.print(f"[green]✔ 5/6 captions[/green]    {len(ass_files)} .ass ក្នុង "
-                      f"{short_path(clips_dir)}  ({cue_count} cues, font={caption_font})")
-        # QA លើ cue ពិត (checklist §12) — ព្រមាន មិនបញ្ឈប់
-        for index, clip in enumerate(final, start=1):
-            words = [w for s in transcript.segments for w in s.words
-                     if w.end > clip.start and w.start < clip.end]
-            troubles = check_cues(wrap_into_cues(words, clip.start))
-            for trouble in troubles[:3]:
-                console.print(f"[yellow]    ⚠ clip {index}: {trouble}[/yellow]")
-    except CaptionError as e:
-        # គ្មានពាក្យ (video ស្ងាត់) មិនមែនជាហេតុផលបោះបង់ទេ — render ដោយគ្មាន caption
-        console.print(f"[yellow]⚠ 5/6 captions រំលង:[/yellow] {e}")
-        ass_files = None
+    # --clean-only: រំលង caption ទាំងស្រុង — ការសង់ .vtt ឡើងវិញជាមួយការកំណត់លំនាំដើម
+    # ធ្វើឲ្យបញ្ជីបន្ទាត់លើ screen Subtitles លែងត្រូវនឹង clip ដែល render ជាមួយ style ផ្សេង
+    ass_files = None
+    if not clean_only:
+        console.print("")
+        caption_font, font_is_wanted = resolve_font()
+        if not font_is_wanted:
+            console.print(f"[yellow]⚠ font '{config.CAPTION_FONT}' គ្មានលើម៉ាស៊ីន[/yellow] "
+                          f"-> ប្រើ '{caption_font}' ជំនួស")
+        try:
+            ass_files = build_all_captions(final, transcript, clips_dir,
+                                           font=caption_font, margins=margins,
+                                           plans=plans)
+            cue_count = sum(
+                1 for path in ass_files
+                for line in path.read_text(encoding="utf-8").splitlines()
+                if line.startswith("Dialogue:")
+            )
+            console.print(f"[green]✔ 5/6 captions[/green]    {len(ass_files)} .ass ក្នុង "
+                          f"{short_path(clips_dir)}  ({cue_count} cues, font={caption_font})")
+            # QA លើ cue ពិត (checklist §12) — ព្រមាន មិនបញ្ឈប់
+            for index, clip in enumerate(final, start=1):
+                words = [w for s in transcript.segments for w in s.words
+                         if w.end > clip.start and w.start < clip.end]
+                troubles = check_cues(wrap_into_cues(words, clip.start))
+                for trouble in troubles[:3]:
+                    console.print(f"[yellow]    ⚠ clip {index}: {trouble}[/yellow]")
+        except CaptionError as e:
+            # គ្មានពាក្យ (video ស្ងាត់) មិនមែនជាហេតុផលបោះបង់ទេ — render ដោយគ្មាន caption
+            console.print(f"[yellow]⚠ 5/6 captions រំលង:[/yellow] {e}")
+            ass_files = None
 
     # ---------- Step 6: render ----------
     console.print("")
@@ -424,9 +432,9 @@ def main(
             # --no-captions: .ass ត្រូវបានសង់ (សម្រាប់ .srt/.vtt) តែមិនដុតចូល video ទេ.
             # force ព្រោះ render_clip រំលង .mp4 ដែលមាន ពេលគ្មាន .ass ថ្មីជាងវា
             rendered = render_all(video, final, clips_dir,
-                                  None if no_captions else ass_files,
-                                  force=redo_render or no_captions, plans=plans,
-                                  on_progress=tick)
+                                  None if no_captions or clean_only else ass_files,
+                                  force=redo_render or no_captions or clean_only, plans=plans,
+                                  on_progress=tick, suffix="_clean" if clean_only else "")
             progress.update(task, completed=len(final))
 
         console.print(f"[green]✔ 6/6 render[/green]      {len(rendered)} MP4 ក្នុង "

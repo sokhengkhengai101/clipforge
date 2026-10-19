@@ -378,11 +378,18 @@ def cue_to_dialogue_text(cue: Cue, keywords: set[str], keyword_color: str) -> st
 
 # ---------- ទីតាំង និង event ----------
 
-def anchor_for(cue: Cue, clip_start: float, segments: list | None) -> str:
-    """cue នេះគួរនៅកណ្តាលអេក្រង់ (split) ឬទីតាំងដើម (normal)?
+# layout ច្រើនផ្ទាំង: caption នៅលើស្នាម ជាកន្លែងតែមួយដែលមិនបាំងមុខនរណា
+SEAM_LAYOUTS = ("split", "three", "four")
 
-    OpusClip ដាក់អក្សរត្រង់ស្នាមរវាងផ្ទាំងពីរ ប៉ុន្តែតែ**ពេលមាន** split ប៉ុណ្ណោះ។
-    យើងប្រៀបធៀបពេលកណ្តាលនៃ cue នឹងផែនការ layout។
+
+def anchor_for(cue: Cue, clip_start: float, segments: list | None) -> str:
+    """cue នេះនៅលើស្នាមរបស់ផ្ទាំង (split / three / four) ឬទីតាំងដើម (normal)?
+
+    OpusClip ដាក់អក្សរត្រង់ស្នាមរវាងផ្ទាំង ប៉ុន្តែតែ**ពេលមាន**ផ្ទាំងច្រើនប៉ុណ្ណោះ។
+    យើងប្រៀបធៀបពេលកណ្តាលនៃ cue នឹងផែនការ layout — **តាម shot នីមួយៗ** មិនមែនតាម
+    layout ភាគច្រើនរបស់ clip ទេ: ច្បាប់ចាស់នោះរុញ caption របស់ shot មុខម្នាក់ឡើងទៅជិតមាត់
+    ក្នុង clip ដែលភាគច្រើនជា split, ហើយទុក caption របស់ shot three នៅ lower third ពីលើមុខ
+    មនុស្សក្នុងផ្ទាំងតូច (វាស់លើ Taylor_Tomlinson clip 1, 2, 4).
     """
     # --caption-position top/middle/bottom = កន្លែងតែមួយសម្រាប់គ្រប់ layout
     if not segments or config.CAPTION_POSITION != "auto":
@@ -390,8 +397,22 @@ def anchor_for(cue: Cue, clip_start: float, segments: list | None) -> str:
     middle = clip_start + (cue.start + cue.end) / 2
     for segment in segments:
         if segment.start <= middle < segment.end:
-            return "split" if segment.layout.kind == "split" else "normal"
+            return segment.layout.kind if segment.layout.kind in SEAM_LAYOUTS else "normal"
     return "normal"
+
+
+def last_seam(kind: str) -> int | None:
+    """y នៃស្នាមផ្ដេកចុងក្រោយរបស់ layout (ពី `reframe.panel_rects`, ធរណីមាត្រតែមួយកន្លែង).
+
+    `None` លើ 16:9 (ផ្ទាំងនៅចំហៀងគ្នា គ្មានស្នាមផ្ដេក) ឬ layout មួយផ្ទាំង.
+    import នៅទីនេះ: reframe ធ្ងន់ ហើយ server import captions ពេលចាប់ផ្តើម.
+    """
+    from pipeline.reframe import panel_rects
+
+    if config.SPLIT_DIRECTION != "vertical":
+        return None
+    seams = {y for _, y, _, _ in panel_rects(kind) if y > 0}
+    return max(seams) if seams else None
 
 
 def line_positions(count: int, anchor: str, margin_v: int | None = None) -> list[float]:
@@ -399,14 +420,19 @@ def line_positions(count: int, anchor: str, margin_v: int | None = None) -> list
 
     libass **មិនអើពើ** `LineSpacing` ដូច្នេះយើងដាក់បន្ទាត់នីមួយៗដោយ `\\pos`។
     - `split`  -> ប្លុកនៅកណ្តាលត្រង់ស្នាម (កម្ពស់ / 2)
+    - `three` / `four` -> ប្លុកនៅកណ្តាលលើស្នាមផ្ដេកចុងក្រោយ (three: 1280 លើ 1920) តាមចំនួន
+      បន្ទាត់ពិត — margin ចាស់គិតថា ៣ បន្ទាត់ជានិច្ច ហើយ cue ២ បន្ទាត់ធ្លាក់ក្រោមស្នាម ~100 px
     - `normal` -> បាតប្លុកនៅ កម្ពស់ − margin (ទីតាំង lower third ដើម)
     """
     gap = config.CAPTION_LINE_GAP
     margin_v = config.CAPTION_MARGIN_V if margin_v is None else margin_v
     span = (count - 1) * gap
+    seam = last_seam(anchor) if anchor in ("three", "four") else None
 
     if anchor == "split":
         first = config.OUT_HEIGHT / 2 - span / 2
+    elif seam is not None:
+        first = seam - span / 2
     else:
         bottom = config.OUT_HEIGHT - margin_v
         first = bottom - span - config.CAPTION_FONT_SIZE / 2

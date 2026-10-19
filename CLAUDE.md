@@ -214,8 +214,20 @@ browser first, so there is no Rust rebuild loop while the screens take shape.
 that has never been processed, the desktop app takes it from drop to exported clips with no
 terminal, and the developer would post the result. Verified so far: every screen works in the real
 window (below); Start inside the app runs the pipeline to `done` (76 s with warm caches, see the
-incident below); a real Explorer drop picks the video from any screen (measured, see "Drop only worked on Home" below). Not yet measured: a cold run inside the app, where
-transcribe and highlights take ~16 minutes on the 35-min podcast.
+incident below); a real Explorer drop picks the video from any screen (measured, see "Drop only worked on Home" below).
+**Cold run inside the app, measured 2026-10-19** on `How-AI-agents.mp4` (35:25) after deleting only
+`output/How-AI-agents/`: chosen and started from Import in the real window (`tauri.localhost`, its own
+uvicorn), no terminal. Steps from the Processing screen: audio 3 s, transcribe 7 min 18 s (GPU,
+`medium`), **highlights 19 min 30 s** (`qwen2.5:7b-instruct`), boundaries 12 s, captions 19 s, render
+37 s -- `done` in **28 min**. Highlights is the long pole: 8 min 33 s before the rubric, and the
+rubric's ~70 % estimate predicted ~14.5 min, so the measured cost is higher than recorded. Result: five
+1080x1920 clips (0:17-1:09) with rubric letters (88-90), `cache_version` 5, `.srt/.vtt` beside each;
+clip 4 (1:09, "email sponsorship") was read and is a story about screening sponsor emails, not an ad
+read. The original's size, mtime and SHA-256 were identical before and after. Seen on the way: the
+known 404 on `/projects/<name>/clips` for a video with no folder yet (twice, before transcribe), and a
+`tauri dev` build of `app.exe` that loads `localhost:5173` -- rebuild with
+`npx tauri build --debug --no-bundle` before driving the window. Still the developer's call: whether
+these clips are worth posting.
 
 `server/` holds the sidecar, bound to 127.0.0.1 only (the project uploads nothing):
 
@@ -794,6 +806,40 @@ window freed 8765. `shot.mjs` and `app-shot.mjs` open Subtitles from Review on e
 Not known to the app: which style an existing clip was rendered with (the pipeline records no
 style), so the screen starts from the `config.py` defaults.
 
+**Live preview on Subtitles (2026-10-20), planned with the developer before building.** Asked for:
+see a caption change at once, and the Captions button in Editor tools opens and closes the
+Presets/Font/Effects panel. A burned clip cannot show a new style without drawing captions twice, so
+the preview needs a clip **without** captions plus captions drawn by the page:
+- `--clean-only` renders only `clips/clip_XX_clean.mp4` (no `.ass` burned, `render_all(suffix=)`) and
+  skips the caption step entirely -- rebuilding `.vtt` with default flags would make the cue list
+  disagree with a clip rendered in another style. On demand only (the developer's choice): the screen
+  offers "បង្កើត preview ភ្លាមៗ", which runs it without leaving the screen; ordinary renders are not
+  slower. The `clean` kind is served by `/file?kind=clean` but is not in `media.EXPORTABLE`. A clean
+  copy older than `clips.json` is ignored (the AI picked again, clip 1 may be another clip); a style
+  re-render rewrites `clip_XX.mp4` but not the picture, so it does not invalidate the preview.
+- `GET /projects/{name}/clips/{i}/cues?words&size&position` returns the cues as the render would
+  draw them, computed by `captions.py` itself (`wrap_into_cues`, `line_positions`, `anchor_for`,
+  `word_intervals`, `display_word`). `apply_caption_style` mutates globals and multiplies the font
+  size, so `preview_cues` holds a lock and restores every value it touches (a test calls it twice).
+- Split clips: the render puts captions on the seam, and the plan that says which shots are split
+  was computed and thrown away. Measured on `Taylor_Tomlinson` clip 1: the first preview drew the
+  caption over the second speaker's face. Planning now also writes `clip_XX_layout.json`
+  (`save_layout_summary`: each shot's kind + the dominant one), and `/cues` uses it; clips without
+  it say so and offer to regenerate. After: lines at y 913/1004 of 1920 around the seam at 960.
+- `CaptionOverlay` draws the cue in Montserrat ExtraBold (bundled, `@fontsource/montserrat` 5.3.0,
+  OFL) with the active word coloured and stretched vertically 110 %. **ASS font size is not CSS
+  font-size**: libass scales "110" to the font's win ascent + descent (Montserrat ExtraBold
+  1109 + 453 of 1000 units), so the em is 0.640 x 110 -- measured from the `.ttf`, after the first
+  side-by-side showed the preview 1.56x larger than the real frame. After the fix the preview and a
+  frame of the rendered clip at the same time match in size and position.
+Measured: style changes reach the preview in 55-84 ms with no job; the Captions button closes the
+panel (preview 648 -> 1008 px wide) and reopens it; "បង្កើត preview" on the five Taylor clips took
+52 s and left every `clip_0X.mp4` untouched; `--clean-only` on the rhino clip left `clip_01.mp4`,
+`.vtt` and `.ass` byte-identical. In the desktop app: the clean video paints (mean brightness 78,
+not black), two overlay lines, toggle and position changes work, no console errors. A browser test
+note: a canvas cannot read a video from another origin (`127.0.0.1:8765` vs `tauri.localhost`), so
+the app check screenshots the stage instead.
+
 **Step 6, Export done (`design/screens/ExportDone.html`), is built** as
 `screens/ExportDoneScreen.tsx`, the view `exported`: Export on Review now opens it with the real
 `ExportResult` (the interim `ReviewDialogs.tsx` is deleted). Header: "Clips N រួចរាល់ហើយ!", the
@@ -813,6 +859,40 @@ same, and the two things a browser test cannot show: "ចម្លង caption" p
 "Comedy vs. Real Life\nAll of your time is spent..." on the Windows clipboard (read back with
 `Get-Clipboard`), and បើក Folder opened Explorer on the export folder. Both check scripts now wait
 for this screen instead of a dialog.
+
+**Full re-test of steps 1-6 (2026-10-19) found one real bug.** Review kept its checkboxes, selected
+clip, sort and folder in its own state, and Review unmounts when Subtitles or Export done opens. So
+unticking 4 of 5, opening Subtitles and coming back read "បានជ្រើស ៥ ក្នុងចំណោម ៥" on clip 1, and
+the next Export wrote **five** clips -- measured, not supposed. Those choices now live in `App`
+(`screens/reviewChoices.ts`, keyed by project, storing the clips you *un*ticked so clips added by
+"រក clips បន្ថែម" start ticked). Measured after: back from Subtitles and from Export done both read
+"១ ក្នុងចំណោម ៥" on the same clip, and the export wrote one clip. The rest of the re-test passed
+unchanged: 507 tests, tsc, lint, production build; in the browser every screen with
+`problems: none`, a real job on the rhino video (0 s "៤ / ៦" -> "៥ / ៦" -> done at 30 s, cancel ->
+"បានបោះបង់"), Review and Subtitles deep checks; in the desktop app Models, Review, Subtitles, Export
+done, the clipboard and Explorer, with 8765 and 9222 freed on close.
+
+**Startup time -- "when I open app very slow" (2026-10-20), measured, not guessed.** From launch to
+the UI holding `/health`, `/videos` and `/projects`:
+
+| how it is opened | window visible | sidecar listening | UI has data |
+|---|---|---|---|
+| `npm run app` (tauri dev) | 5.4 s | 8.1 s | **8.3-9.0 s** |
+| built `app.exe` (`npx tauri build --debug --no-bundle`) | 0.1 s | 2.7 s | **2.8 s** |
+| first open after a reboot | -- | Python import alone 16.5 s | ~17 s+ |
+
+Where `npm run app` spends it: npm + Vite + the Tauri CLI + `cargo` before the exe even starts
+(~5 s), then Vite transforms the modules in the page (~1.4 s) while the sidecar starts. The sidecar
+alone is 1.2 s from spawn to listening, but 2.6 s inside the app because WebView2 starts at the same
+moment; warm `import server.app` is 1.1 s, most of it `fastapi`, so deferring `numpy` (0.14 s) is not
+worth it. The endpoints are not the problem: `/health` 12 ms, `/videos` 4 ms, `/projects` 12 ms,
+`/env` 90-140 ms (Models page only). The cold 16.5 s is file access on first import after a reboot
+(Defender scanning `.venv` is the usual cause on Windows; not changed, it is the developer's call).
+One fix in code: the UI asked the sidecar once per **second**, so data could arrive up to 1 s after
+the sidecar was ready; it now asks every 250 ms with the same 30 s budget -- measured after, data
+0.1 s after the port opens (2.68 -> 2.76 s). `npm run app` is for changing code (hot reload); opening
+the built exe is the fast way to use the app, but it must be rebuilt to pick up UI changes, and
+`npm run app` overwrites it with a dev build that loads `localhost:5173`.
 
 ## Later phases (context only — do not build yet)
 
@@ -861,8 +941,17 @@ for this screen instead of a dialog.
   (3.0047x) and the layout is rejected for nothing.
   Measured on the 70-min podcast, which is a three-person show (3 faces in 35 of 60 sampled
   frames): the shot at 478 s renders three panels at 2.98x, and clip 4 is three panels end to end.
-  Captions move to the seam between the last two panels for any multi-panel layout
-  (`caption_margin_for`), which is the only band that covers nobody's face.
+  Captions move to the last horizontal seam for any multi-panel shot, which is the only band that
+  covers nobody's face, and stay in the lower third on one-panel shots -- decided **per shot** by
+  `captions.anchor_for` / `line_positions` (seam from `panel_rects` via `last_seam`), centred for the
+  cue's real line count. It used to be decided per clip from the dominant layout
+  (`caption_margin_for`, now removed): measured on `Taylor_Tomlinson`, a close-up inside a mostly-split
+  clip got its caption at y 1042-1087 near the mouth, `three` shots in a mostly-single clip kept the
+  lower third over the small panels' faces (1398-1443), and `three` captions sat ~100 px under the
+  seam because the margin assumed three lines. After (re-rendered, read from the real `.ass`):
+  single 1398-1443, three 1280, split 960, and the Subtitles preview agrees on all five clips.
+  Found by the developer on the Subtitles screen ("Auto don't follow rule"); clips rendered before
+  2026-10-20 keep the old placement until re-rendered.
   Multi-panel layouts can be drawn as cards: `--panel-gap <px>` shrinks each panel's image and
   `pad` fills the gap with `--panel-color`, so the sharpness maths uses `panel_inner()`, not the
   panel rect. The gap is **off by default**: on dark footage the white border read louder than the
@@ -909,7 +998,8 @@ for this screen instead of a dialog.
 - Captions: `--caption-words 2..8` (default 5) and `--caption-color yellow|green|cyan|orange|white|#RRGGBB`
   (default #FFD23F from the design tokens; OpusClip uses green). Style (screen Subtitles):
   `--caption-size 70..120` (%), `--caption-outline 0..8` (px), `--caption-case upper|original`,
-  `--caption-position auto|top|middle|bottom`, `--no-captions` (sidecars still written)
+  `--caption-position auto|top|middle|bottom`, `--no-captions` (sidecars still written),
+  `--clean-only` (only `clip_XX_clean.mp4` for the live preview; captions step skipped)
 - Encoder: `--encoder auto|nvenc|x264` (default auto: NVENC when the GPU accepts it).
   Measured on a 17.5s clip at 1080x1920, VMAF against lossless: libx264 medium 12.6s/6.7MB/97.96,
   h264_nvenc p5 cq26 2.9s/7.0MB/98.02. Rendering five clips went from 1m25s to 19s.

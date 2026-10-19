@@ -17,7 +17,12 @@ KINDS = {
     "ass": ("ass", "text/plain; charset=utf-8"),
     "srt": ("srt", "text/plain; charset=utf-8"),
     "vtt": ("vtt", "text/vtt; charset=utf-8"),
+    # clip_XX_clean.mp4: preview គ្មាន caption សម្រាប់ screen Subtitles (មិនមែនសម្រាប់ export)
+    "clean": ("clean", "video/mp4"),
 }
+
+# អ្វីដែល export ចម្លងបាន — preview គ្មាន caption មិនមែនជាលទ្ធផលសម្រាប់ post ទេ
+EXPORTABLE = ("mp4", "ass", "srt", "vtt")
 
 
 def clip_file(clips: list[dict], index: int, kind: str) -> tuple[Path, str] | None:

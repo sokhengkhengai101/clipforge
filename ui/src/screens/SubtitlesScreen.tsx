@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { clipFileUrl, type Clip } from '../api'
+import { api, clipFileUrl, type Clip, type PreviewCues } from '../api'
 import {
   CAPTION_COLORS,
   presetOf,
@@ -13,6 +13,7 @@ import { ChevronIcon, PauseMark, PlayMark, SubtitleIcon, type SubtitleIconName }
 import { focusRing } from '../kit/styles'
 import { TopBar } from '../kit/TopBar'
 import { AccountButton } from './AccountButton'
+import { CaptionOverlay } from './CaptionOverlay'
 import { clock, clockTenths, khmerNumber } from './khmer'
 
 /** តំបន់ដែល UI របស់ platform បាំង — config.CAPTION_SAFE_TOP / CAPTION_SAFE_BOTTOM,
@@ -28,7 +29,10 @@ const SAFE_BOTTOM = 0.18
  *  មិនទាន់មាន (បង្ហាញ ប៉ុន្តែចុចមិនបាន): កែអត្ថបទ (cue សង់ឡើងវិញពី transcript រាល់ render),
  *  "AI មិនប្រាកដពាក្យ", font ផ្សេង, ស្រមោល, animation ផ្សេងពី Pop, Box/Neon, ការបំបែក
  *  បន្ទាត់ខ្មែរ (Phase 2), និងឧបករណ៍ AI enhance / library / brand / B-roll / Motion.
- *  Preview ចាក់ clip **ដែល render រួច** — style ថ្មីលេចឡើងក្រោយ render. */
+ *  Preview ផ្ទាល់: ពេល clip មាន `clip_XX_clean.mp4` (គ្មាន caption) preview ចាក់វា ហើយ
+ *  `CaptionOverlay` គូរ caption ជាមួយ style បច្ចុប្បន្ន — ប្តូរភ្លាមៗ គ្មាន render. បើគ្មាន វាចាក់
+ *  clip ដែល render រួច ហើយបង្ហាញប៊ូតុង "បង្កើត preview ភ្លាមៗ" (`--clean-only`, ម្តងប៉ុណ្ណោះ).
+ *  ប៊ូតុង Captions ក្នុង Editor tools បិទ/បើកផ្ទាំង Presets/Font/Effects. */
 export function SubtitlesScreen({
   project,
   clip,
@@ -36,6 +40,9 @@ export function SubtitlesScreen({
   style,
   onStyle,
   busy,
+  preview,
+  previewVersion,
+  onMakePreview,
   onSave,
   onBack,
   onHome,
@@ -46,6 +53,10 @@ export function SubtitlesScreen({
   style: CaptionStyle
   onStyle: (style: CaptionStyle) => void
   busy: boolean
+  // ស្ថានភាព job --clean-only: 'none' = គ្មាន path វីដេអូដើម (project ពី CLI) ដូច្នេះបង្កើតមិនបាន
+  preview: 'ready' | 'idle' | 'running' | 'failed' | 'none'
+  previewVersion: string // ប្តូរពេល job --clean-only ចប់ -> ទាញ video និង cue ឡើងវិញ
+  onMakePreview: () => void
   onSave: () => void
   onBack: () => void
   onHome: () => void
@@ -58,6 +69,35 @@ export function SubtitlesScreen({
   const [playing, setPlaying] = useState(false)
   const [safeZone, setSafeZone] = useState(true)
   const [tab, setTab] = useState<'presets' | 'font' | 'effects'>('presets')
+  const [panelOpen, setPanelOpen] = useState(true) // ប៊ូតុង Captions ខាងស្តាំ បិទ/បើក
+  const live = Boolean(clip.files.clean)
+
+  // cue ពិតពី captions.py សម្រាប់ preview ផ្ទាល់ — ទាញឡើងវិញតែពេលអ្វីដែលប្តូរការបំបែក/ទីតាំងប្តូរ
+  // (ពណ៌ គ្រោង អក្សរធំ គូរនៅ browser ដូច្នេះមិនចាំបាច់សួរ sidecar)
+  const [previewCues, setPreviewCues] = useState<PreviewCues | null>(null)
+  const { words, size, position } = style
+  useEffect(() => {
+    if (!live) return
+    let stale = false
+    api
+      .cues(project, clip.index, { words, size, position })
+      .then((answer) => !stale && setPreviewCues(answer))
+      .catch(() => {})
+    return () => {
+      stale = true
+    }
+  }, [live, project, clip.index, words, size, position, previewVersion])
+
+  // កម្ពស់ preview ពិត (ប្តូរតាម window) — caption បង្រួមតាមវា
+  const stage = useRef<HTMLDivElement>(null)
+  const [stageHeight, setStageHeight] = useState(0)
+  useEffect(() => {
+    const element = stage.current
+    if (!element) return
+    const observer = new ResizeObserver(([entry]) => setStageHeight(entry.contentRect.height))
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
 
   // App ផ្តល់ `key` = clip ដូច្នេះ state ចាប់ផ្តើមទទេ; effect គ្រាន់តែទាញ .vtt
   useEffect(() => {
@@ -177,10 +217,14 @@ export function SubtitlesScreen({
             </ToolbarButton>
           </div>
           <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3.5 px-5 pt-2 pb-5">
-            <div className="relative aspect-[9/16] h-[clamp(380px,calc(100vh-300px),700px)] overflow-hidden bg-raised outline outline-line">
+            <div
+              ref={stage}
+              className="relative aspect-[9/16] h-[clamp(380px,calc(100vh-300px),700px)] overflow-hidden bg-raised outline outline-line"
+            >
               <video
                 ref={video}
-                src={clipFileUrl(project, clip.index, 'mp4')}
+                // `v=`: preview ដែលបង្កើតឡើងវិញមាន URL ដដែល — browser នឹងចាក់ file ចាស់ពី cache
+                src={`${clipFileUrl(project, clip.index, live ? 'clean' : 'mp4')}${live ? `&v=${previewVersion}` : ''}`}
                 onClick={toggle}
                 onPlay={() => setPlaying(true)}
                 onPause={() => setPlaying(false)}
@@ -188,6 +232,9 @@ export function SubtitlesScreen({
                 onLoadedMetadata={(event) => setLength(event.currentTarget.duration)}
                 className="size-full cursor-pointer bg-black object-contain"
               />
+              {live && previewCues && stageHeight > 0 && (
+                <CaptionOverlay cues={previewCues} style={style} time={time} height={stageHeight} />
+              )}
               {safeZone && (
                 <>
                   <div aria-hidden="true" className="safe-band pointer-events-none absolute inset-x-0 top-0" style={{ height: `${SAFE_TOP * 100}%` }} />
@@ -214,12 +261,13 @@ export function SubtitlesScreen({
                 {clock(time)} / {clock(length)}
               </span>
             </div>
-            <p className="type-hint text-text-4">Preview ចាក់ clip ដែល render រួច · style ថ្មីលេចឡើងក្រោយចុច រក្សាទុក</p>
+            <PreviewNote preview={preview} layoutKnown={previewCues?.layout_known ?? true} onMakePreview={onMakePreview} />
           </div>
         </section>
 
         {/* ---- Caption style ---- */}
-        <aside aria-label="Caption style" className="flex w-[360px] shrink-0 flex-col border-l border-line bg-sidebar">
+        {panelOpen && (
+        <aside id="caption-style" aria-label="Caption style" className="flex w-[360px] shrink-0 flex-col border-l border-line bg-sidebar">
           <div role="tablist" aria-label="Caption style" className="grid grid-cols-3 border-b border-raised px-3 pt-1.5">
             {(
               [
@@ -257,6 +305,7 @@ export function SubtitlesScreen({
             </span>
           </label>
         </aside>
+        )}
 
         {/* ---- Editor tools ---- */}
         <nav aria-label="Editor tools" className="flex w-[92px] shrink-0 flex-col gap-1 border-l border-line bg-sidebar px-1.5 py-3">
@@ -271,15 +320,19 @@ export function SubtitlesScreen({
             ] as [SubtitleIconName, string][]
           ).map(([icon, label]) => {
             const here = icon === 'captions'
+            const on = here && panelOpen
             return (
               <button
                 key={icon}
                 type="button"
-                aria-pressed={here}
+                aria-pressed={on}
+                aria-controls={here ? 'caption-style' : undefined}
                 disabled={!here}
-                title={here ? undefined : 'មិនទាន់មាន'}
+                // Captions = បិទ/បើកផ្ទាំង Presets/Font/Effects; ឯទៀតមិនទាន់មាន
+                onClick={here ? () => setPanelOpen(!panelOpen) : undefined}
+                title={here ? (panelOpen ? 'បិទផ្ទាំង Captions' : 'បើកផ្ទាំង Captions') : 'មិនទាន់មាន'}
                 className={`flex min-h-18 cursor-pointer flex-col items-center justify-center gap-1.5 rounded-button border-0 px-1 py-2 text-[12px] disabled:cursor-default disabled:opacity-40 ${
-                  here ? 'bg-field text-white' : 'bg-transparent text-text-3'
+                  on ? 'bg-field text-white' : 'bg-transparent text-text-3 hover:bg-card'
                 } ${focusRing}`}
               >
                 <SubtitleIcon name={icon} size={22} />
@@ -301,6 +354,55 @@ export function SubtitlesScreen({
           {busy ? 'មាន job កំពុងរត់...' : 'រក្សាទុក · Render ម្តងទៀត'}
         </Button>
       </footer>
+    </div>
+  )
+}
+
+/** ក្រោម preview: ប្រាប់ថា preview ផ្ទាល់ឬអត់ ហើយអនុញ្ញាតឲ្យបង្កើតវា. */
+function PreviewNote({
+  preview,
+  layoutKnown,
+  onMakePreview,
+}: {
+  preview: 'ready' | 'idle' | 'running' | 'failed' | 'none'
+  layoutKnown: boolean // preview ចាស់ មុនពេល render សរសេរ clip_XX_layout.json
+  onMakePreview: () => void
+}) {
+  if (preview === 'ready' && !layoutKnown)
+    return (
+      <div className="flex max-w-[460px] flex-col items-center gap-2 text-center">
+        <p className="type-hint text-warn-text">
+          Preview នេះមិនដឹងថា shot ណាជា split ទេ — caption លើ split អាចនៅខុសកន្លែង (render ពិតដាក់វាលើស្នាម)
+        </p>
+        <Button size="sm" onClick={onMakePreview}>
+          បង្កើត preview ឡើងវិញ
+        </Button>
+      </div>
+    )
+  if (preview === 'ready')
+    return (
+      <p className="type-hint text-text-4">
+        Preview ផ្ទាល់ · ប្តូរ style ឃើញភ្លាមៗ (ជិតដូច render) · ចុច រក្សាទុក ដើម្បី render ពិត
+      </p>
+    )
+  if (preview === 'none')
+    return (
+      <p className="max-w-[420px] text-center type-hint text-text-4">
+        Preview ចាក់ clip ដែល render រួច · project នេះមិនដឹង path វីដេអូដើម ដូច្នេះបង្កើត preview ផ្ទាល់មិនបាន
+      </p>
+    )
+  return (
+    <div className="flex max-w-[460px] flex-col items-center gap-2 text-center">
+      <p className="type-hint text-text-4">
+        {preview === 'running'
+          ? 'កំពុងបង្កើត preview គ្មាន caption... (~១០ វិនាទីក្នុងមួយ clip)'
+          : preview === 'failed'
+            ? 'បង្កើត preview មិនបាន — សាកម្តងទៀត'
+            : 'Preview នេះមាន caption ដុតរួច · បង្កើត preview គ្មាន caption ម្តង ដើម្បីមើល style ថ្មីភ្លាមៗ'}
+      </p>
+      <Button size="sm" disabled={preview === 'running'} onClick={onMakePreview}>
+        {preview === 'running' ? 'កំពុងបង្កើត...' : 'បង្កើត preview ភ្លាមៗ'}
+      </Button>
     </div>
   )
 }

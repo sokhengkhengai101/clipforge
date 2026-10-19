@@ -384,21 +384,6 @@ def panel_rects(kind: str) -> list[tuple[int, int, int, int]]:
     return []
 
 
-def caption_margin_for(kind: str) -> int | None:
-    """MarginV ដែលដាក់ប្លុកអក្សរកណ្តាលលើ **ស្នាមចុងក្រោយ** នៃ layout ច្រើនផ្ទាំង.
-
-    `None` = ប្រើទីតាំងធម្មតា (lower third)។ ស្នាមជាកន្លែងតែមួយដែលអក្សរមិនបាំង
-    មុខអ្នកណាម្នាក់ — OpusClip ធ្វើដូចគ្នាលើ split។
-    """
-    rects = panel_rects(kind) if config.SPLIT_DIRECTION == "vertical" else []
-    seams = {y for _, y, _, _ in rects if y > 0}
-    if not seams:
-        return None
-    seam = max(seams)                  # ស្នាមផ្ដេកចុងក្រោយ
-    block = config.CAPTION_MAX_LINES * config.CAPTION_FONT_SIZE * 1.1
-    return max(0, int(config.OUT_HEIGHT - seam - block / 2))
-
-
 def panel_box(face: Face, frame_w: int, frame_h: int,
               aspect: float | None = None, zoom: float | None = None,
               kind: str | None = None, index: int = 0) -> Box:
@@ -1074,6 +1059,20 @@ def describe(segments: list[Segment]) -> str:
         totals[segment.layout.kind] = totals.get(segment.layout.kind, 0.0) + segment.duration
     order = sorted(totals.items(), key=lambda kv: kv[1], reverse=True)
     return ", ".join(f"{kind} {seconds:.0f}s" for kind, seconds in order)
+
+
+def save_layout_summary(segments: list[Segment], path: Path) -> Path:
+    """សរសេរ layout របស់ shot នីមួយៗ (`clip_XX_layout.json`) — screen Subtitles ត្រូវដឹងថា
+    shot ណាជា split ដើម្បីដាក់ caption preview លើស្នាម ដូច render ពិត. មុននេះ ផែនការត្រូវបាន
+    គណនាពេល render ហើយបោះចោល ហើយ preview ដាក់ caption ពីលើមុខមនុស្សទីពីរ (ឃើញពិត).
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = {"dominant": dominant_kind(segments),
+            "shots": [{"start": round(s.start, 3), "end": round(s.end, 3), "kind": s.layout.kind}
+                      for s in segments]}
+    path.write_text(json.dumps(data, indent=1), encoding="utf-8")
+    return path
 
 
 def dominant_kind(segments: list[Segment]) -> str:

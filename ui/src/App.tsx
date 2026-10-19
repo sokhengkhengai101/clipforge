@@ -10,6 +10,7 @@ import { HomeScreen } from './screens/HomeScreen'
 import { ImportScreen } from './screens/ImportScreen'
 import { ProcessingScreen } from './screens/ProcessingScreen'
 import { ReviewScreen } from './screens/ReviewScreen'
+import { NO_CHOICES, type ReviewChoices } from './screens/reviewChoices'
 import { SubtitlesScreen } from './screens/SubtitlesScreen'
 import { ExportDoneScreen } from './screens/ExportDoneScreen'
 import { DEFAULT_STYLE, styleOptions, type CaptionStyle } from './captionStyle'
@@ -42,6 +43,14 @@ export default function App() {
   // ត្រូវបាន render ជាមួយ style អ្វីទេ (pipeline មិនកត់ទុកវា)
   const [captionStyle, setCaptionStyle] = useState<CaptionStyle>(DEFAULT_STYLE)
   const [subtitleClip, setSubtitleClip] = useState(1)
+  // ការជ្រើសលើ Review (checkbox, clip, តម្រៀប, folder) — នៅទីនេះ ដើម្បីរស់ឆ្លងការចេញទៅ
+  // Subtitles / Export រួចរាល់; `project` ធ្វើឲ្យ project ផ្សេងចាប់ផ្តើមស្អាត
+  const [review, setReview] = useState<{ project: string; choices: ReviewChoices }>({
+    project: '',
+    choices: NO_CHOICES,
+  })
+  // ចុច "បង្កើត preview ភ្លាមៗ" លើ Subtitles — job --clean-only រត់ក្រោយ screen ដដែល
+  const [previewAsked, setPreviewAsked] = useState(false)
   // export ចុងក្រោយ — screen Export រួចរាល់ បង្ហាញវា
   const [exportResult, setExportResult] = useState<ExportResult | null>(null)
   const job = useJob()
@@ -55,9 +64,13 @@ export default function App() {
 
   /** App desktop បើក sidecar ខ្លួនឯង ហើយ uvicorn ត្រូវការ ២-៣ វិនាទី —
    *  ការសួរតែម្តងបរាជ័យ ("Failed to fetch") ហើយទំព័រនៅទទេរហូត។
-   *  ដូច្នេះយើងសួរម្តងទៀតរហូតដល់វាឆ្លើយ. */
+   *  ដូច្នេះយើងសួរម្តងទៀតរហូតដល់វាឆ្លើយ.
+   *  សួររៀងរាល់ 250 ms (មិនមែន 1 s): sidecar ឆ្លើយនៅ ~2.8 s ក្រោយបើក app ហើយ 1 s
+   *  ធ្វើឲ្យ UI រង់ចាំរហូតដល់ 1 s បន្ថែមឥតប្រយោជន៍. រង់ចាំសរុប 30 s ដដែល — លើកដំបូង
+   *  ក្រោយបើកកុំព្យូទ័រ Python import ចំណាយ ~16 s (វាស់). */
   const connect = useCallback(async () => {
-    for (let attempt = 0; attempt < 30; attempt++) {
+    const pauseMs = 250
+    for (let attempt = 0; attempt < 30_000 / pauseMs; attempt++) {
       try {
         const [h, v] = await Promise.all([api.health(), api.videos()])
         setHealth(h)
@@ -65,8 +78,9 @@ export default function App() {
         loadProjects()
         return
       } catch {
-        setError(attempt < 2 ? 'starting the engine...' : `waiting for the sidecar (${attempt}s)`)
-        await new Promise((done) => setTimeout(done, 1000))
+        const waited = Math.floor((attempt * pauseMs) / 1000)
+        setError(waited < 2 ? 'starting the engine...' : `waiting for the sidecar (${waited}s)`)
+        await new Promise((done) => setTimeout(done, pauseMs))
       }
     }
     setError('The sidecar is not answering on 127.0.0.1:8765. Press Retry.')
@@ -88,6 +102,16 @@ export default function App() {
     api.clips(projectName).then(setClips)
     if (state && state !== 'running') loadProjects()
   }, [projectName, rendered, state, loadProjects])
+
+  // useCallback: Review ដាក់វាក្នុង deps របស់ effect ដែលទាញ folder លំនាំដើម
+  const changeReview = useCallback(
+    (change: Partial<ReviewChoices>) =>
+      setReview((current) => ({
+        project: projectName,
+        choices: { ...(current.project === projectName ? current.choices : NO_CHOICES), ...change },
+      })),
+    [projectName],
+  )
 
   const startWith = useCallback(
     (extra: Record<string, unknown>, label: string) => {
@@ -112,6 +136,14 @@ export default function App() {
       ),
     [startWith, captionStyle, renderedCount],
   )
+
+  /** preview គ្មាន caption (`--clean-only`): មិនទៅ screen Processing ទេ — វាខ្លី ហើយ
+   *  Subtitles បង្ហាញស្ថានភាពខ្លួនឯង; clip ដែលមាន caption មិនត្រូវបានប៉ះ. */
+  const makePreview = useCallback(() => {
+    if (!chosen?.path) return
+    setPreviewAsked(true)
+    job.start({ video: chosen.path, ...pack.options, clean_only: true, max_clips: Math.max(1, renderedCount) })
+  }, [chosen, pack, job, renderedCount])
 
   /** path ដែលវាយដោយដៃ — វីដេអូក្រៅ samples/. */
   const choosePath = useCallback((path: string) => {
@@ -214,6 +246,8 @@ export default function App() {
     )
   }
 
+  const reviewChoices = review.project === projectName ? review.choices : NO_CHOICES
+
   const subtitled = clips.find((clip) => clip.index === subtitleClip && clip.files.mp4)
   if (view === 'subtitles' && subtitled) {
     return (
@@ -226,6 +260,19 @@ export default function App() {
           style={captionStyle}
           onStyle={setCaptionStyle}
           busy={job.running}
+          preview={
+            subtitled.files.clean && !(previewAsked && (job.starting || job.running))
+              ? 'ready'
+              : !chosen?.path
+                ? 'none' // project ពី CLI: មិនដឹង path វីដេអូដើម
+                : previewAsked && (job.starting || job.running || job.status?.state === 'done')
+                  ? 'running' // done តែ clips មិនទាន់ទាញឡើងវិញ = នៅរង់ចាំ
+                  : previewAsked && job.status && job.status.state !== 'running'
+                    ? 'failed'
+                    : 'idle'
+          }
+          previewVersion={previewAsked && job.status?.state === 'done' ? job.status.id : ''}
+          onMakePreview={makePreview}
           onSave={rerender}
           onBack={() => setView('review')}
           onHome={() => navigate('home')}
@@ -242,6 +289,8 @@ export default function App() {
           project={projectName}
           clips={clips}
           busy={job.running}
+          choices={reviewChoices}
+          onChoices={changeReview}
           onExported={(result) => {
             setExportResult(result)
             setView('exported')

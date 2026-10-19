@@ -800,13 +800,6 @@ def test_two_faces_cannot_fill_three_panels(monkeypatch):
                        allowed=R.parse_layouts("three,split")).kind == "split"
 
 
-def test_caption_sits_on_the_last_seam():
-    assert R.caption_margin_for("single") is None
-    assert R.caption_margin_for("split") == config.CAPTION_MARGIN_V_SPLIT
-    # ៣ ផ្ទាំង: ស្នាមចុងក្រោយនៅ 2/3 នៃកម្ពស់ -> margin តូចជាង split
-    assert R.caption_margin_for("three") < R.caption_margin_for("split")
-
-
 def test_single_needs_the_face_in_most_sample_frames(monkeypatch):
     """មុខលេចតែ frame ដំបូង -> ប្រអប់ថេរនឹងតាមមុខដែលបាត់ទៅហើយ -> center."""
     monkeypatch.setattr(R, "grab_frame", lambda path, t, size: t)

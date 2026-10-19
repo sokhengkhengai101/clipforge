@@ -456,8 +456,13 @@ def render_all(
     force: bool = False,
     plans: list[list[Segment]] | None = None,
     on_progress: Callable[[int, int, Clip], None] | None = None,
+    suffix: str = "",
 ) -> list[Path]:
-    """Render គ្រប់ clip ទៅ `out_dir/clip_01.mp4` ...។"""
+    """Render គ្រប់ clip ទៅ `out_dir/clip_01.mp4` ...។
+
+    `suffix="_clean"` -> `clip_01_clean.mp4` (preview គ្មាន caption របស់ screen Subtitles)
+    ដូច្នេះ `clip_01.mp4` ដែលមាន caption មិនត្រូវបានប៉ះ។
+    """
     out_dir = Path(out_dir)
     results: list[Path] = []
 
@@ -469,7 +474,7 @@ def render_all(
             ass_path = ass_paths[index - 1]
         segments = plans[index - 1] if plans is not None and index <= len(plans) else None
         results.append(render_clip(
-            video_path, clip, out_dir / f"clip_{index:02d}.mp4", ass_path,
+            video_path, clip, out_dir / f"clip_{index:02d}{suffix}.mp4", ass_path,
             segments=segments, force=force,
         ))
 
