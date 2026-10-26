@@ -57,7 +57,11 @@ console.log('origin:', await page.evaluate(() => location.origin))
 console.log('in tauri:', await page.evaluate(() => '__TAURI_INTERNALS__' in window))
 
 // --- screen 01: Models (sidebar ថ្មី: Settings) ---
-await page.getByRole('button', { name: 'Settings' }).click()
+await page.getByRole('button', { name: 'Settings', exact: true }).click()
+// Settings.html ឥឡូវជាទំព័រផ្ទាល់ — Models ចាស់នៅពីក្រោយ "Models ដែលមានលើកុំព្យូទ័រនេះ › មើល"
+// Settings ជា dialog (ប៊ូតុងស្តាំខាងលើ): tab Processing -> Models ដែលមានលើកុំព្យូទ័រនេះ -> មើល
+await page.getByRole('dialog').getByRole('tab', { name: 'Processing' }).click()
+await page.getByRole('button', { name: /^(មើល|View) ›$/ }).click()
 await page.waitForTimeout(2000)
 await page.screenshot({ path: `${outDir}/app-models.png` })
 console.log(
@@ -127,7 +131,7 @@ if (await project.count()) {
     const boxes = page.locator('section[aria-labelledby="clips-title"] input[type=checkbox]')
     for (let i = 1; i < (await boxes.count()); i++) await boxes.nth(i).uncheck()
     await page.locator('#export-folder').fill(target)
-    await page.getByRole('button', { name: /^Export / }).click()
+    await page.locator('footer').getByRole('button', { name: /^Export / }).click()
     // ExportDone.html (1F ជំហាន ៦): screen ពេញ; "ចម្លង caption" ត្រូវដាក់អត្ថបទក្នុង clipboard ពិត
     await page.locator('#saved-title').waitFor()
     await page.waitForTimeout(800)

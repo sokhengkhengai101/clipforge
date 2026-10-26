@@ -20,6 +20,7 @@ page.on('requestfailed', (r) => {
   problems.push(`request failed (${why}): ${r.url()}`)
 })
 page.on('response', (r) => {
+  if (r.status() === 503 && r.url().endsWith('/api/jobs')) return // ការបដិសេធរបស់ script ខ្លួនឯង
   if (r.status() >= 400) problems.push(`http ${r.status()} ${r.url()}`)
 })
 
@@ -35,6 +36,16 @@ async function noJobStarted(after) {
   throw new Error(`${after} started job ${id} — cancelled it. Fix the selector.`)
 }
 if (await busy()) throw new Error('a job is already running; wait for it before shooting')
+// គ្មាន --job = គ្មាន job ពិតទេ: Subtitles ចាប់ផ្តើម preview --clean-only ដោយខ្លួនឯង (ដោយចេតនា)
+// ហើយ selector ខុសអាចចុច Start (ឧប្បត្តិហេតុ 1F) — ឆ្លើយ POST /jobs ដោយ 503 ជំនួស
+let jobsRefused = 0
+if (!withJob) {
+  await page.route('**/api/jobs', (route) => {
+    if (route.request().method() !== 'POST') return route.continue()
+    jobsRefused += 1
+    return route.fulfill({ status: 503, contentType: 'application/json', body: '{"detail":"shot.mjs: no jobs"}' })
+  })
+}
 
 await page.goto('http://127.0.0.1:5173/', { waitUntil: 'networkidle' })
 await page.waitForTimeout(1000)
@@ -57,64 +68,109 @@ await page.screenshot({ path: `${outDir}/home-preview.png` })
 console.log('upgrade opens:', await page.locator('[role="dialog"] h2').innerText())
 await page.keyboard.press('Escape')
 // tab "កែវីដេអូ" ច្រោះមកសល់ Auto Reframe + លុបភាពស្ងាត់
-await page.getByRole('button', { name: 'កែវីដេអូ' }).click()
+await page.getByRole('group', { name: 'ប្រភេទឧបករណ៍' }).getByRole('button', { name: 'កែវីដេអូ' }).click()
 console.log('edit tab shows:', await page.locator('main .grid > button').count(), 'tools')
-await page.getByRole('button', { name: 'ពេញនិយម' }).click()
-// ចុចឧបករណ៍ = preset ពិត, ទៅទំព័រ Projects — មិនចាប់ផ្តើម job ទេ
-await page.getByRole('button', { name: /^Auto Reframe/ }).click()
+await page.getByRole('group', { name: 'ប្រភេទឧបករណ៍' }).getByRole('button', { name: 'ពេញនិយម' }).click()
+// ចុចឧបករណ៍ = preset ពិត + dialog "វីដេអូវែង → Clips ខ្លី" (ជំនួសទំព័រ Import) — មិនចាប់ផ្តើម job ទេ.
+// Auto Reframe បើក dialog Reframe (ជំហាន ៧) ដូច្នេះប្រើ Long to Short
+await page.getByRole('button', { name: /^Long to Short/ }).click()
 await page.waitForTimeout(800)
 await noJobStarted('clicking a tool card')
-// ទំព័រ Import (Main.html): ឧបករណ៍ពី Home, ចំនួន clips, ជម្រើស Phase 2 បិទ, Start បិទរហូតជ្រើសវីដេអូ
-const importState = () =>
+const settingsState = () =>
   page.evaluate(() => {
-    const picked = (label) =>
-      [...document.querySelectorAll(`[role="group"][aria-label="${label}"] [aria-pressed="true"]`)].map((b) => b.innerText)
-    const start = [...document.querySelectorAll('button')].find((b) => b.innerText.includes('ចាប់ផ្ដើមបង្កើត Clips'))
+    const dialog = document.querySelector('[role="dialog"]')
+    if (!dialog) return { dialog: false }
+    const select = (label) =>
+      [...dialog.querySelectorAll('label')].find((l) => l.innerText.startsWith(label))?.querySelector('select')
+    const start = [...dialog.querySelectorAll('button')].find((b) => b.innerText.includes('ចាប់ផ្ដើមបង្កើត Clips'))
     return {
-      tool: document.body.innerText.match(/ឧបករណ៍ (.+)/)?.[1]?.split(' · ')[0] ?? null,
-      clips: picked('ចំនួន Clips'),
-      language: picked('ភាសាក្នុងវីដេអូ'),
-      disabledOptions: document.querySelectorAll('[role="group"] button:disabled').length,
+      dialog: true,
+      tool: dialog.querySelector('h2')?.innerText.replace(/\s+/g, ' ') ?? null,
+      step: dialog.querySelector('#video-path') ? 1 : 2, // ជំហាន ១ = ប្រអប់ path
+      clips: select('ចំនួន clips')?.value ?? null,
+      model: select('AI model')?.selectedOptions[0]?.text ?? null,
+      disabledOptions: dialog.querySelectorAll('option:disabled, button:disabled').length,
       startEnabled: start ? !start.disabled : null,
     }
   })
-await page.screenshot({ path: `${outDir}/import.png` })
-console.log('import (nothing chosen):', JSON.stringify(await importState()))
-// វីដេអូគំរូ -> Start អាចចុចបាន (យើងមិនចុចវាទេ)
-await page.getByRole('button', { name: 'Taylor_Tomlinson.mp4' }).click()
-await page.waitForTimeout(400)
+await page.screenshot({ path: `${outDir}/settings-step1.png` })
+console.log('settings (nothing chosen):', JSON.stringify(await settingsState()))
+// វីដេអូគំរូ -> ជំហាន ២, Start អាចចុចបាន (យើងមិនចុចវាទេ)
+// វីដេអូគំរូនៅពីក្រោយតំណ "វីដេអូគំរូ" (ជំហាន ១ ដូច OpusClip)
+await page.getByRole('dialog').getByRole('button', { name: /^វីដេអូគំរូ/ }).click()
+await page.getByRole('dialog').getByRole('button', { name: 'Taylor_Tomlinson.mp4' }).click()
+await page.waitForTimeout(1200)
 await noJobStarted('choosing a sample')
-console.log('import (sample chosen):', JSON.stringify(await importState()))
-await page.screenshot({ path: `${outDir}/import-chosen.png` })
+console.log('settings (sample chosen):', JSON.stringify(await settingsState()))
+await page.screenshot({ path: `${outDir}/settings-step2.png` })
+await page.keyboard.press('Escape')
 
-// Review: project ក្នុង "Projects ថ្មីៗ" បើក Review ផ្ទាល់ (វាមាន clip រួច).
-// ឈ្មោះ + "clips": chip វីដេអូគំរូ "Taylor_Tomlinson.mp4" ក៏មានឈ្មោះដូចគ្នាដែរ
-const project = page.getByRole('button', { name: /^Taylor_Tomlinson .*clips$/ })
+// Review: កាត project ក្នុង Projects របស់ខ្ញុំ (វាមាន clip រួច). គ្មាន project ដែលបាន render =
+// រំលង Review/Subtitles/Export (output/ ទទេក្រោយអ្នកអភិវឌ្ឍលុប projects 2026-10-22)
+await page.locator('nav[aria-label="Main"]').getByRole('button', { name: 'Projects របស់ខ្ញុំ', exact: true }).click()
+await page.waitForTimeout(800)
+// project ដែលមាន clip ច្រើនជាងគេ (មិនមែនឈ្មោះថេរទេ: Taylor_Tomlinson ធ្លាប់មាន 15 clips ហើយបាត់វិញ)
+const projects = await (await fetch(`${SIDECAR}/projects`)).json()
+const best = projects.filter((item) => item.clips > 0).sort((a, b) => b.clips - a.clips)[0]
+const name = best ? best.title || best.name : null
+const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+const project = name
+  ? page.locator('main .grid button', { hasText: new RegExp(`^(?!Start )${escape(name)}`) })
+  : page.locator('nothing-to-review')
+if (!(await project.count())) console.log('review: skipped -- no project has rendered clips')
+else console.log('review project:', name, `(${best.clips} clips)`)
 if (await project.count()) {
   await project.first().click()
   await page.waitForTimeout(500)
   await noJobStarted('clicking the project card')
   await page.waitForTimeout(2500)
+  await page.getByRole('heading', { name: /^Clips ដើម/ }).waitFor()
+  await page.waitForTimeout(1500) // រូបតូច
   await page.screenshot({ path: `${outDir}/review.png` })
-  // Review.html (1F ជំហាន ៤): បញ្ជី clip, video ពិត, ពិន្ទុ, footer export
+  // Review ថ្មី (OpusClip, 2026-10-23): ក្រឡា clip — កាតមួយ = ប៊ូតុង "មើល clip" លើរូប + ប៊ូតុងតូចបី
   const review = await page.evaluate(() => {
-    const rows = document.querySelectorAll('section[aria-labelledby="clips-title"] > div:has(input)')
-    const v = document.querySelector('video')
+    const main = document.querySelector('main') ?? document.body
+    // "មើល clip" មានពីរក្នុងមួយកាត (រូប + ប៊ូតុងតូច) — រាប់តែមួយដែលមានរូប
+    const cards = [...main.querySelectorAll('button[title="មើល clip"]')].filter((card) => card.querySelector('img'))
     return {
-      heading: document.querySelector('#clips-title')?.innerText ?? null,
-      clipRows: rows.length,
-      thumbs: [...document.querySelectorAll('section img')].map((i) => i.naturalWidth > 0),
-      video: v ? { src: v.getAttribute('src'), w: v.videoWidth, h: v.videoHeight } : null,
-      title: document.querySelector('#clip-title')?.value ?? null,
-      footer: document.querySelector('footer span')?.innerText ?? null,
-      folder: document.querySelector('#export-folder')?.value ?? null,
+      heading: [...main.querySelectorAll('h1')].map((h) => h.innerText.replace(/\s+/g, ' ')).find((t) => t.startsWith('Clips')) ?? null,
+      layout: document.querySelector('[aria-label="របៀបបង្ហាញ"] [aria-pressed="true"]')?.getAttribute('aria-label') ?? null,
+      cards: cards.length,
+      thumbs: cards.filter((card) => card.querySelector('img')?.naturalWidth > 0).length,
     }
   })
   console.log('review:', JSON.stringify(review))
 
+  // កាតទី ១ -> dialog: video ពិត, "Clip ១ / N", transcript ជាកថាខណ្ឌ
+  await page.locator('main button[title="មើល clip"]').first().click()
+  const clipDialog = page.getByRole('dialog')
+  await clipDialog.waitFor()
+  await clipDialog.locator('video').evaluate(
+    (v) => new Promise((done) => (v.readyState >= 1 ? done() : v.addEventListener('loadedmetadata', done, { once: true }))),
+  )
+  await page.waitForTimeout(800)
+  await page.screenshot({ path: `${outDir}/review-dialog.png` })
+  console.log(
+    'clip dialog:',
+    JSON.stringify(
+      await clipDialog.evaluate((dialog) => {
+        const v = dialog.querySelector('video')
+        return {
+          title: dialog.getAttribute('aria-label'),
+          counter: [...dialog.querySelectorAll('span')].map((e) => e.innerText).find((t) => /^Clip /.test(t)) ?? null,
+          video: v ? { w: v.videoWidth, h: v.videoHeight } : null,
+          paragraphs: [...dialog.querySelectorAll('button')].filter((b) => /^\[\d+:\d\d/.test(b.innerText)).length,
+        }
+      }),
+    ),
+  )
+  await page.keyboard.press('Escape')
+  await clipDialog.waitFor({ state: 'detached' })
+
   // Subtitles.html (1F ជំហាន ៥): cue ពី .vtt, timeline, safe zone — មិនចុច រក្សាទុក (វា render)
-  await page.getByRole('button', { name: 'កែ Subtitles របស់ clip នេះ' }).click()
+  await page.locator('main').getByRole('button', { name: 'កែ Subtitles', exact: true }).first().click()
   await page.waitForFunction(() => document.querySelectorAll('[data-cue]').length > 0)
+  await page.waitForTimeout(800)
   await page.screenshot({ path: `${outDir}/subtitles.png` })
   console.log(
     'subtitles:',
@@ -132,15 +188,20 @@ if (await project.count()) {
     ),
   )
   await page.getByRole('button', { name: 'ត្រឡប់ទៅ Clips' }).click()
-  await page.locator('#clips-title').waitFor()
+  await page.getByRole('heading', { name: /^Clips ដើម/ }).waitFor()
 
   // --export-to <dir>: ចម្លងពិតតែ clip ទី១ ចូល folder ដែលប្រាប់ (មិនមែន Videos/).
+  // Export ច្រើន = "ជ្រើស" -> checkbox លើកាត -> footer
   const target = process.argv[process.argv.indexOf('--export-to') + 1]
   if (process.argv.includes('--export-to') && target) {
-    const boxes = page.locator('section[aria-labelledby="clips-title"] input[type=checkbox]')
-    for (let i = 1; i < (await boxes.count()); i++) await boxes.nth(i).uncheck()
+    await page.getByRole('button', { name: 'ជ្រើស', exact: true }).click()
+    const boxes = page.locator('main input[type=checkbox][aria-label^="ជ្រើស clip"]')
+    for (let i = 0; i < (await boxes.count()); i++) {
+      if (i === 0) await boxes.nth(i).check()
+      else await boxes.nth(i).uncheck()
+    }
     await page.locator('#export-folder').fill(target)
-    await page.getByRole('button', { name: /^Export / }).click()
+    await page.locator('footer').getByRole('button', { name: /^Export / }).click()
     // ExportDone.html (1F ជំហាន ៦): screen ពេញ មិនមែន dialog
     await page.locator('#saved-title').waitFor()
     await page.waitForTimeout(800) // ffprobe + transcript សម្រាប់ subtitle និងរបារ
@@ -160,8 +221,14 @@ if (await project.count()) {
 // Escape បិទ dialog ជាមុន (scrim បាំងប៊ូតុង); Review គ្មាន sidebar -> logo -> Home -> Settings.
 await page.keyboard.press('Escape')
 await page.waitForTimeout(300)
-await page.getByRole('button', { name: 'Khmer Clip Studio' }).click()
-await page.getByRole('button', { name: 'Settings' }).click()
+// logo មានតែលើ screen ពេញ (Review...); ទំព័រក្នុង shell មាន Settings ក្នុង sidebar ស្រាប់
+const logo = page.getByRole('button', { name: 'Khmer Clip Studio' })
+if (await logo.count()) await logo.click()
+await page.getByRole('button', { name: 'Settings', exact: true }).click()
+// Settings.html ឥឡូវជាទំព័រផ្ទាល់ — Models ចាស់នៅពីក្រោយ "Models ដែលមានលើកុំព្យូទ័រនេះ › មើល"
+// Settings ជា dialog (ប៊ូតុងស្តាំខាងលើ): tab Processing -> Models ដែលមានលើកុំព្យូទ័រនេះ -> មើល
+await page.getByRole('dialog').getByRole('tab', { name: 'Processing' }).click()
+await page.getByRole('button', { name: /^(មើល|View) ›$/ }).click()
 await page.waitForTimeout(1500)
 await page.screenshot({ path: `${outDir}/models.png` })
 const models = await page.evaluate(() => {
@@ -206,5 +273,6 @@ const icons = await page.evaluate(() =>
   })),
 )
 console.log('icons:', icons.length, 'broken:', icons.filter((i) => !i.ok).length)
+if (!withJob) console.log('jobs refused (no --job):', jobsRefused)
 console.log('problems:', problems.length ? problems : 'none')
 await browser.close()

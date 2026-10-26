@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, clipThumbUrl, type Clip, type ExportResult, type VideoFormat } from '../api'
+import { api, clipThumbUrl as defaultThumb, type Clip, type ExportResult, type VideoFormat } from '../api'
 import { Button, Chip } from '../kit/controls'
 import { FolderIcon, PlusIcon } from '../kit/icons'
 import { focusRing } from '../kit/styles'
@@ -23,6 +23,7 @@ export function ExportDoneScreen({
   onReview,
   onNewProject,
   onHome,
+  thumbUrl = (index) => defaultThumb(project, index),
 }: {
   project: string
   result: ExportResult
@@ -30,6 +31,7 @@ export function ExportDoneScreen({
   onReview: () => void
   onNewProject: () => void
   onHome: () => void
+  thumbUrl?: (index: number) => string // វីដេអូទាំងមូល: រូបពី reframe/<folder>/thumb
 }) {
   // clip ដែល export (លំដាប់ដូច file: 01, 02 ...) — result.files មាន mp4 និង srt របស់ clip នីមួយៗ
   const indexes = [...new Set(result.files.map((file) => file.index))]
@@ -164,7 +166,7 @@ export function ExportDoneScreen({
                     aria-label={`មើល hook របស់ clip ${clip.index}`}
                     className={`h-[132px] w-[74px] shrink-0 cursor-pointer overflow-hidden rounded-field border-0 bg-raised-2 p-0 ${focusRing}`}
                   >
-                    <img src={clipThumbUrl(project, clip.index)} alt="" className="size-full object-cover" />
+                    <img src={thumbUrl(clip.index)} alt="" className="size-full object-cover" />
                   </button>
                   <div className="flex min-w-0 flex-1 flex-col gap-1.5">
                     <p className="type-body leading-normal font-bold">{clip.title}</p>

@@ -13,6 +13,7 @@ const BUTTON_VARIANT = {
   primary: 'bg-gold text-on-gold font-bold hover:brightness-105',
   secondary: 'bg-field text-text font-semibold hover:bg-raised-2',
   ghost: 'bg-transparent text-text-2 font-semibold hover:bg-field',
+  danger: 'bg-danger text-white font-bold hover:brightness-110', // សកម្មភាពលុប (មិនមែន design)
 }
 
 /** កម្ពស់: TOKENS.md "36-40 (small), 42-46 (default), 50-56 (primary CTA)". */

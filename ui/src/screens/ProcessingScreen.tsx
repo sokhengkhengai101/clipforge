@@ -2,9 +2,10 @@ import { useEffect, useRef, useState } from 'react'
 import { api, STEPS, type JobStatus, type TranscriptPreview } from '../api'
 import { stepStates, type StepState } from '../progress'
 import { Button, Progress, Segmented } from '../kit/controls'
-import { DoneCheck, InfoIcon } from '../kit/icons'
+import { InfoIcon } from '../kit/icons'
 import { TopBar } from '../kit/TopBar'
 import { AccountButton } from './AccountButton'
+import { StepRow } from './StepRow'
 import { clock, khmerNumber } from './khmer'
 
 /** ជំហានពិតទាំង ៦ របស់ pipeline (server/jobs.py STEPS). design គូរ ៤ ("Transcribe",
@@ -148,7 +149,7 @@ export function ProcessingScreen({
           <div className="flex flex-wrap items-stretch gap-6">
             <ol className="m-0 flex min-w-0 flex-[1_1_340px] list-none flex-col gap-1 rounded-card border border-line bg-[#141821] p-5">
               {STEPS.map((step, index) => (
-                <Step key={step} state={states[index]} title={STEP_TEXT[step].title} detail={detail(step, states[index])} />
+                <StepRow key={step} state={states[index]} title={STEP_TEXT[step].title} detail={detail(step, states[index])} />
               ))}
             </ol>
             <Live preview={preview} log={log} />
@@ -183,35 +184,6 @@ export function ProcessingScreen({
 }
 
 /** ជំហានមួយ: រួច = ធីកបៃតង, cache = ធីកស្រាល, កំពុងរត់ = រង្វង់វិល + ផ្ទៃភ្លឺ, រង់ចាំ = រង្វង់ទទេ. */
-function Step({ state, title, detail }: { state: StepState; title: string; detail: string }) {
-  const pending = state === 'pending'
-  return (
-    <li className={`flex gap-3.5 rounded-button px-2 py-3 ${state === 'active' ? 'bg-[#1B202A]' : ''}`}>
-      {state === 'active' ? (
-        <span className="size-7 shrink-0 animate-spin rounded-full border-[3px] border-raised-3 border-t-gold" />
-      ) : pending ? (
-        <span className="size-7 shrink-0 rounded-full border-2 border-raised-3" />
-      ) : (
-        <span
-          className={`inline-flex size-7 shrink-0 items-center justify-center rounded-full ${
-            state === 'done' ? 'bg-ok-bg text-ok' : 'bg-raised text-text-3'
-          }`}
-        >
-          <DoneCheck />
-        </span>
-      )}
-      <span>
-        <span className={`block text-[15px] font-semibold ${pending ? 'text-text-3' : ''}`}>{title}</span>
-        <span
-          className={`block text-[13px] ${state === 'active' ? 'text-text-2' : pending ? 'text-text-4' : 'text-text-3'}`}
-        >
-          {detail}
-        </span>
-      </span>
-    </li>
-  )
-}
-
 /** transcript ពិត (បន្ទាត់ដែល AI ពិចារណាជា clip ត្រូវបន្លិច) ឬ log របស់ pipeline. */
 function Live({ preview, log }: { preview: TranscriptPreview | null; log: string[] }) {
   const segments = preview?.segments ?? []

@@ -337,3 +337,13 @@ export type SubtitleIconName = keyof typeof SUBTITLE_PATHS
 export function SubtitleIcon({ name, size = 17 }: { name: SubtitleIconName; size?: number }) {
   return <Line size={size}>{SUBTITLE_PATHS[name]}</Line>
 }
+
+/** កែវពង្រីក — ប្រអប់ស្វែងរក (ទំព័រ ឧបករណ៍ទាំងអស់). */
+export function SearchIcon({ size = 17, weight }: LineIcon) {
+  return (
+    <Line size={size} weight={weight}>
+      <circle cx="11" cy="11" r="6.5" />
+      <path d="M16 16l4 4" />
+    </Line>
+  )
+}

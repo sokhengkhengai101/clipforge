@@ -1,19 +1,14 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { api, clipFileUrl, type Clip, type PreviewCues } from '../api'
-import {
-  CAPTION_COLORS,
-  presetOf,
-  STYLE_PRESETS,
-  type CaptionStyle,
-  type StylePreset,
-} from '../captionStyle'
+import type { CaptionStyle } from '../captionStyle'
 import { parseVtt, type Cue } from '../vtt'
-import { Button, Chip, Segmented, Select, Switch } from '../kit/controls'
+import { Button } from '../kit/controls'
 import { ChevronIcon, PauseMark, PlayMark, SubtitleIcon, type SubtitleIconName } from '../kit/icons'
 import { focusRing } from '../kit/styles'
 import { TopBar } from '../kit/TopBar'
 import { AccountButton } from './AccountButton'
 import { CaptionOverlay } from './CaptionOverlay'
+import { CaptionPanel } from './CaptionPanel'
 import { clock, clockTenths, khmerNumber } from './khmer'
 
 /** តំបន់ដែល UI របស់ platform បាំង — config.CAPTION_SAFE_TOP / CAPTION_SAFE_BOTTOM,
@@ -31,7 +26,7 @@ const SAFE_BOTTOM = 0.18
  *  បន្ទាត់ខ្មែរ (Phase 2), និងឧបករណ៍ AI enhance / library / brand / B-roll / Motion.
  *  Preview ផ្ទាល់: ពេល clip មាន `clip_XX_clean.mp4` (គ្មាន caption) preview ចាក់វា ហើយ
  *  `CaptionOverlay` គូរ caption ជាមួយ style បច្ចុប្បន្ន — ប្តូរភ្លាមៗ គ្មាន render. បើគ្មាន វាចាក់
- *  clip ដែល render រួច ហើយបង្ហាញប៊ូតុង "បង្កើត preview ភ្លាមៗ" (`--clean-only`, ម្តងប៉ុណ្ណោះ).
+ *  clip ដែល render រួច ហើយបង្កើត preview ដោយខ្លួនឯង (`--clean-only`, ម្តងក្នុងមួយ project).
  *  ប៊ូតុង Captions ក្នុង Editor tools បិទ/បើកផ្ទាំង Presets/Font/Effects. */
 export function SubtitlesScreen({
   project,
@@ -68,25 +63,35 @@ export function SubtitlesScreen({
   const [length, setLength] = useState(clip.duration)
   const [playing, setPlaying] = useState(false)
   const [safeZone, setSafeZone] = useState(true)
-  const [tab, setTab] = useState<'presets' | 'font' | 'effects'>('presets')
   const [panelOpen, setPanelOpen] = useState(true) // ប៊ូតុង Captions ខាងស្តាំ បិទ/បើក
   const live = Boolean(clip.files.clean)
+
+  // បង្កើត preview ដោយខ្លួនឯង ពេលបើក clip ដែលមិនទាន់មាន copy គ្មាន caption (អ្នកអភិវឌ្ឍចង់
+  // មើល style ភ្លាមៗលើ video ណាក៏បាន ដោយមិនបាច់ចុចប៊ូតុង)។ ម្តងក្នុងមួយការបើក screen
+  // (`asked`): បើ job បរាជ័យ វាមិនសាកឡើងវិញជារង្វង់ទេ — ប៊ូតុង "សាកម្តងទៀត" នៅតែមាន។
+  // បើ job ផ្សេងកំពុងរត់ (`busy`) វារង់ចាំ ព្រោះ sidecar ទទួល job តែមួយម្តង (409)។
+  const asked = useRef(false)
+  useEffect(() => {
+    if (preview !== 'idle' || busy || asked.current) return
+    asked.current = true
+    onMakePreview()
+  }, [preview, busy, onMakePreview])
 
   // cue ពិតពី captions.py សម្រាប់ preview ផ្ទាល់ — ទាញឡើងវិញតែពេលអ្វីដែលប្តូរការបំបែក/ទីតាំងប្តូរ
   // (ពណ៌ គ្រោង អក្សរធំ គូរនៅ browser ដូច្នេះមិនចាំបាច់សួរ sidecar)
   const [previewCues, setPreviewCues] = useState<PreviewCues | null>(null)
-  const { words, size, position } = style
+  const { words, size, position, lines } = style
   useEffect(() => {
     if (!live) return
     let stale = false
     api
-      .cues(project, clip.index, { words, size, position })
+      .cues(project, clip.index, { words, size, position, lines })
       .then((answer) => !stale && setPreviewCues(answer))
       .catch(() => {})
     return () => {
       stale = true
     }
-  }, [live, project, clip.index, words, size, position, previewVersion])
+  }, [live, project, clip.index, words, size, position, lines, previewVersion])
 
   // កម្ពស់ preview ពិត (ប្តូរតាម window) — caption បង្រួមតាមវា
   const stage = useRef<HTMLDivElement>(null)
@@ -130,7 +135,6 @@ export function SubtitlesScreen({
     if (element.paused) void element.play()
     else element.pause()
   }
-  const change = (part: Partial<CaptionStyle>) => onStyle({ ...style, ...part })
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col bg-bg font-kantumruy text-text">
@@ -233,7 +237,7 @@ export function SubtitlesScreen({
                 className="size-full cursor-pointer bg-black object-contain"
               />
               {live && previewCues && stageHeight > 0 && (
-                <CaptionOverlay cues={previewCues} style={style} time={time} height={stageHeight} />
+                <CaptionOverlay cues={previewCues} style={style} time={time} height={stageHeight} playing={playing} />
               )}
               {safeZone && (
                 <>
@@ -268,42 +272,19 @@ export function SubtitlesScreen({
         {/* ---- Caption style ---- */}
         {panelOpen && (
         <aside id="caption-style" aria-label="Caption style" className="flex w-[360px] shrink-0 flex-col border-l border-line bg-sidebar">
-          <div role="tablist" aria-label="Caption style" className="grid grid-cols-3 border-b border-raised px-3 pt-1.5">
-            {(
-              [
-                ['presets', 'Presets'],
-                ['font', 'Font'],
-                ['effects', 'Effects'],
-              ] as const
-            ).map(([id, label]) => (
-              <button
-                key={id}
-                type="button"
-                role="tab"
-                aria-selected={tab === id}
-                onClick={() => setTab(id)}
-                className={`min-h-11.5 cursor-pointer border-0 border-b-2 bg-transparent text-[15px] ${
-                  tab === id ? 'border-gold font-bold text-text' : 'border-transparent font-medium text-text-4'
-                } ${focusRing}`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-
-          <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 py-4.5">
-            {tab === 'presets' && <Presets style={style} onStyle={onStyle} />}
-            {tab === 'font' && <FontTab style={style} change={change} />}
-            {tab === 'effects' && <EffectsTab style={style} change={change} />}
-          </div>
-
-          <label className="flex items-start gap-2.5 border-t border-line px-5 py-3.5">
-            <input type="checkbox" checked disabled className="mt-0.5 size-[18px] shrink-0 accent-gold" />
-            <span className="flex flex-col">
-              <span className="type-label text-text-2">ប្រើ style នេះលើ clips ទាំង {khmerNumber(clipCount)}</span>
-              <span className="type-hint text-text-4">pipeline render clips ទាំងអស់ជាមួយ style តែមួយ</span>
-            </span>
-          </label>
+          <CaptionPanel
+            style={style}
+            onStyle={onStyle}
+            footer={
+              <label className="flex shrink-0 items-start gap-2.5 border-t border-line px-5 py-3.5">
+                <input type="checkbox" checked disabled className="mt-0.5 size-[18px] shrink-0 accent-gold" />
+                <span className="flex flex-col">
+                  <span className="type-label text-text-2">ប្រើ style នេះលើ clips ទាំង {khmerNumber(clipCount)}</span>
+                  <span className="type-hint text-text-4">pipeline render clips ទាំងអស់ជាមួយ style តែមួយ</span>
+                </span>
+              </label>
+            }
+          />
         </aside>
         )}
 
@@ -398,7 +379,7 @@ function PreviewNote({
           ? 'កំពុងបង្កើត preview គ្មាន caption... (~១០ វិនាទីក្នុងមួយ clip)'
           : preview === 'failed'
             ? 'បង្កើត preview មិនបាន — សាកម្តងទៀត'
-            : 'Preview នេះមាន caption ដុតរួច · បង្កើត preview គ្មាន caption ម្តង ដើម្បីមើល style ថ្មីភ្លាមៗ'}
+            : 'Preview នេះមាន caption ដុតរួច · preview គ្មាន caption នឹងចាប់ផ្តើមបង្កើតពេល job ផ្សេងចប់'}
       </p>
       <Button size="sm" disabled={preview === 'running'} onClick={onMakePreview}>
         {preview === 'running' ? 'កំពុងបង្កើត...' : 'បង្កើត preview ភ្លាមៗ'}
@@ -485,214 +466,3 @@ function Timeline({
   )
 }
 
-function Presets({ style, onStyle }: { style: CaptionStyle; onStyle: (style: CaptionStyle) => void }) {
-  const current = presetOf(style)
-  return (
-    <>
-      <div className="grid grid-cols-2 gap-3">
-        {STYLE_PRESETS.map((preset) => (
-          <PresetCard
-            key={preset.id}
-            preset={preset}
-            on={preset.id === current}
-            onPick={() => preset.style && onStyle({ ...style, ...preset.style })}
-          />
-        ))}
-      </div>
-      <p className="type-hint text-text-4">
-        Preset នីមួយៗជាបណ្តុំការកំណត់ពិត ហើយអាចកែបន្តនៅ Font និង Effects។ Box ខ្មៅ និង Neon មិនទាន់មានក្នុង renderer ទេ។
-        {current === null && ' · style ផ្ទាល់ខ្លួន'}
-      </p>
-    </>
-  )
-}
-
-/** គំរូតូចនៃ preset នីមួយៗ — CSS គូរ "ចាប់ផ្ដើម អាជីវកម្ម" ដូច design (font UI, មិនមែន font render). */
-function PresetCard({ preset, on, onPick }: { preset: StylePreset; on: boolean; onPick: () => void }) {
-  const sample: Record<string, ReactNode> = {
-    off: <SubtitleIcon name="none" size={32} />,
-    bold: (
-      <span className="text-[17px] leading-snug font-bold text-white [text-shadow:0_2px_3px_#000]">
-        ចាប់ផ្ដើម<span className="text-gold">អាជីវកម្ម</span>
-      </span>
-    ),
-    karaoke: (
-      <span className="text-[17px] font-bold text-white [-webkit-text-stroke:1px_#000]">
-        ចាប់ផ្ដើម <span className="text-[#00e054]">អាជីវកម្ម</span>
-      </span>
-    ),
-    box: <span className="rounded-[4px] bg-black px-2 py-0.5 text-[15px] font-bold text-white">ចាប់ផ្ដើម</span>,
-    clean: <span className="text-[16px] font-medium text-white">ចាប់ផ្ដើម</span>,
-    neon: <span className="text-[17px] font-bold text-gold [text-shadow:0_0_6px_#ff8a3d]">ចាប់ផ្ដើម</span>,
-  }
-  return (
-    <button
-      type="button"
-      aria-pressed={on}
-      disabled={!preset.style}
-      onClick={onPick}
-      title={preset.style ? undefined : 'renderer មិនទាន់គូរ style នេះបាន'}
-      className={`flex cursor-pointer flex-col gap-1.5 border-0 bg-transparent p-0 text-left disabled:cursor-default disabled:opacity-40 ${
-        on ? 'text-text' : 'text-text-3'
-      } ${focusRing}`}
-    >
-      <span
-        className={`flex h-21 items-center justify-center rounded-button border-2 bg-raised text-text-4 ${
-          on ? 'border-white' : 'border-transparent'
-        }`}
-      >
-        {sample[preset.id]}
-      </span>
-      <span className={`text-[13px] ${on ? 'font-semibold' : ''}`}>{preset.name}</span>
-    </button>
-  )
-}
-
-function Row({ label, children, hint }: { label: ReactNode; children: ReactNode; hint?: ReactNode }) {
-  return (
-    <div className="flex flex-col gap-2">
-      <div className="flex items-center justify-between gap-3">
-        <span className="type-label text-text-2">{label}</span>
-        {children}
-      </div>
-      {hint && <p className="type-hint text-text-4">{hint}</p>}
-    </div>
-  )
-}
-
-function FontTab({ style, change }: { style: CaptionStyle; change: (part: Partial<CaptionStyle>) => void }) {
-  return (
-    <>
-      <div className="flex flex-col gap-2">
-        <label htmlFor="f-family" className="type-label text-text-2">
-          Font settings
-        </label>
-        {/* config.CAPTION_FONT — font ខ្មែរ (Battambang) មកជាមួយ subtitles ខ្មែរ Phase 2 */}
-        <Select id="f-family" disabled value="Montserrat ExtraBold">
-          <option>Montserrat ExtraBold</option>
-        </Select>
-        <p className="type-hint text-text-4">Font ប្តូរមិនទាន់បាន · subtitles ខ្មែរ (Battambang) = Phase 2</p>
-      </div>
-      <Row label="ទំហំអក្សរ">
-        <Segmented
-          label="ទំហំអក្សរ"
-          size="sm"
-          tone="gold"
-          value={String(style.size)}
-          options={[
-            { value: '85', label: 'តូច' },
-            { value: '100', label: 'មធ្យម' },
-            { value: '115', label: 'ធំ' },
-          ]}
-          onChange={(value) => change({ size: Number(value) })}
-        />
-      </Row>
-      <Row label="អក្សរធំទាំងអស់ (ABC)" hint="បិទ = សរសេរដូចដែល Whisper ឮ (Abc)">
-        <Switch label="អក្សរធំទាំងអស់" checked={style.uppercase} onChange={(on) => change({ uppercase: on })} />
-      </Row>
-      <Row label="Font stroke (គ្រោងខ្មៅ)">
-        <span className="flex items-center gap-2">
-          <span aria-hidden="true" className="size-6 rounded-full border-2 border-raised-3 bg-black" />
-          <Select
-            size="sm"
-            aria-label="កម្រាស់ stroke"
-            value={style.outline}
-            onChange={(event) => change({ outline: Number(event.target.value) })}
-          >
-            {[0, 1, 2, 3, 4, 5, 6, 7, 8].map((px) => (
-              <option key={px} value={px}>
-                {px} px
-              </option>
-            ))}
-          </Select>
-        </span>
-      </Row>
-      <Row label="Font shadows" hint="ស្រមោល 1px ថេរ (config.CAPTION_SHADOW) · ប្តូរមិនទាន់បាន">
-        <Switch label="Font shadows" checked disabled onChange={() => {}} />
-      </Row>
-    </>
-  )
-}
-
-function EffectsTab({ style, change }: { style: CaptionStyle; change: (part: Partial<CaptionStyle>) => void }) {
-  return (
-    <>
-      <div className="flex flex-col gap-2">
-        <span className="type-label text-text-2">ទីតាំង</span>
-        <div className="grid grid-cols-4 gap-1.5">
-          {(
-            [
-              ['auto', 'Auto'],
-              ['top', 'លើ'],
-              ['middle', 'កណ្ដាល'],
-              ['bottom', 'ក្រោម'],
-            ] as const
-          ).map(([value, label]) => (
-            <button
-              key={value}
-              type="button"
-              aria-pressed={style.position === value}
-              onClick={() => change({ position: value })}
-              className={`min-h-10 cursor-pointer rounded-button border-0 text-[13px] font-bold ${
-                style.position === value ? 'bg-segment text-bg' : 'bg-raised text-text-2'
-              } ${focusRing}`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-        <p className="type-hint text-text-4">Auto: មួយភាគបីខាងក្រោម ហើយលើស្នាមកណ្ដាល ពេលអេក្រង់ចែកជាផ្ទាំង</p>
-      </div>
-      <div className="flex flex-col gap-2">
-        <label htmlFor="anim" className="type-label text-text-2">
-          Animation
-        </label>
-        <Select id="anim" disabled value="pop">
-          <option value="pop">Pop — ពាក្យដែលកំពុងនិយាយធំ 110%</option>
-        </Select>
-      </div>
-      <div className="flex flex-col gap-2">
-        <span className="type-label text-text-2">ពាក្យក្នុងមួយ cue</span>
-        <Segmented
-          label="ពាក្យក្នុងមួយ cue"
-          size="sm"
-          tone="gold"
-          value={String(style.words)}
-          options={['2', '3', '4', '5', '6', '7', '8'].map((count) => ({ value: count, label: khmerNumber(count) }))}
-          onChange={(value) => change({ words: Number(value) })}
-        />
-        <p className="type-hint text-text-4">ចំនួនពាក្យអតិបរមាដែលបង្ហាញម្តង (≤ ៣ បន្ទាត់ · ១៦ តួក្នុងមួយបន្ទាត់)</p>
-      </div>
-      <div className="flex flex-col gap-2">
-        <span className="type-label text-text-2">ពណ៌ពាក្យដែលកំពុងនិយាយ</span>
-        <div role="group" aria-label="ពណ៌ពាក្យដែលកំពុងនិយាយ" className="flex flex-wrap gap-2.5">
-          {CAPTION_COLORS.map((option) => {
-            const on = option.hex.toLowerCase() === style.color.toLowerCase()
-            return (
-              <button
-                key={option.hex}
-                type="button"
-                aria-pressed={on}
-                aria-label={option.name}
-                title={option.name}
-                onClick={() => change({ color: option.hex })}
-                className={`size-10 cursor-pointer rounded-full border-2 ${on ? 'border-text' : 'border-raised-3'} ${focusRing}`}
-                style={{ background: option.hex }}
-              />
-            )
-          })}
-        </div>
-      </div>
-      <Row
-        label={
-          <span className="flex flex-col">
-            បំបែកបន្ទាត់តាមពាក្យខ្មែរ
-            <Chip>PHASE 2</Chip>
-          </span>
-        }
-      >
-        <Switch label="បំបែកបន្ទាត់តាមពាក្យខ្មែរ" checked={false} disabled onChange={() => {}} />
-      </Row>
-    </>
-  )
-}
