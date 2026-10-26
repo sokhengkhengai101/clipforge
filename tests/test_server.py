@@ -514,7 +514,7 @@ def test_probe_reads_the_real_file(tmp_path, monkeypatch):
     video.write_bytes(b"x")
     answer = {"streams": [{"width": 1080, "height": 1920, "codec_name": "h264",
                            "avg_frame_rate": "30000/1001", "bit_rate": "2500000"}],
-              "format": {"bit_rate": "2600000"}}
+              "format": {"bit_rate": "2600000", "duration": "2125.391"}}
 
     def fake_run(command, **kwargs):
         return subprocess.CompletedProcess(command, 0, json.dumps(answer).encode())
@@ -522,7 +522,7 @@ def test_probe_reads_the_real_file(tmp_path, monkeypatch):
     monkeypatch.setattr(media.subprocess, "run", fake_run)
     found = media.probe_video(video)
     assert found == {"width": 1080, "height": 1920, "fps": 29.97,
-                     "codec": "h264", "kbps": 2500}
+                     "codec": "h264", "kbps": 2500, "seconds": 2125.39}
     assert media.probe_video(tmp_path / "gone.mp4") is None
 
 
@@ -603,7 +603,7 @@ def test_env_endpoint_answers_with_the_machine(client):
     assert set(body) >= {"device", "gpu", "ram_mb", "disk_free_mb", "ollama",
                          "whisper_cache", "onnx", "anthropic_key"}
     assert body["device"] in ("cuda", "cpu")
-    assert len(body["onnx"]) == 3
+    assert len(body["onnx"]) == 4          # face, face match, subject, tracker
     assert isinstance(body["ollama"]["models"], list)
 
 
@@ -692,6 +692,22 @@ def test_caption_style_reaches_the_command_line(client, tmp_path, monkeypatch):
     assert "--no-captions" in args
 
 
+def test_language_reaches_the_command_line(client, tmp_path, monkeypatch):
+    """Auto Subtitles ផ្ញើ `language` — ត្រូវក្លាយជា `--language en`."""
+    video = tmp_path / "v.mp4"
+    video.write_bytes(b"x")
+    captured = {}
+    monkeypatch.setattr(J.JobRunner, "_run", lambda self, job: captured.update(args=job.args))
+    monkeypatch.setattr(J.db, "save_job", lambda *a, **k: None)
+    answer = client.post("/jobs", json={"video": str(video), "full": True, "aspect": "16:9",
+                                        "layout": "center", "language": "en"})
+    assert answer.status_code == 200
+    time.sleep(0.2)
+    args = captured["args"]
+    assert args[args.index("--language") + 1] == "en"
+    assert args[args.index("--aspect") + 1] == "16:9"
+
+
 def test_cues_endpoint_guards_the_name_and_values(client, monkeypatch):
     """/cues ប្រើ _project_folder ដូច /transcript — គ្មាន ../ — ហើយ 400 លើតម្លៃក្រៅដែន."""
     from server import app as APP
@@ -704,10 +720,10 @@ def test_cues_endpoint_guards_the_name_and_values(client, monkeypatch):
     assert client.get("/projects/p/clips/1/cues").status_code == 404
     seen = {}
     monkeypatch.setattr(APP, "preview_cues",
-                        lambda folder, index, words, size, position: seen.update(
-                            index=index, words=words, size=size, position=position) or {"cues": []})
+                        lambda folder, index, words, size, position, lines: seen.update(
+                            index=index, words=words, size=size, position=position, lines=lines) or {"cues": []})
     assert client.get("/projects/p/clips/2/cues?words=3&size=85&position=top").json() == {"cues": []}
-    assert seen == {"index": 2, "words": 3, "size": 85, "position": "top"}
+    assert seen == {"index": 2, "words": 3, "size": 85, "position": "top", "lines": 3}
 
 
 def test_clean_only_reaches_the_command_line(client, tmp_path, monkeypatch):
@@ -724,3 +740,72 @@ def test_clean_only_reaches_the_command_line(client, tmp_path, monkeypatch):
 
 def test_export_refuses_the_preview_kind(client):
     assert client.get("/projects/p/export?kinds=clean").status_code == 400
+
+
+def test_probe_reads_only_videos(client, tmp_path, monkeypatch):
+    """Import បង្ហាញ "1080p · 35:25" — ffprobe លើវីដេអូតែប៉ុណ្ណោះ."""
+    from server import media
+    assert client.get("/probe", params={"path": str(tmp_path / "notes.txt")}).status_code == 400
+    monkeypatch.setattr(media, "probe_video", lambda path: None)
+    assert client.get("/probe", params={"path": str(tmp_path / "gone.mp4")}).status_code == 404
+    info = {"width": 1920, "height": 1080, "fps": 30.0, "codec": "h264", "kbps": 6000, "seconds": 2125.4}
+    monkeypatch.setattr(media, "probe_video", lambda path: info)
+    assert client.get("/probe", params={"path": str(tmp_path / "v.MP4")}).json() == info
+
+
+def test_project_facts_reads_duration_size_and_reframes(tmp_path):
+    """លេខលើកាត project: រយៈពេលពីដើម transcript.json, ទំហំ folder, reframe ពិតប៉ុណ្ណោះ."""
+    from server.clips import project_facts
+
+    tmp_path = tmp_path / "project"          # tmp_path ខ្លួនវាមាន clipforge.db របស់ fixture
+    tmp_path.mkdir()
+    (tmp_path / "transcript.json").write_text(
+        '{"cache_version": 1, "duration": 4191.92, "segments": [' + '{"text": "x"},' * 2000 + '{}]}',
+        encoding="utf-8")
+    for folder in ("full", "full_1x1"):
+        (tmp_path / folder).mkdir()
+        (tmp_path / folder / "clip_01.mp4").write_bytes(b"0" * 1000)
+    (tmp_path / "fullish").mkdir()                       # មិនមែន folder reframe
+    (tmp_path / "fullish" / "clip_01.mp4").write_bytes(b"0")
+    (tmp_path / "full_4x5").mkdir()                      # គ្មាន mp4 = មិនទាន់ចប់
+
+    facts = project_facts(tmp_path)
+    assert facts["seconds"] == 4191.92
+    assert facts["reframes"] == 2
+    assert facts["bytes"] == (tmp_path / "transcript.json").stat().st_size + 2001
+
+
+def test_project_facts_without_transcript(tmp_path):
+    from server.clips import project_facts
+
+    (tmp_path / "project").mkdir()
+    assert project_facts(tmp_path / "project") == {"seconds": None, "bytes": 0, "reframes": 0}
+
+
+def test_projects_list_reframe_only_folders(client, monkeypatch):
+    """Folder ពី CLI ដែលមានតែ reframe (`--full` មិនសរសេរ clips.json) ត្រូវលេចដែរ."""
+    from server import app as APP
+
+    monkeypatch.setattr(APP, "clips_of_project", lambda folder: [])
+    folder = J.PROJECT_ROOT / "output" / "reframe-only-project"
+    (folder / "full").mkdir(parents=True, exist_ok=True)
+    (folder / "full" / "clip_01.mp4").write_bytes(b"0" * 10)
+    try:
+        names = {item["name"]: item for item in client.get("/projects").json()}
+        item = names["reframe-only-project"]
+        assert item["clips"] == 0 and item["reframes"] == 1 and item["bytes"] == 10
+        assert item["seconds"] is None
+        assert item["folder"] == str(folder)
+    finally:
+        (folder / "full" / "clip_01.mp4").unlink()
+        (folder / "full").rmdir()
+        folder.rmdir()
+
+
+def test_clips_of_a_project_whose_job_just_started_is_empty_not_404(client):
+    """job ទើបចាប់ផ្តើម: row ក្នុង database មុន folder ក្នុង output/ — 200 + បញ្ជីទទេ."""
+    DB.save_job("fresh", "just-started-project", "v.mp4", ["x"], time.time())
+    assert not (J.PROJECT_ROOT / "output" / "just-started-project").exists()
+    response = client.get("/projects/just-started-project/clips")
+    assert response.status_code == 200 and response.json()["clips"] == []
+    assert client.get("/projects/never-heard-of-it/clips").status_code == 404

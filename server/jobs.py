@@ -10,6 +10,7 @@
 អត្ថបទទេ។
 """
 
+import re
 import subprocess
 import threading
 import time
@@ -61,25 +62,73 @@ def steps_redone(options: dict) -> set[str]:
     return touched
 
 
+LANGUAGE_IN_HEAD = re.compile(r'"language"\s*:\s*"([a-z]+)"')
+
+
+def language_changes(out_dir: Path, language: str | None) -> bool:
+    """`--language xx` លើ project ដែល transcript.json ជាភាសាផ្សេង -> transcribe ម្តងទៀត.
+
+    អានតែ 4 KB ដំបូង ("language" នៅខាងលើ file) — transcript 70 នាទីធំ ២ MB.
+    """
+    if not language or language == "auto":
+        return False
+    try:
+        with open(Path(out_dir) / "transcript.json", encoding="utf-8") as handle:
+            found = LANGUAGE_IN_HEAD.search(handle.read(4096))
+    except OSError:
+        return False
+    return bool(found) and found.group(1) != language
+
+
 # នាឡិកា file របស់ Windows អាចយឺតជាង time.time() បន្តិច: file ដែលសរសេរភ្លាមក្រោយ
 # job ចាប់ផ្តើម អាចមាន mtime មុន `started` ពីរបីមីលីវិនាទី.
 MTIME_SLACK = 1.0
 
 
-def steps_on_disk(out_dir: Path, since: float = 0.0) -> set[str]:
-    """ជំហានដែល marker file មាន ហើយសរសេរនៅ ឬក្រោយ `since` (epoch វិនាទី)."""
+def output_folder(options: dict) -> str:
+    """folder ដែល make_clips សរសេរ clip: `clips`, `clips_1x1`, `full`, `full_4x5` ...
+
+    ដូច make_clips.py ត្រង់ `clips_dir`: `--full` = វីដេអូទាំងមូល (AI Reframe), aspect
+    ក្រៅពី 9:16 បន្ថែម suffix ដើម្បីកុំឲ្យជាន់គ្នា.
+    """
+    aspect = str(options.get("aspect") or "9:16")
+    base = ("full_edit" if options.get("cuts") else "full") if options.get("full") else "clips"
+    return base if aspect == "9:16" else f"{base}_{aspect.replace(':', 'x')}"
+
+
+def steps_on_disk(out_dir: Path, since: float = 0.0, folder: str = "clips") -> set[str]:
+    """ជំហានដែល marker file មាន ហើយសរសេរនៅ ឬក្រោយ `since` (epoch វិនាទី).
+
+    ក្រៅពី STEPS វាក៏រាយការណ៍ `plan` ដែរ: `clip_XX_layout.json` ដែល reframe សរសេរពេលវិភាគ
+    shot និងមុខរួច — screen AI Reframe បង្ហាញវាជាជំហានមួយ.
+    """
     def new(path: Path) -> bool:
         return path.is_file() and path.stat().st_mtime >= since
 
-    clips_dir = out_dir / "clips"
+    clips_dir = out_dir / folder
     ass = [p for p in clips_dir.glob("*.ass") if new(p)] if clips_dir.is_dir() else []
     found = {name for name, marker in STEPS if marker is not None and new(out_dir / marker)}
+    if clips_dir.is_dir() and any(new(p) for p in clips_dir.glob("*_layout.json")):
+        found.add("plan")
     if ass:
         found.add("captions")
         # render ចប់ពេល .ass នីមួយៗមាន .mp4 របស់វា (មិនមែនពេល clip ទី 1 ចេញទេ)
         if all(new(p.with_suffix(".mp4")) for p in ass):
             found.add("render")
     return found
+
+
+# "progress transcribe 742.3 2829.6" ពី make_clips.report_progress -> វឌ្ឍនភាពពិតក្នុងជំហាន
+PROGRESS_LINE = re.compile(r"^progress (\w+) ([0-9.]+) ([0-9.]+)$")
+
+
+def parse_progress(line: str) -> tuple[str, float] | None:
+    """បន្ទាត់ progress -> (ជំហាន, 0..1); បន្ទាត់ផ្សេង -> None."""
+    found = PROGRESS_LINE.match(line)
+    if not found:
+        return None
+    done, total = float(found.group(2)), float(found.group(3))
+    return found.group(1), (min(1.0, done / total) if total > 0 else 0.0)
 
 
 @dataclass
@@ -99,6 +148,11 @@ class Job:
     # ជំហានដែលមាន file រួចមុន job នេះចាប់ផ្តើម (cache ពីការរត់មុន). បើគ្មានវា
     # UI បង្ហាញ 6/6 ភ្លាម ពេលរត់លើ video ដែលធ្លាប់រត់ ហើយវាមិនពិតទេ.
     cached: tuple[str, ...] = ()
+    folder: str = "clips"                # output_folder(): clips / full / clips_1x1 ...
+    # `--full` មិនជ្រើស clip ទេ ដូច្នេះ highlights និង boundaries មិនសរសេរ file របស់វាឡើយ
+    skipped: tuple[str, ...] = ()
+    # ចំណែកដែលចប់ក្នុងជំហាន (0..1) ពីបន្ទាត់ "progress ..." — transcribe, highlights, render
+    fractions: dict[str, float] = field(default_factory=dict)
 
     def progress(self) -> dict:
         """ជំហានណាចប់ហើយ — អានពី file ដែលមានលើ disk.
@@ -107,7 +161,7 @@ class Job:
         សរសេរ **ក្រោយ** job នេះចាប់ផ្តើម (mtime): `--redo` និង render សរសេរជាន់លើ
         file ចាស់ ដូច្នេះ "file មាន" តែឯងមិនបានន័យថា run នេះធ្វើវារួចទេ.
         """
-        written = steps_on_disk(self.out_dir, since=self.started - MTIME_SLACK)
+        written = steps_on_disk(self.out_dir, since=self.started - MTIME_SLACK, folder=self.folder)
         if self.state == "running":
             # FFmpeg សរសេរ .mp4 នៅកន្លែងតែម្តង ដូច្នេះ file លេចមកតាំងពី render ទើបចាប់ផ្តើម
             # (វាស់: "render រួចរាល់" 8 s មុន job ចប់). render ជាជំហានចុងក្រោយ: វាចប់ពេល process ចប់.
@@ -115,7 +169,9 @@ class Job:
         done = [name for name, _ in STEPS if name in self.cached or name in written]
         fresh = [name for name in done if name not in self.cached]
         return {"done": done, "cached": list(self.cached), "fresh": fresh,
-                "total": len(STEPS),
+                "skipped": list(self.skipped), "planned": "plan" in written,
+                "folder": self.folder, "total": len(STEPS),
+                "fraction": dict(self.fractions),
                 "step": done[-1] if done else "starting"}
 
     def as_dict(self) -> dict:
@@ -152,17 +208,25 @@ class JobRunner:
             args = [str(PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"), "-u",
                     str(PROJECT_ROOT / "make_clips.py"), str(video)]
             for key, value in options.items():
-                if value is None:
+                # False = flag មិនបើក (typer bool flag គ្មានតម្លៃ "False")
+                if value is None or value is False:
                     continue
                 flag = "--" + key.replace("_", "-")
                 args += [flag] if value is True else [flag, str(value)]
 
             job = Job(id=uuid.uuid4().hex[:8], video=video,
-                      out_dir=PROJECT_ROOT / "output" / video.stem, args=args)
+                      out_dir=PROJECT_ROOT / "output" / video.stem, args=args,
+                      folder=output_folder(options),
+                      skipped=(("highlights", "boundaries", "captions", "render")
+                               if options.get("transcribe_only")
+                               else ("highlights", "boundaries") if options.get("full") else ()))
             redone = steps_redone(options)
-            on_disk = steps_on_disk(job.out_dir)
+            # ភាសាដែលសុំខុសពី transcript ចាស់ = make_clips transcribe ម្តងទៀត (មិនមែន cache)
+            if language_changes(job.out_dir, options.get("language")):
+                redone |= {"transcribe", *REDO_TOUCHES["highlights"]}
+            on_disk = steps_on_disk(job.out_dir, folder=job.folder)
             job.cached = tuple(name for name, _ in STEPS
-                               if name in on_disk and name not in redone)
+                               if name in on_disk and name not in redone and name not in job.skipped)
             self.jobs[job.id] = job
 
         db.save_job(job.id, video.stem, str(video), job.args, job.started)
@@ -185,7 +249,11 @@ class JobRunner:
 
         for line in job.process.stdout:
             text = line.rstrip()
-            if text:
+            progress = parse_progress(text)
+            if progress:
+                # មិនដាក់ក្នុង log ទេ — ម្តងក្នុង 3 s លើ job 50 នាទី = បន្ទាត់រាប់ពាន់
+                job.fractions[progress[0]] = progress[1]
+            elif text:
                 job.log.append(text)
         code = job.process.wait()
         job.finished = time.time()

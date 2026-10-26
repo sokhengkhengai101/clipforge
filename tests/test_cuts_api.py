@@ -1,0 +1,118 @@
+"""Edit Video ជំហាន ២ ផ្នែក ខ: cut list ក្នុង project.json, Speech cleanup, job --cuts, លទ្ធផល full_edit*."""
+import json
+import time
+
+import pytest
+from fastapi.testclient import TestClient
+
+from pipeline.transcribe import Segment, Transcript, Word, save_transcript
+from server import app as APP
+from server import clips as SC
+from server import editor, manage
+from server import jobs as J
+
+
+def write_transcript(folder, words):
+    folder.mkdir(parents=True, exist_ok=True)
+    transcript = Transcript(language="en", language_probability=0.9, duration=20.0, model="m", device="cuda",
+                            segments=[Segment(id=0, start=0.0, end=20.0, text="x", words=words)])
+    save_transcript(transcript, folder / "transcript.json")
+
+
+@pytest.fixture
+def client(tmp_path, monkeypatch):
+    monkeypatch.setattr(APP, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(J.db, "save_job", lambda *a, **k: None)
+    # runner ផ្ទាល់ខ្លួន: job ដែល _run ត្រូវបាន stub នៅ "running" — កុំឲ្យ test បន្ទាប់ទទួល 409
+    monkeypatch.setattr(APP, "runner", J.JobRunner())
+    return TestClient(APP.app)
+
+
+def test_cuts_live_beside_title_and_ratings(tmp_path):
+    manage.write_title(tmp_path, "My show")
+    manage.write_rating(tmp_path, 1.0, 5.0, "like")
+    saved = manage.write_cuts(tmp_path, [[5, 6], [1, 2], [3, 3]], "hard")    # [3,3] = ទទេ ត្រូវដក
+    assert saved == {"cuts": [[1.0, 2.0], [5.0, 6.0]], "transition": "hard", "splits": []}
+    assert manage.read_cuts(tmp_path) == saved
+    assert manage.read_title(tmp_path) == "My show" and manage.read_ratings(tmp_path)
+    manage.write_cuts(tmp_path, [], "punch")                                 # ទទេ = លុប
+    assert manage.read_cuts(tmp_path) == {"cuts": [], "transition": "punch", "splits": []}
+    with pytest.raises(ValueError):
+        manage.write_cuts(tmp_path, [[1, 2]], "wipe")
+
+
+def test_splits_are_saved_with_the_cuts_and_kept_by_a_job_that_only_writes_cuts(tmp_path):
+    saved = manage.write_cuts(tmp_path, [[1, 2]], "punch", [20.0, 10.0, 10.0, 0])   # 0 / ដដែល = ដក
+    assert saved["splits"] == [10.0, 20.0]
+    manage.write_cuts(tmp_path, [[3, 4]], "hard")                # splits=None (job) = ទុក split
+    assert manage.read_cuts(tmp_path) == {"cuts": [[3.0, 4.0]], "transition": "hard", "splits": [10.0, 20.0]}
+    manage.write_cuts(tmp_path, [], "punch")                     # គ្មាន cut តែមាន split = នៅរក្សាទុក
+    assert manage.read_cuts(tmp_path)["splits"] == [10.0, 20.0]
+    manage.write_cuts(tmp_path, [], "punch", [])                 # គ្មានអ្វីទាំងអស់ = លុប key edit
+    assert manage.read_cuts(tmp_path) == {"cuts": [], "transition": "punch", "splits": []}
+    with pytest.raises(ValueError):
+        manage.write_cuts(tmp_path, [], "punch", [float(at) for at in range(1, manage.MAX_SPLITS + 2)])
+
+
+def test_cleanup_suggests_long_pauses_with_breath_and_fillers(tmp_path):
+    write_transcript(tmp_path, [
+        Word(" So", 0.0, 0.3), Word(" um,", 0.4, 0.6), Word(" the", 2.0, 2.2),       # pause 1.4 s
+        Word(" you", 2.3, 2.4), Word(" know", 2.45, 2.6), Word(" rhino", 2.7, 3.0),
+        Word(" yeah", 3.1, 3.3),                                                     # yeah = មិនមែន filler cleanup
+    ])
+    data = editor.cleanup_suggestions(tmp_path, pause=1.0)
+    reasons = [(s["reason"], s["text"]) for s in data["suggestions"]]
+    assert reasons == [("filler", "um,"), ("pause", "1.40s"), ("filler", "you know")]
+    pause = data["suggestions"][1]
+    assert pause["start"] == round(0.6 + 0.12, 3) and pause["end"] == round(2.0 - 0.12, 3)
+    assert data["pauses"] == 1 and data["fillers"] == 2
+    assert len(editor.cleanup_suggestions(tmp_path, pause=1.0, fillers=False)["suggestions"]) == 1
+    assert editor.cleanup_suggestions(tmp_path / "none") is None
+
+
+def test_cuts_and_cleanup_endpoints(client, tmp_path):
+    folder = tmp_path / "output" / "p"
+    assert client.put("/projects/p/cuts", json={"cuts": [[1, 2]]}).status_code == 404   # គ្មាន project
+    write_transcript(folder, [Word(" a", 0.0, 0.5), Word(" b", 3.0, 3.5)])
+    assert client.put("/projects/p/cuts", json={"cuts": [[1, 2]], "transition": "punch"}).status_code == 200
+    assert client.get("/projects/p/cuts").json()["cuts"] == [[1.0, 2.0]]
+    assert client.put("/projects/p/cuts", json={"cuts": [[1, 2]], "splits": [4.5]}).json()["splits"] == [4.5]
+    assert client.put("/projects/p/cuts", json={"cuts": [[1, 2]]}).json()["splits"] == [4.5]   # គ្មាន field = ទុក
+    assert client.put("/projects/p/cuts", json={"cuts": [[1, 2, 3]]}).status_code == 400
+    assert client.put("/projects/p/cuts", json={"cuts": [[1, 2]], "transition": "wipe"}).status_code == 400
+    answer = client.get("/projects/p/cleanup", params={"pause": 1.0}).json()
+    assert answer["ready"] and answer["pauses"] == 1
+    assert client.get("/projects/p/cleanup", params={"pause": 0}).status_code == 400
+    assert client.get("/projects/none/cleanup").json()["ready"] is False
+
+
+def test_job_with_cuts_writes_the_cut_file_and_renders_into_full_edit(client, tmp_path, monkeypatch):
+    video = tmp_path / "talk.mp4"
+    video.write_bytes(b"x")
+    captured = {}
+    monkeypatch.setattr(J.JobRunner, "_run", lambda self, job: captured.update(args=job.args, folder=job.folder))
+    answer = client.post("/jobs", json={"video": str(video), "full": True, "aspect": "16:9",
+                                        "cuts": [[5, 6], [1, 2]], "transition": "hard"})
+    assert answer.status_code == 200
+    time.sleep(0.2)
+    args = captured["args"]
+    cut_file = args[args.index("--cuts") + 1]
+    assert json.loads(open(cut_file, encoding="utf-8").read()) == {"cuts": [[1.0, 2.0], [5.0, 6.0]]}
+    assert args[args.index("--transition") + 1] == "hard"
+    assert captured["folder"] == "full_edit_16x9"
+    assert manage.read_cuts(tmp_path / "output" / "talk")["cuts"] == [[1.0, 2.0], [5.0, 6.0]]
+    # cuts ដោយគ្មាន --full ឬទទេ = 400
+    assert client.post("/jobs", json={"video": str(video), "cuts": [[1, 2]]}).status_code == 400
+    assert client.post("/jobs", json={"video": str(video), "full": True, "cuts": []}).status_code == 400
+
+
+def test_full_edit_folders_are_results_marked_edited(tmp_path):
+    for name in ("full", "full_edit", "full_edit_16x9", "full_edit_x"):
+        folder = tmp_path / name
+        folder.mkdir()
+        (folder / "clip_01.mp4").write_bytes(b"x" * 10)
+        (folder / "clip_01_layout.json").write_text(json.dumps({"shots": [{"start": 0, "end": 5, "kind": "center"}]}))
+    found = {item["folder"]: (item["aspect"], item["edited"]) for item in SC.reframe_outputs(tmp_path)}
+    assert found == {"full": ("9:16", False), "full_edit": ("9:16", True), "full_edit_16x9": ("16:9", True)}
+    assert J.output_folder({"full": True, "cuts": "c.json"}) == "full_edit"
+    assert J.output_folder({"full": True}) == "full"
