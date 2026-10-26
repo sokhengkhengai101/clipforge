@@ -102,7 +102,7 @@ class Layout:
     ទុកជាឈ្មោះងាយស្រួលសម្រាប់ករណី split ដែលមានតែ ២ ផ្ទាំង។
     """
 
-    kind: str                      # "split" | "three" | "four" | "single" | "center"
+    kind: str                      # "split" | "three" | "four" | "screen1" | "screen2" | "single" | "fit" | "center"
     panels: list[Box] = field(default_factory=list)
     box: Box | None = None         # single / center (និងប្រអប់បម្រុងរបស់ split)
     person: str | None = None      # single: "left" / "right" / None (អ្នកណាក្នុង close-up)
@@ -341,6 +341,9 @@ def _clamp_box(x: float, y: float, w: float, h: float,
 
 
 PANEL_GRIDS = {"split": 2, "three": 3, "four": 4}
+# screen1 = slide + មនុស្ស ១, screen2 = slide + មនុស្ស ២ (layout `screen`)
+SCREEN_KINDS = {"screen1": 2, "screen2": 3}
+PANEL_GRIDS.update(SCREEN_KINDS)
 
 
 def _even(value: float) -> int:
@@ -375,6 +378,19 @@ def panel_rects(kind: str) -> list[tuple[int, int, int, int]]:
         bottom, half = out_h - big, _even(out_w / 2)
         return [(0, 0, out_w, big), (0, big, half, bottom),
                 (half, big, out_w - half, bottom)]
+
+    if kind in SCREEN_KINDS:
+        # slide ខាងលើពេញទទឹង; មនុស្សខាងក្រោម (ម្នាក់ពេញទទឹង ឬពីរនាក់ចំហៀងគ្នា).
+        # តែ output បញ្ឈរ/ការ៉េ — លើ 16:9 ផ្ទាំង slide ខាងលើនឹងរាក់ពេក
+        if horizontal:
+            return []
+        top = _even(out_h * config.SCREEN_TOP_RATIO)
+        bottom = out_h - top
+        if kind == "screen1":
+            return [(0, 0, out_w, top), (0, top, out_w, bottom)]
+        half = _even(out_w / 2)
+        return [(0, 0, out_w, top), (0, top, half, bottom),
+                (half, top, out_w - half, bottom)]
 
     if kind == "four":
         half_w, half_h = _even(out_w / 2), _even(out_h / 2)
@@ -610,6 +626,39 @@ def build_x_expression(points: list[tuple[float, float]]) -> str:
     return expression
 
 
+def tracking_allowed(start: float, end: float) -> bool:
+    """crop អាចតាមមុខក្នុង shot នេះបានទេ (menu Tracker).
+
+    `TRACKING = False` បិទទាំងអស់; shot ដែលជាន់ចន្លោះមួយក្នុង `NO_TRACK_RANGES` ក៏បិទ.
+    ឧ. ranges [(10, 12)] -> shot 8-11 s មិនតាមដាន, shot 12-15 s តាមដានធម្មតា.
+    """
+    if not config.TRACKING:
+        return False
+    return not any(a < end and b > start for a, b in config.NO_TRACK_RANGES)
+
+
+def manual_box(track, start: float, end: float, size: tuple[int, int]) -> Box:
+    """ប្រអប់ 9:16 ដែលរំកិលតាមផ្លូវដោយដៃ (`subject_track.Track`) ក្នុង shot [start, end).
+
+    ពេលធៀបនឹងដើម shot ដូច `tracked_box` (render ដាក់ `setpts=PTS-STARTPTS`). ក្រោយចំណុចល្អ
+    ចុងក្រោយ (ប្រធានបទត្រូវបាំង) x នៅនឹង — `build_x_expression` កាន់តម្លៃចុងក្រោយ.
+    """
+    frame_w, frame_h = size
+    inside = [(t, cx) for t, cx, _ in track.points if start <= t <= end]
+    centre = (sum(cx for _, cx in inside) / len(inside)) if inside else track.box[0] + track.box[2] / 2
+    static = single_box(Face(x=int(centre), y=0, w=0, h=0, score=1.0), frame_w, frame_h)
+    if len(inside) < 2:
+        return static
+    half = static.w / 2
+    limit = float(frame_w - static.w)
+    points = [(t - start, min(max(0.0, cx - half), limit)) for t, cx in inside]
+    points = apply_deadzone(moving_average(points), frame_w * config.TRACK_DEADZONE)
+    if len(points) < 2 or max(x for _, x in points) - min(x for _, x in points) < 2:
+        return static
+    average = _even_pos(sum(x for _, x in points) / len(points))
+    return Box(x=average, y=static.y, w=static.w, h=static.h, x_expr=build_x_expression(points))
+
+
 def tracked_box(video_path: Path, start: float, end: float,
                 size: tuple[int, int], reference: Face) -> Box:
     """ប្រអប់ 9:16 ដែលរំកិលតាមមុខក្នុង shot នេះ.
@@ -740,11 +789,12 @@ LAYOUT_ALIASES = {
     "single": "single", "face": "single", "fill": "single",
     "center": "center", "centre": "center",
     "fit": "fit",
+    "screen": "screen", "screenshare": "screen",
 }
 # `auto` = អនុញ្ញាតទាំងអស់ ហើយ planner រើសក្នុងមួយ shot (shot មកពី scene detection)។
 # វាស់មុនបើក three/four ក្នុង auto: podcast ៣ នាក់ប្តូរ 34s ពី split ទៅ three
 # (ត្រឹមត្រូវ — មានមនុស្ស ៣ នាក់ក្នុងរូប) ហើយបទសម្ភាសន៍ ២ នាក់មិនប្តូរសោះ។
-ALL_LAYOUTS = frozenset({"split", "three", "four", "single", "fit", "center"})
+ALL_LAYOUTS = frozenset({"split", "three", "four", "single", "fit", "center", "screen"})
 MULTI_PANEL = ("four", "three", "split")
 
 
@@ -825,6 +875,89 @@ def fallback_layout(video_path: Path, start: float, end: float, size: tuple[int,
                 w=int(height * 0.75), h=height, score=0.0)
     return Layout(kind="single", box=single_box(spot, frame_w, frame_h))
 
+# ---------- អេក្រង់ + webcam (layout `screen`) ----------
+
+def is_webcam_face(face: Face, frame_w: int, frame_h: int) -> bool:
+    """មុខតូចនៅជិតគែមឆ្វេង/ស្តាំ = មនុស្សក្នុងប្រអប់ webcam លើអេក្រង់ដែលចែករំលែក."""
+    edge = frame_w * config.SCREEN_EDGE
+    near_edge = face.cx < edge or face.cx > frame_w - edge
+    return near_edge and face.h <= frame_h * config.SCREEN_FACE_MAX
+
+
+def screen_region(faces: list[Face], frame_w: int) -> tuple[int, int]:
+    """ផ្ទៃ x0..x1 ដែលគ្មានប្រអប់ webcam — ចន្លោះរវាងប្រអប់ (ឬពីប្រអប់ទៅគែមម្ខាងទៀត).
+
+    ប្រអប់ webcam ≈ `SCREEN_TILE_RATIO` × ទទឹងមុខ ដាក់កណ្តាលលើមុខ.
+    ឧ. មុខ cx=61 w=38 -> ប្រអប់ដល់ x=114; មុខ cx=592 -> ប្រអប់ចាប់ពី x=539.
+    """
+    left = [f.cx + f.w * config.SCREEN_TILE_RATIO / 2 for f in faces if f.cx < frame_w / 2]
+    right = [f.cx - f.w * config.SCREEN_TILE_RATIO / 2 for f in faces if f.cx >= frame_w / 2]
+    x0 = int(max(left, default=0))
+    x1 = int(min(right, default=frame_w))
+    return max(0, x0), min(frame_w, x1)
+
+
+def slide_box(region: tuple[int, int], frame_w: int, frame_h: int, aspect: float) -> Box:
+    """ប្រអប់ slide: ទទឹងពេញផ្ទៃ (អក្សរមិនដាច់), កម្ពស់តាមសមាមាត្រផ្ទាំងលើ, កណ្តាលបញ្ឈរ."""
+    x0, x1 = region
+    width = x1 - x0
+    height = width / aspect
+    if height > frame_h:
+        height = frame_h
+        width = height * aspect
+    return _clamp_box((x0 + x1) / 2 - width / 2, (frame_h - height) / 2,
+                      width, height, frame_w, frame_h)
+
+
+def webcam_box(face: Face, frame_w: int, frame_h: int, aspect: float) -> Box:
+    """ប្រអប់មនុស្សម្នាក់ **ក្នុង** ប្រអប់ webcam (កុំឲ្យលើសទៅលើ slide).
+
+    ទទឹង <= ប្រអប់ webcam; កម្ពស់ <= 2.8 ដងកម្ពស់មុខ; មុខនៅ 40% ពីលើ។
+    """
+    tile = face.w * config.SCREEN_TILE_RATIO
+    height = min(frame_h, face.h * config.SCREEN_TILE_RATIO)
+    width = min(tile, height * aspect)
+    height = width / aspect
+    return _clamp_box(face.cx - width / 2, face.cy - height * 0.40, width, height,
+                      frame_w, frame_h)
+
+
+def screen_layout(video_path: Path, start: float, end: float, size: tuple[int, int],
+                  faces: list[Face], biggest: Face | None) -> Layout | None:
+    """slide ខាងលើ + មនុស្ស webcam ខាងក្រោម, ឬ `None` បើ shot នេះមិនមែនអេក្រង់ចែករំលែក.
+
+    លក្ខខណ្ឌទាំងអស់: មុខ ១-២ ជា webcam (តូច នៅគែម; ពីរនាក់ = ម្នាក់ម្ខាង), ផ្ទៃ slide
+    ទូលាយគ្រប់គ្រាន់, ហើយផ្ទៃនោះ **ស្ងៀម** (slide មិនមែនវីដេអូ)។ ការពង្រីកមនុស្សមិនកំណត់
+    ទេ — អ្នកអភិវឌ្ឍទទួលយក webcam ព្រិលលើវីដេអូ 360p ព្រោះ slide ជាអ្វីដែលគេអាន។
+    """
+    from pipeline.subjects import motion_level
+
+    frame_w, frame_h = size
+    if not 1 <= len(faces) <= 2:
+        return None
+    if not all(is_webcam_face(f, frame_w, frame_h) for f in faces):
+        return None
+    people = sorted(faces, key=lambda f: f.cx)
+    if len(people) == 2 and not people[0].cx < frame_w / 2 <= people[1].cx:
+        return None                  # ពីរនាក់ម្ខាងតែមួយ — មិនមែនទម្រង់នេះទេ
+    region = screen_region(people, frame_w)
+    if region[1] - region[0] < frame_w * config.SCREEN_MIN_WIDTH:
+        return None
+
+    kind = "screen1" if len(people) == 1 else "screen2"
+    rects = panel_rects(kind)
+    if not rects:
+        return None                  # output ផ្ដេក (16:9)
+    if motion_level(video_path, start, end, size, region=region) > config.SCREEN_MOTION_MAX:
+        return None                  # ផ្ទៃនោះមានចលនា = វីដេអូ មិនមែន slide
+    aspects = [w / h for w, h in (panel_inner(rect) for rect in rects)]
+    panels = [slide_box(region, frame_w, frame_h, aspects[0])]
+    panels += [webcam_box(face, frame_w, frame_h, aspects[i + 1])
+               for i, face in enumerate(people)]
+    return Layout(kind=kind, panels=panels,
+                  box=single_box(biggest, frame_w, frame_h) if biggest else None)
+
+
 # ---------- ផែនការ layout ----------
 
 def identify(frame, face: Face, seats: Seats | None) -> str | None:
@@ -864,6 +997,12 @@ def plan_shot(video_path: Path, start: float, end: float, size: tuple[int, int],
     if allowed == frozenset({"center"}):
         return Layout(kind="center", box=center_box(frame_w, frame_h))
 
+    # អ្នកជ្រើសប្រធានបទក្នុង scene នេះដោយដៃ (Manual subject tracking) -> តាមវា, មិនសួរ AI ទេ
+    from pipeline.subject_track import tracks_for_shot
+    manual = tracks_for_shot(start, end)
+    if manual is not None:
+        return Layout(kind="single", box=manual_box(manual, start, end, size))
+
     best: list[Face] = []
     best_frame = None
     seen: list[Face] = []          # មុខធំបំផុតក្នុង frame គំរូនីមួយៗ — ប្រើធៀបចលនា
@@ -883,6 +1022,13 @@ def plan_shot(video_path: Path, start: float, end: float, size: tuple[int, int],
             break      # ឃើញពីរនាក់រួចហើយ — គ្រប់គ្រាន់
 
     biggest = max(best, key=lambda f: f.w) if best else None
+
+    # អេក្រង់ចែករំលែក + webcam តូចនៅគែម -> slide ខាងលើ, មនុស្សខាងក្រោម។ សាកមុនផ្ទាំង
+    # មនុស្ស: split/three បោះ slide ចោល (How-AI-agents មុននេះ: single ១០/១០ clips)
+    if "screen" in allowed and best:
+        screen = screen_layout(video_path, start, end, size, best, biggest)
+        if screen is not None:
+            return screen
 
     # ផ្ទាំងច្រើន: សាកចំនួនផ្ទាំងច្រើនជាងគេមុន (four -> three -> split)
     # ប្រអប់គណនាពីមុខ **ក្នុង shot នេះ** មិនមែនពីកៅអីសកលទេ។ កៅអីជាមធ្យមលើទាំង
@@ -937,7 +1083,7 @@ def plan_shot(video_path: Path, start: float, end: float, size: tuple[int, int],
         subject = max(best, key=lambda f: f.w)
         # បើ frame គំរូបង្ហាញថាមុខផ្លាស់ទី ប្រអប់ថេរនឹងកាត់មុខចេញ។
         # ពេលនោះ យើងយក frame បន្ថែម រួចធ្វើ crop ដែលរំកិលតាមមុខ។
-        if face_movement(seen, frame_w) > config.TRACK_MOVE_THRESHOLD:
+        if tracking_allowed(start, end) and face_movement(seen, frame_w) > config.TRACK_MOVE_THRESHOLD:
             box = tracked_box(video_path, start, end, size, subject)
         else:
             box = single_box(subject, frame_w, frame_h)
@@ -954,13 +1100,19 @@ def plan_shot(video_path: Path, start: float, end: float, size: tuple[int, int],
 
 
 def smooth_segments(segments: list[Segment],
-                    min_split_sec: float | None = None) -> list[Segment]:
+                    min_split_sec: float | None = None,
+                    allowed: frozenset[str] | None = None,
+                    size: tuple[int, int] | None = None) -> list[Segment]:
     """ដក layout ដែលលោតឡើងមួយភ្លែត រួចបញ្ចូល segment ដែលដូចគ្នា.
 
     ការប្តូរ layout ជាការប្តូររូបភាពធំ។ បើវាមានតែ ២-៣ វិនាទី អ្នកមើលឃើញជាការភ្លឹបភ្លែត
     មិនមែនជាជម្រើសរចនាទេ។ យើងបន្ទាបវាទៅ single (ដោយប្រើប្រអប់បម្រុងដែលគណនាពី
     shot នោះផ្ទាល់) រួចបញ្ចូល segment ជាប់គ្នាដែលមាន layout ដូចបេះបិទ។
+
+    បើ `--layout` មិនអនុញ្ញាត single (`allowed` គ្មាន "single") ការបន្ទាបទៅ center វិញ — ធ្លាប់
+    ទៅ single ដោយស្ងាត់ ហើយ reframe ដែល Fill បិទមាន crop តាមមុខ 8% (វាស់លើវីដេអូរមាស)។
     """
+    to_center = allowed is not None and "single" not in allowed and size is not None
     min_split_sec = config.MIN_SPLIT_SEC if min_split_sec is None else min_split_sec
 
     cleaned: list[Segment] = []
@@ -968,7 +1120,10 @@ def smooth_segments(segments: list[Segment],
         layout = segment.layout
         if (layout.kind in PANEL_GRIDS and segment.duration < min_split_sec
                 and layout.box is not None):
-            layout = Layout(kind="single", box=layout.box, person=layout.person)
+            if to_center:
+                layout = Layout(kind="center", box=center_box(*size))
+            else:
+                layout = Layout(kind="single", box=layout.box, person=layout.person)
         cleaned.append(Segment(start=segment.start, end=segment.end, layout=layout))
 
     merged: list[Segment] = []
@@ -1015,7 +1170,7 @@ def plan_clip(video_path: Path, clip: Clip, size: tuple[int, int],
             ))
     segments = [Segment(start=a, end=b, layout=layout)
                 for (a, b), layout in zip(shots, layouts)]
-    segments = smooth_segments(segments)
+    segments = smooth_segments(segments, allowed=allowed, size=size)
     return order_split_panels(segments, size, seats)
 
 
@@ -1061,14 +1216,20 @@ def describe(segments: list[Segment]) -> str:
     return ", ".join(f"{kind} {seconds:.0f}s" for kind, seconds in order)
 
 
-def save_layout_summary(segments: list[Segment], path: Path) -> Path:
+def save_layout_summary(segments: list[Segment], path: Path, captions: bool = True,
+                        allowed: frozenset[str] | None = None) -> Path:
     """សរសេរ layout របស់ shot នីមួយៗ (`clip_XX_layout.json`) — screen Subtitles ត្រូវដឹងថា
     shot ណាជា split ដើម្បីដាក់ caption preview លើស្នាម ដូច render ពិត. មុននេះ ផែនការត្រូវបាន
     គណនាពេល render ហើយបោះចោល ហើយ preview ដាក់ caption ពីលើមុខមនុស្សទីពីរ (ឃើញពិត).
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    data = {"dominant": dominant_kind(segments),
+    # `captions`: caption ត្រូវបានដុតឬអត់ — `--no-captions` នៅតែសរសេរ .ass (សម្រាប់ .srt/.vtt)
+    # ដូច្នេះ .ass មិនមែនជាភស្តុតាងទេ (Result បានសរសេរ "ដុតរួច" ខុស)
+    # `allowed`: layout ដែល --layout អនុញ្ញាត — បើគ្មាន "single" AI មិនតាមដាន subject ទេ
+    # (ឃើញពិត: --layout fit លើវីដេអូរមាស = center ទាំង 55.7 s) ហើយ Result ត្រូវប្រាប់ពីរឿងនេះ
+    data = {"dominant": dominant_kind(segments), "captions": captions,
+            "allowed": sorted(allowed) if allowed is not None else None,
             "shots": [{"start": round(s.start, 3), "end": round(s.end, 3), "kind": s.layout.kind}
                       for s in segments]}
     path.write_text(json.dumps(data, indent=1), encoding="utf-8")

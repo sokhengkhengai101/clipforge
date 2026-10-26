@@ -291,12 +291,24 @@ def test_single_segment_filter_has_no_concat():
     assert "concat=" not in f and "trim=" not in f
 
 
+def test_trim_puts_the_cut_frame_in_the_new_shot():
+    """Frame 152 នៅ 24000/1001 fps = 6.339667 s ជាការកាត់: វាត្រូវចូល shot ថ្មី.
+
+    ពីមុន `6.340` (បង្គត់ឡើង) ទុក frame នោះជាមួយ crop ចាស់ -> លោត ១ frame ពេលប្តូរ shot។
+    """
+    cut = 152 * 1001 / 24000
+    start = R.trim_time(cut)
+    assert start <= cut < start + 1001 / 24000          # frame 152 >= start
+    assert 151 * 1001 / 24000 < start                   # frame 151 នៅ shot មុន
+    assert R.trim_time(0.0) == 0.0
+
+
 def test_segments_filter_trims_relative_to_clip_start():
     """trim ត្រូវរាប់ពីដើម clip ព្រោះ `-ss` បានរំកិលពេលរួចហើយ."""
     segments = two_segments(100.0, 110.0)
     f = R.build_segments_filter(segments, 100.0)
-    assert "trim=start=0.000:end=5.000" in f
-    assert "trim=start=5.000:end=10.000" in f
+    assert "trim=start=0.000000:end=4.999000" in f
+    assert "trim=start=4.999000:end=9.999000" in f
     assert "setpts=PTS-STARTPTS" in f
     assert "concat=n=2:v=1:a=0" in f
     assert f.endswith("[v]")
@@ -444,10 +456,46 @@ def test_moving_crop_expression_survives_the_filtergraph():
     segments = [Segment(start=10.0, end=20.0, layout=Layout(
         kind="single", box=Box(x=200, y=0, w=180, h=240, x_expr=expression)))]
     f = R.build_segments_filter(segments, 10.0)
-    assert f"x='{expression}'" in f
-    # comma នៃ expression ត្រូវនៅក្នុង quote ហើយ scale នៅបន្តដូចដើម
-    assert f.startswith("[0:v]crop=180:240:x='")
-    assert ",scale=" in f.split("'")[2]
+    assert f"x='({expression})*" in f
+    # comma នៃ expression ត្រូវនៅក្នុង quote; ក្រោយ quote គឺ y ហើយមិនមែន filter ថ្មីខុសទេ
+    assert f.startswith("[0:v]scale=")
+    assert f.split("'")[2].startswith(":y=")
+
+
+def test_moving_crop_scales_first_so_the_pan_is_smooth():
+    """Crop ដែលរំកិល: scale មុន crop -> ជំហាននៅលើ pixel output (មិនលោត 2 px ដើមគុណ 2.67)."""
+    box = Box(x=200, y=0, w=404, h=720, x_expr="200+t*12")
+    f = R.moving_crop(box, 1080, 1920)
+    assert f.index("scale=") < f.index("crop=")
+    assert "crop=1080:1920:x='(200+t*12)*2.666667':y=0:exact=1" in f
+
+
+def test_static_crop_still_crops_first():
+    """ប្រអប់នឹងមិនញ័រទេ -> crop មុន (ថោក) ដូចដើម."""
+    f = R.build_layout_filter(Layout(kind="single", box=Box(x=200, y=0, w=404, h=720)))
+    assert f.index("crop=") < f.index("scale=")
+
+
+def test_moving_crop_moves_every_frame(tmp_path):
+    """Render ពិត: រូបនឹង + crop រំកិល 12 px/s — គ្មាន frame នៅនឹងរួចលោតទៀតទេ.
+
+    មុនការកែ: 75% នៃ frame នៅនឹង ហើយរាល់ frame ទី 4 លោត ~4.8 px (output)។
+    """
+    import numpy as np
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                    "testsrc2=size=1280x720:rate=24", "-frames:v", "1", str(tmp_path / "s.png")],
+                   check=True)
+    out = tmp_path / "pan.mp4"
+    chain = R.moving_crop(Box(x=200, y=0, w=404, h=720, x_expr="200+t*12"), 1080, 1920)
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-loop", "1", "-framerate", "24",
+                    "-i", str(tmp_path / "s.png"), "-t", "2", "-vf",
+                    f"format=yuv420p,{chain},scale=270:480,format=gray",
+                    "-f", "rawvideo", str(out)], check=True)
+    frames = np.frombuffer(out.read_bytes(), np.uint8).reshape(-1, 480, 270).astype(float)
+    # ការរំកិលតាម column: frame ពីរដូចគ្នាបេះបិទ = នៅនឹង
+    unchanged = sum(np.abs(a - b).mean() < 0.05 for a, b in zip(frames, frames[1:]))
+    assert len(frames) >= 47
+    assert unchanged <= 2                  # មុនការកែ 35 / 47
 
 
 def test_sharpen_runs_after_scaling_and_before_captions():
@@ -573,3 +621,13 @@ def test_fit_keeps_the_whole_frame_over_a_blurred_copy():
 def test_fit_needs_no_crop_box():
     """Layout `fit` គ្មានប្រអប់ — វាមិនត្រូវបោះ error ទេ."""
     assert R.build_layout_filter(Layout(kind="fit")).endswith("[v]")
+
+
+def test_keyframes_every_two_seconds_for_both_encoders(monkeypatch):
+    """NVENC ដាក់ keyframe រៀងរាល់ ២៥០ frames (10.4 s) — seek ក្នុង app យឺត 101-249 ms ហើយ
+    WebView2 បង្ហាញរូបខូច. keyframe តាមពេល (2 s) ដូចគ្នាគ្រប់ fps; NVENC ត្រូវការ forced-idr."""
+    for name in ("x264", "nvenc"):
+        monkeypatch.setattr(R, "encoder_args", lambda encoder=None, name=name: (name, ["-c:v", name]))
+        args = R._encode_args(20, "medium")
+        assert args[args.index("-force_key_frames") + 1] == f"expr:gte(t,n_forced*{config.KEYFRAME_SEC})"
+        assert ("-forced-idr" in args) == (name == "nvenc")

@@ -70,7 +70,8 @@ def _complete_ollama(prompt: str, system: str | None, model: str,
             model=model,
             messages=messages,
             format="json",          # Ollama បង្ខំ output ឲ្យជា valid JSON
-            options={"temperature": temperature, "num_predict": max_tokens},
+            options={"temperature": temperature, "num_predict": max_tokens,
+                     "num_ctx": config.OLLAMA_NUM_CTX},
         )
     except Exception as e:
         raise LLMError(
@@ -78,7 +79,24 @@ def _complete_ollama(prompt: str, system: str | None, model: str,
             f"ពិនិត្យ: ollama list   |   ollama pull {model}"
         ) from e
 
+    _check_not_cut(response.get("prompt_eval_count"), response.get("eval_count"))
     return response["message"]["content"]
+
+
+def _check_not_cut(prompt_tokens: int | None, output_tokens: int | None) -> None:
+    """Ollama កាត់ prompt ដែលវែងជាង context ចោលដោយស្ងាត់ (ដើម prompt = ការណែនាំ បាត់).
+
+    ឧ. context 2048, prompt 4188 tokens -> Ollama អានតែ ~2050 ហើយ model ឆ្លើយរឿងផ្សេង
+    = 0 clips ដោយគ្មានសារអ្វី. ពេល prompt + ចម្លើយ ពេញ context យើងចាត់ទុកជាកំហុសឲ្យឃើញ.
+    """
+    if prompt_tokens is None:
+        return
+    used = prompt_tokens + (output_tokens or 0)
+    if used >= config.OLLAMA_NUM_CTX - 8:
+        raise LLMError(
+            f"prompt វែងពេកសម្រាប់ context {config.OLLAMA_NUM_CTX} tokens "
+            f"(ប្រើ {used}) — Ollama កាត់ prompt ចោល; បង្កើន config.OLLAMA_NUM_CTX"
+        )
 
 
 def _complete_anthropic(prompt: str, system: str | None, model: str,

@@ -231,7 +231,8 @@ def motion_centre(video_path: Path, start: float, end: float, size: tuple[int, i
 
 
 def motion_level(video_path: Path, start: float, end: float, size: tuple[int, int],
-                 samples: int | None = None) -> float:
+                 samples: int | None = None,
+                 region: tuple[int, int] | None = None) -> float:
     """ចលនាមធ្យមក្នុង shot (0-255) — តូច = រូបស្ងៀម (slide, អេក្រង់).
 
     ផ្សេងពី `motion_centre()` ដែលប្រាប់ *ទីណា* — មួយនេះប្រាប់ *ប៉ុន្មាន*។
@@ -242,6 +243,9 @@ def motion_level(video_path: Path, start: float, end: float, size: tuple[int, in
 
     samples = config.MOTION_SAMPLES if samples is None else samples
     frame_w, frame_h = size
+    # `region` = ជួរ x0..x1 តែប៉ុណ្ណោះ (layout screen វាស់តែ slide មិនមែនមនុស្សក្នុង webcam)
+    x0, x1 = region if region else (0, frame_w)
+    frame_w = max(2, x1 - x0)
     small_w = config.MOTION_WIDTH
     small_h = max(2, int(small_w * frame_h / frame_w))
 
@@ -251,7 +255,7 @@ def motion_level(video_path: Path, start: float, end: float, size: tuple[int, in
         frame = grab_frame(video_path, moment, size)
         if frame is None:
             continue
-        small = cv2.resize(frame, (small_w, small_h), interpolation=cv2.INTER_AREA)
+        small = cv2.resize(frame[:, x0:x1], (small_w, small_h), interpolation=cv2.INTER_AREA)
         greys.append(cv2.cvtColor(small, cv2.COLOR_BGR2GRAY).astype(np.int16))
 
     if len(greys) < 2:

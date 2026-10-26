@@ -4,6 +4,8 @@ Phase 0: ជំហាន 1 (audio) + 2 (transcribe) + 3 (highlights) រួច�
 Usage: python make_clips.py video.mp4 --max-clips 5
 """
 
+import json
+import time
 from pathlib import Path
 
 import typer
@@ -81,6 +83,24 @@ def clips_table(clips: list) -> Table:
     return table
 
 
+# ពេល sidecar រត់ script នេះជា subprocess (stdout = pipe មិនមែន terminal) progress bar របស់ rich
+# មិនបង្ហាញទេ ហើយ UI មិនដឹងថា transcribe ទៅដល់ណា — កាតបង្ហាញតែ % ប៉ាន់ស្មាន ហើយឈប់នៅ 24%
+# លើវីដេអូ 47 នាទី (transcribe យឺតជាងល្បឿនដែលវាស់ពីមុន). ដូច្នេះយើងសរសេរបន្ទាត់សាមញ្ញ
+# "progress <ជំហាន> <ចប់> <សរុប>" ដែល server/jobs.py អាន. ម្តងក្នុង 3 s យ៉ាងច្រើន (+ ចុងក្រោយ).
+PROGRESS_EVERY_SEC = 3.0
+_last_report: dict[str, float] = {}
+
+
+def report_progress(step: str, done: float, total: float) -> None:
+    if console.is_terminal or total <= 0:
+        return                                  # terminal មាន progress bar រួចហើយ
+    now = time.monotonic()
+    if done < total and now - _last_report.get(step, -PROGRESS_EVERY_SEC) < PROGRESS_EVERY_SEC:
+        return
+    _last_report[step] = now
+    print(f"progress {step} {done:.1f} {total:.1f}", flush=True)
+
+
 def progress_columns(label: str) -> list:
     return [
         TextColumn(f"[cyan]{label}[/cyan]"),
@@ -126,12 +146,59 @@ def main(
     clean_only: bool = typer.Option(False, "--clean-only",
                                     help="render តែ clip_XX_clean.mp4 (គ្មាន caption) សម្រាប់ "
                                          "preview — មិនប៉ះ clip_XX.mp4 ឬ .ass/.srt/.vtt"),
+    cuts: Path = typer.Option(None, "--cuts", exists=True, dir_okay=False,
+                              help="cut list (JSON) — លុបចន្លោះទាំងនេះ (Edit Video); ត្រូវការ --full"),
+    transition: str = typer.Option("punch", "--transition",
+                                   help="នៅកន្លែងកាត់: punch (zoom 100/110% ឆ្លាស់) ឬ hard"),
+    transcribe_only: bool = typer.Option(False, "--transcribe-only",
+                                         help="audio + transcribe ប៉ុណ្ណោះ (screen Edit Video) — គ្មាន LLM គ្មាន render"),
+    fit_background: str = typer.Option(config.FIT_BACKGROUND, "--fit-background",
+                                       help="ផ្ទៃខាងក្រោយ Fit: blur, color ឬ image"),
+    fit_blur: int = typer.Option(config.FIT_BLUR_STRENGTH, "--fit-blur",
+                                 help="កម្លាំង blur 0-100 (33 = លំនាំដើម)"),
+    fit_color: str = typer.Option(config.FIT_COLOR, "--fit-color", help="ពណ៌ផ្ទៃ (#RRGGBB)"),
+    fit_image: Path = typer.Option(None, "--fit-image", exists=True, dir_okay=False,
+                                   help="រូប background (jpg/png/webp) — អានតែប៉ុណ្ណោះ"),
+    fit_radius: int = typer.Option(config.FIT_RADIUS, "--fit-radius",
+                                   help="ជ្រុងមូលរបស់វីដេអូកណ្តាល px (0-200)"),
+    fit_spacing: int = typer.Option(config.FIT_SPACING, "--fit-spacing",
+                                    help="ចន្លោះជុំវិញវីដេអូកណ្តាល % (0-20)"),
+    no_tracking: bool = typer.Option(False, "--no-tracking",
+                                     help="crop មិនតាមមុខក្នុង shot (នៅស្ងៀម)"),
+    no_track_ranges: Path = typer.Option(None, "--no-track-ranges", exists=True, dir_okay=False,
+                                         help="JSON (បញ្ជីគូ start, end ជាវិនាទី) — shot ដែលជាន់ចន្លោះទាំងនេះ មិនតាមដាន"),
+    subject_tracks: Path = typer.Option(None, "--subject-tracks", exists=True, dir_okay=False,
+                                        help="JSON ផ្លូវប្រធានបទដែលជ្រើសដោយដៃ (Edit Video -> Manual subject tracking)"),
+    motion_zoom: str = typer.Option(config.MOTION_ZOOM, "--motion-zoom",
+                                    help="Motion: off, in (ពង្រីកយឺតៗក្នុង scene នីមួយៗ) ឬ out"),
+    motion_zoom_amount: int = typer.Option(config.MOTION_ZOOM_AMOUNT, "--motion-zoom-amount",
+                                           help="% zoom ក្នុងមួយ scene (1-20)"),
+    motion_keywords: int = typer.Option(config.MOTION_KEYWORDS, "--motion-keywords",
+                                        help="% zoom លើពាក្យសំខាន់ (0 = បិទ, 1-20)"),
+    motion_shake: str = typer.Option(config.MOTION_SHAKE, "--motion-shake",
+                                     help="camera shake: off, loud (ពេលសំឡេងខ្លាំង) ឬ all"),
+    caption_font: str = typer.Option(None, "--caption-font",
+                                     help="font caption (ឈ្មោះ face ឧ. 'Montserrat Black', 'Inter Bold')"),
+    caption_text_color: str = typer.Option(None, "--caption-text-color", help="ពណ៌អក្សរ #RRGGBB"),
+    caption_outline_color: str = typer.Option(None, "--caption-outline-color", help="ពណ៌គ្រោង #RRGGBB"),
+    caption_italic: bool = typer.Option(False, "--caption-italic", help="អក្សរទ្រេត"),
+    caption_underline: bool = typer.Option(False, "--caption-underline", help="គូសបន្ទាត់ក្រោម"),
+    caption_shadow: str = typer.Option(None, "--caption-shadow", help="shadow x,y,blur,#RRGGBB"),
+    caption_keywords: bool = typer.Option(False, "--caption-keywords",
+                                          help="AI keywords highlighter: ពាក្យសំខាន់មានពណ៌ជានិច្ច"),
+    caption_keyword_colors: str = typer.Option(None, "--caption-keyword-colors",
+                                               help="ពណ៌ពាក្យសំខាន់ពីរ #RRGGBB,#RRGGBB"),
+    caption_lines: int = typer.Option(None, "--caption-lines", help="បន្ទាត់អតិបរមាក្នុងមួយ cue (1-3)"),
+    caption_animation: str = typer.Option(config.CAPTION_ANIMATION, "--caption-animation",
+                                          help="caption លេចឡើង: pop, bounce, fade, slide ឬ none"),
     no_captions: bool = typer.Option(False, "--no-captions",
                                      help="render ដោយគ្មាន caption ដុត (.srt/.vtt នៅតែសរសេរ)"),
     encoder: str = typer.Option(config.VIDEO_ENCODER, "--encoder",
                                 help="auto (GPU បើមាន), nvenc (GPU), x264 (CPU)"),
     full: bool = typer.Option(False, "--full",
                               help="render video ទាំងមូលជាបញ្ឈរ ១ file (រំលងការជ្រើស clip)"),
+    language: str = typer.Option("auto", "--language",
+                                 help="ភាសានិយាយ: auto (Whisper រកខ្លួនឯង) ឬ en, fr, es ..."),
 ) -> None:
     # --redo ដាច់ជំហាន ដើម្បីកុំឲ្យការកែ prompt បង្ខំ transcribe ៨ នាទីឡើងវិញ
     steps_to_redo = {name.strip().lower() for name in redo.split(",") if name.strip()}
@@ -147,6 +214,46 @@ def main(
     redo_highlights = "highlights" in steps_to_redo
     redo_render = "render" in steps_to_redo
 
+    # ភាសានិយាយ: auto = Whisper រកខ្លួនឯង (លំនាំដើម); code ផ្សេង = បង្ខំ Whisper
+    language = language.strip().lower()
+    if language != "auto" and language not in config.WHISPER_LANGUAGES:
+        console.print(f"[red]--language មិនស្គាល់: {language}[/red] "
+                      f"(ប្រើ auto ឬ {', '.join(config.WHISPER_LANGUAGES)})")
+        raise typer.Exit(code=2)
+    config.WHISPER_LANGUAGE = None if language == "auto" else language
+
+    # menu Background / Tracker របស់ Edit Video
+    if fit_background not in ("blur", "color", "image") or (fit_background == "image" and fit_image is None):
+        console.print("[red]--fit-background ត្រូវជា blur, color ឬ image (image ត្រូវការ --fit-image)[/red]")
+        raise typer.Exit(code=2)
+    config.FIT_BACKGROUND = fit_background
+    config.FIT_BLUR_STRENGTH = max(0, min(100, fit_blur))
+    config.FIT_COLOR = fit_color
+    config.FIT_IMAGE = str(fit_image) if fit_image else None
+    config.FIT_RADIUS = max(0, min(200, fit_radius))
+    config.FIT_SPACING = max(0, min(20, fit_spacing))
+    config.TRACKING = not no_tracking
+    if no_track_ranges is not None:
+        from pipeline.cuts import read_cut_list
+        config.NO_TRACK_RANGES = [(float(a), float(b)) for a, b in read_cut_list(no_track_ranges)]
+
+    if motion_zoom not in ("off", "in", "out") or motion_shake not in ("off", "loud", "all"):
+        console.print("[red]--motion-zoom ត្រូវជា off/in/out, --motion-shake ត្រូវជា off/loud/all[/red]")
+        raise typer.Exit(code=2)
+    config.MOTION_ZOOM = motion_zoom
+    config.MOTION_ZOOM_AMOUNT = max(1, min(20, motion_zoom_amount))
+    config.MOTION_KEYWORDS = max(0, min(20, motion_keywords))
+    config.MOTION_SHAKE = motion_shake
+    if caption_animation not in config.CAPTION_ANIMATIONS:
+        console.print(f"[red]--caption-animation ត្រូវជា {', '.join(config.CAPTION_ANIMATIONS)}[/red]")
+        raise typer.Exit(code=2)
+    config.CAPTION_ANIMATION = caption_animation
+
+    if subject_tracks is not None:
+        from pipeline.subject_track import Track
+        config.SUBJECT_TRACKS = [Track.from_dict(item)
+                                 for item in json.loads(subject_tracks.read_text(encoding="utf-8"))]
+
     try:
         allowed_layouts = parse_layouts(layout)
     except ValueError as e:
@@ -159,6 +266,9 @@ def main(
         config.CAPTION_KEYWORD_COLOR = config.resolve_caption_color(caption_color)
         config.apply_caption_style(caption_size, caption_outline, caption_case,
                                    caption_position)
+        config.apply_caption_look(caption_font, caption_text_color, caption_outline_color,
+                                  caption_italic, caption_underline, caption_shadow,
+                                  caption_keywords, caption_keyword_colors, caption_lines)
     except ValueError as e:
         console.print(f"[red]{e}[/red]")
         raise typer.Exit(code=2)
@@ -184,6 +294,51 @@ def main(
         clips_dir = out_dir / ("full" if aspect == "9:16"
                                else f"full_{aspect.replace(':', 'x')}")
 
+    # ---------- Step 0 (Edit Video): cut list -> ច្បាប់ចម្លងដែលគ្មានចន្លោះកាត់ ----------
+    # វីដេអូដើមអានតែប៉ុណ្ណោះ. ច្បាប់ចម្លង + audio + transcript ដែលរំកិលពេល នៅ `edit/`;
+    # render ទៅ `full_edit*` ក្បែរលទ្ធផលផ្សេងទៀត. ពីទីនេះតទៅ pipeline ឃើញតែច្បាប់ចម្លង.
+    work_dir = out_dir            # កន្លែង audio.wav / transcript.json / seats.json
+    title_stem = video.stem
+    if cuts is not None:
+        from pipeline.cuts import (TRANSITIONS, cut_video, edit_folder, frame_rate, keep_ranges,
+                                   normalize, read_cut_list, shift_transcript, snap_to_frames,
+                                   video_seconds)
+        from pipeline.transcribe import save_transcript
+        if not full:
+            console.print("[red]--cuts ត្រូវប្រើជាមួយ --full[/red] (កាត់វីដេអូទាំងមូល)")
+            raise typer.Exit(code=2)
+        if transition not in TRANSITIONS:
+            console.print(f"[red]--transition មិនស្គាល់: {transition}[/red] ({', '.join(TRANSITIONS)})")
+            raise typer.Exit(code=2)
+        original = load_transcript(out_dir / "transcript.json")
+        if original is None:
+            console.print("[red]គ្មាន transcript — រត់ --transcribe-only មុន[/red] (ការកាត់ត្រូវការពាក្យ)")
+            raise typer.Exit(code=2)
+        # រយៈពេលរូប (មិនមែន file): សំឡេងអាចវែងជាងរូប ហើយផ្នែកចុងក្រោយនឹងគ្មាន frame
+        source_seconds = video_seconds(video) or probe_duration(video)
+        removed = normalize(read_cut_list(cuts), source_seconds)
+        # គែមនៅលើ frame: រូប និងសំឡេងកាត់ចំពេលដូចគ្នា, transcript រំកិលតាមពេលដដែលនោះ
+        keeps = snap_to_frames(keep_ranges(source_seconds, removed), frame_rate(video))
+        if not removed or not keeps:
+            console.print("[red]cut list ទទេ ឬលុបវីដេអូទាំងមូល[/red]")
+            raise typer.Exit(code=2)
+        work_dir = out_dir / "edit"
+        with console.status(f"[cyan]0/6 cut[/cyan] — លុប {len(removed)} ចន្លោះ ({transition})..."):
+            video = cut_video(video, keeps, work_dir / "source.mp4",
+                              size=probe_dimensions(video), transition=transition)
+            save_transcript(shift_transcript(original, keeps), work_dir / "transcript.json")
+        # ចន្លោះ "បិទ tracking" ជាពេលក្នុងវីដេអូដើម -> ពេលក្នុងច្បាប់ចម្លង
+        from pipeline.cuts import shift_range
+        config.NO_TRACK_RANGES = [part for span in config.NO_TRACK_RANGES
+                                  for part in shift_range(span, keeps)]
+        from pipeline.subject_track import shift_track
+        config.SUBJECT_TRACKS = [part for track in config.SUBJECT_TRACKS
+                                 for part in shift_track(track, keeps)]
+        kept = sum(b - a for a, b in keeps)
+        console.print(f"[green]✔ 0/6 cut[/green]         {short_path(video)}  "
+                      f"{source_seconds:.1f}s -> {kept:.1f}s ({len(removed)} ចន្លោះ, {transition})")
+        clips_dir = out_dir / edit_folder(aspect)
+
     console.print("\n[bold]ClipForge Studio[/bold] — Phase 0\n")
     console.print(f"  video       : {video}")
     console.print(f"  output      : {short_path(out_dir)}")
@@ -206,9 +361,9 @@ def main(
         duration = probe_duration(video)
         console.print(f"  duration    : {duration / 60:.1f} នាទី ({duration:.1f}s)\n")
 
-        was_cached = (out_dir / "audio.wav").exists() and not redo_audio
+        was_cached = (work_dir / "audio.wav").exists() and not redo_audio
         with console.status("[cyan]1/6 audio[/cyan] — extract WAV 16kHz mono..."):
-            wav = extract_audio(video, out_dir / "audio.wav", force=redo_audio)
+            wav = extract_audio(video, work_dir / "audio.wav", force=redo_audio)
 
         size_mb = wav.stat().st_size / 1_000_000
         tag = " [dim](cache)[/dim]" if was_cached else ""
@@ -218,9 +373,16 @@ def main(
         raise typer.Exit(code=1)
 
     # ---------- Step 2: transcribe ----------
-    cache = out_dir / "transcript.json"
+    cache = work_dir / "transcript.json"
+    # transcript ចាស់ជាភាសាផ្សេងពីភាសាដែលសុំ (ឧ. Whisper រកឃើញ fr តែអ្នកជ្រើស en) -> ធ្វើថ្មី
+    cached = load_transcript(cache)
+    if config.WHISPER_LANGUAGE and cached is not None and cached.language != config.WHISPER_LANGUAGE:
+        console.print(f"[yellow]transcript ចាស់ជា {cached.language} — transcribe ម្តងទៀតជា "
+                      f"{config.WHISPER_LANGUAGE}[/yellow]")
+        redo_transcribe = True
+        redo_highlights = True     # clip ដែល AI ជ្រើសពី transcript ចាស់ លែងត្រូវគ្នា
     # ប្រើ loader ដើម្បីដឹងថា cache *ប្រើបាន* ពិត (file អាចខូច ឬ version ចាស់)
-    was_cached = not redo_transcribe and load_transcript(cache) is not None
+    was_cached = not redo_transcribe and cached is not None
     try:
         if was_cached:
             transcript = transcribe(wav, cache, force=False, model_name=whisper_model)
@@ -230,12 +392,14 @@ def main(
                 task = progress.add_task("transcribe", total=duration)
                 transcript = transcribe(
                     wav, cache, force=redo_transcribe, model_name=whisper_model,
-                    on_progress=lambda sec: progress.update(task, completed=min(sec, duration)),
+                    on_progress=lambda sec: (progress.update(task, completed=min(sec, duration)),
+                                             report_progress("transcribe", min(sec, duration), duration)),
                     on_fallback=lambda err: console.print(
                         f"[yellow]⚠ GPU បរាជ័យ -> ប្តូរទៅ CPU:[/yellow] {err}"
                     ),
                 )
                 progress.update(task, completed=duration)
+                report_progress("transcribe", duration, duration)  # segment ចុងក្រោយចប់មុនចុងវីដេអូ
 
         tag = " [dim](cache)[/dim]" if was_cached else ""
         console.print(f"[green]✔ 2/6 transcribe[/green]  {short_path(cache)}{tag}")
@@ -250,6 +414,11 @@ def main(
     except (TranscribeError, FileNotFoundError) as e:
         console.print(f"[red]✘ 2/6 transcribe បរាជ័យ:[/red] {e}")
         raise typer.Exit(code=1)
+
+    # Edit Video ត្រូវការតែពាក្យ និងពេលវេលា — ឈប់មុន LLM និង render
+    if transcribe_only:
+        console.print("[green]រួចរាល់![/green] transcript សម្រាប់ Edit Video")
+        raise typer.Exit(code=0)
 
     # ---------- Step 3: highlights ----------
     # `--full` render ទាំង video -> គ្មានអ្វីត្រូវជ្រើស និងគ្មានព្រំដែនត្រូវកែ
@@ -273,9 +442,10 @@ def main(
                 clips = find_highlights(
                     transcript, max_clips=wanted, model=model,
                     cache_path=clips_cache, force=redo_highlights,
-                    on_progress=lambda done, total: progress.update(
+                    on_progress=lambda done, total: (progress.update(
                         task, completed=done, total=total,
                         description="តម្រៀប" if done >= total - 1 else "chunk"),
+                        report_progress("highlights", done, total)),
                     on_warning=warnings.append,
                 )
 
@@ -301,7 +471,7 @@ def main(
     cached_final = None
     before: dict[str, float] = {}
     if full:
-        final = [full_video_clip(duration, video.stem)]
+        final = [full_video_clip(duration, title_stem)]
         console.print(f"[green]✔ 4/6 boundaries[/green]  រំលង ([cyan]--full[/cyan]) — "
                       f"video ពេញ {duration / 60:.1f} នាទី")
     else:
@@ -361,7 +531,7 @@ def main(
     if allowed_layouts != frozenset({"center"}):
         try:
             seats = find_seats(video, source_size, duration,
-                               cache_path=out_dir / "seats.json")
+                               cache_path=work_dir / "seats.json")
             if seats is None:
                 console.print("[yellow]⚠ រកកៅអីមិនឃើញ (មិនមែន two-shot?)[/yellow] "
                               "-> split នៅដំណើរការតាម shot តែយើងមិនដឹងថាអ្នកណាគួរនៅលើ")
@@ -379,7 +549,9 @@ def main(
                               f"{describe(segments)}[/dim]")
                 # ទីតាំង caption សម្រេចតាម shot នីមួយៗក្នុង captions.anchor_for (មិនមែនតាម
                 # layout ភាគច្រើនរបស់ clip ទៀតទេ) ដូច្នេះ margins នៅ None
-                save_layout_summary(segments, clips_dir / f"clip_{index:02d}_layout.json")
+                save_layout_summary(segments, clips_dir / f"clip_{index:02d}_layout.json",
+                                    captions=not (no_captions or clean_only),
+                                    allowed=allowed_layouts)
         except ReframeError as e:
             console.print(f"[yellow]⚠ reframe បរាជ័យ:[/yellow] {e}")
             console.print("[yellow]  -> ប្រើ center-crop ជំនួស[/yellow]")
@@ -428,14 +600,29 @@ def main(
             def tick(index: int, total: int, clip) -> None:
                 progress.update(task, completed=index - 1, total=total,
                                 description=clip.title)
+                report_progress("render", index - 1, total)
 
+            # Motion: ពេលពាក្យសំខាន់ និងសំឡេងខ្លាំង ក្នុង clip នីមួយៗ (ពេល render គណនា zoom/shake)
+            motion_cues = None
+            from pipeline import motion as motion_fx
+            if motion_fx.enabled():
+                motion_cues = []
+                for clip in final:
+                    words = [w for s in transcript.segments for w in s.words
+                             if w.end > clip.start and w.start < clip.end]
+                    motion_cues.append(motion_fx.MotionCues(
+                        keywords=motion_fx.keyword_moments(words, clip.start) if config.MOTION_KEYWORDS else [],
+                        loud=(motion_fx.loud_ranges(work_dir / "audio.wav", clip.start, clip.end)
+                              if config.MOTION_SHAKE == "loud" else [])))
             # --no-captions: .ass ត្រូវបានសង់ (សម្រាប់ .srt/.vtt) តែមិនដុតចូល video ទេ.
             # force ព្រោះ render_clip រំលង .mp4 ដែលមាន ពេលគ្មាន .ass ថ្មីជាងវា
             rendered = render_all(video, final, clips_dir,
                                   None if no_captions or clean_only else ass_files,
                                   force=redo_render or no_captions or clean_only, plans=plans,
-                                  on_progress=tick, suffix="_clean" if clean_only else "")
+                                  on_progress=tick, suffix="_clean" if clean_only else "",
+                                  motion_cues=motion_cues)
             progress.update(task, completed=len(final))
+            report_progress("render", len(final), len(final))   # tick() រត់តែមុន clip នីមួយៗ
 
         console.print(f"[green]✔ 6/6 render[/green]      {len(rendered)} MP4 ក្នុង "
                       f"{short_path(clips_dir)}")

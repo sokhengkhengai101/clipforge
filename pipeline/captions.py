@@ -107,7 +107,38 @@ def find_font_file(family: str) -> Path | None:
                 continue
             if wanted in normalise_font_name(path.stem):
                 return path
-    return None
+    # ឈ្មោះ file មិនតែងតែជាឈ្មោះ font ទេ ("Arial Black" = ariblk.ttf) — Windows ទុកឈ្មោះពិតក្នុង registry
+    return registry_fonts().get(wanted)
+
+
+def registry_fonts() -> dict[str, Path]:
+    """{ឈ្មោះ font (normalise): file} ពី registry Fonts របស់ Windows (ម៉ាស៊ីន + អ្នកប្រើ).
+
+    ឧ. "Arial Black (TrueType)" -> ariblk.ttf; collection "Cambria & Cambria Math" ចែកជាពីរ.
+    """
+    try:
+        import winreg
+    except ImportError:          # មិនមែន Windows
+        return {}
+    found: dict[str, Path] = {}
+    keys = ((winreg.HKEY_LOCAL_MACHINE, WINDOWS_FONT_DIRS[0]), (winreg.HKEY_CURRENT_USER, WINDOWS_FONT_DIRS[1]))
+    for root, folder in keys:
+        try:
+            key = winreg.OpenKey(root, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts")
+        except OSError:
+            continue
+        with key:
+            index = 0
+            while True:
+                try:
+                    name, value, _ = winreg.EnumValue(key, index)
+                except OSError:
+                    break
+                index += 1
+                path = Path(value) if Path(value).is_absolute() else folder / value
+                for part in re.sub(r"\s*\((TrueType|OpenType)\)$", "", name).split(" & "):
+                    found.setdefault(normalise_font_name(part), path)
+    return found
 
 
 def resolve_font(family: str | None = None, fallbacks: tuple[str, ...] | None = None
@@ -379,7 +410,9 @@ def cue_to_dialogue_text(cue: Cue, keywords: set[str], keyword_color: str) -> st
 # ---------- ទីតាំង និង event ----------
 
 # layout ច្រើនផ្ទាំង: caption នៅលើស្នាម ជាកន្លែងតែមួយដែលមិនបាំងមុខនរណា
-SEAM_LAYOUTS = ("split", "three", "four")
+SEAM_LAYOUTS = ("split", "three", "four", "screen1", "screen2")
+# caption នៅលើស្នាមផ្ដេកចុងក្រោយ (split នៅកណ្តាលកម្ពស់) — screen = រវាង slide និងមនុស្ស
+LAST_SEAM_LAYOUTS = ("three", "four", "screen1", "screen2")
 
 
 def anchor_for(cue: Cue, clip_start: float, segments: list | None) -> str:
@@ -427,7 +460,7 @@ def line_positions(count: int, anchor: str, margin_v: int | None = None) -> list
     gap = config.CAPTION_LINE_GAP
     margin_v = config.CAPTION_MARGIN_V if margin_v is None else margin_v
     span = (count - 1) * gap
-    seam = last_seam(anchor) if anchor in ("three", "four") else None
+    seam = last_seam(anchor) if anchor in LAST_SEAM_LAYOUTS else None
 
     if anchor == "split":
         first = config.OUT_HEIGHT / 2 - span / 2
@@ -477,47 +510,138 @@ def display_word(text: str) -> str:
     return cleaned.strip("-'") or text
 
 
-def render_line(line: list[Word], active: Word | None) -> str:
+def keyword_colours(cue: Cue, index: int) -> dict[int, str]:
+    """AI keywords highlighter: {id(word): ពណ៌} សម្រាប់ពាក្យសំខាន់ក្នុង cue — ពណ៌ឆ្លាស់តាម cue.
+
+    ឧ. cue ទី ០ = ពណ៌ទី ១, cue ទី ១ = ពណ៌ទី ២. បិទ = {}.
+    """
+    if not config.CAPTION_KEYWORD_HIGHLIGHT:
+        return {}
+    keywords = pick_keywords(cue)
+    colour = config.CAPTION_KEYWORD_COLORS[index % 2]
+    return {id(word): colour for line in cue.lines for word in line
+            if re.sub(r"[^\w']", "", word.word.strip().lower()) in keywords}
+
+
+def render_line(line: list[Word], active: Word | None, marked: dict[int, str] | None = None) -> str:
     """អត្ថបទបន្ទាត់មួយ ដែលពាក្យសកម្មលឿង និងពង្រីកបញ្ឈរបន្តិច.
 
     **ពង្រីកបញ្ឈរ (`\\fscy`) មិនមែនទាំងទទឹង (`\\fs`)**។ `\\fs` ប្តូរទទឹងបន្ទាត់ ហើយ
     ដោយបន្ទាត់ត្រូវដាក់កណ្តាល ពាក្យឯទៀតលោតឆ្វេង-ស្តាំរាល់ពេលការបំលេចផ្លាស់ទី។
     វាស់រួច: `\\fs` -> ទទឹង 692 ទៅ 708/712px; `\\fscy` -> 692px ដដែល (កម្ពស់ 51->55)។
     """
+    from pipeline import caption_fx
+
     normal_colour = ass_color(config.CAPTION_TEXT_COLOR)
-    active_colour = ass_color(config.CAPTION_KEYWORD_COLOR)
-    scale = int(round(config.CAPTION_ACTIVE_SCALE * 100))
-    grow = f"\\fscy{scale}" if scale != 100 else ""
-    shrink = "\\fscy100" if scale != 100 else ""
+    active_colour = ass_color(caption_fx.active_word_colour())
+    # tag របស់ពាក្យកំពុងនិយាយ (pop = ពង្រីកបញ្ឈរ, scale, underline, box ...) និងពាក្យផ្សេង (blur, focus)
+    grow, shrink = caption_fx.active_word_tags()
+    dim, undim = caption_fx.other_word_tags() if active is not None else ("", "")
+
+    # baby_steps: ពាក្យដែលនិយាយក្រោយពាក្យសកម្ម មើលមិនឃើញ (តែនៅតែកាន់កន្លែង)
+    hide_after = active.start if active is not None and caption_fx.hides_future_words() else None
 
     parts: list[str] = []
     for word in line:
         text = display_word(escape_ass_text(word.word.strip()))
         if config.CAPTION_UPPERCASE:
             text = text.upper()
-        if active is not None and word is active:
+        if hide_after is not None and word.start > hide_after:
+            parts.append(f"{{\\alpha&HFF&}}{text}{{\\alpha&H00&}}")
+        elif active is not None and word is active:
             parts.append(f"{{{grow}\\c{active_colour}&}}{text}"
                          f"{{{shrink}\\c{normal_colour}&}}")
+        elif marked and id(word) in marked:
+            # ពាក្យសំខាន់ (keyword highlighter) — ពណ៌របស់វាពេលមិនមែនជាពាក្យកំពុងនិយាយ
+            parts.append(f"{{{dim}\\c{ass_color(marked[id(word)])}&}}{text}{{{undim}\\c{normal_colour}&}}")
+        elif dim:
+            parts.append(f"{{{dim}}}{text}{{{undim}}}")
         else:
             parts.append(text)
     return " ".join(parts)
 
 
-def dialogue(start: float, end: float, y: float, text: str) -> str:
-    """Dialogue មួយបន្ទាត់ ដាក់ទីតាំងដោយ `\\an5\\pos` (an5 = កណ្តាលទាំងផ្ដេកនិងបញ្ឈរ)."""
-    x = config.OUT_WIDTH / 2
-    return (f"Dialogue: 0,{ass_time(start)},{ass_time(end)},Default,,0,0,0,,"
-            f"{{\\an5\\pos({x:.0f},{y:.0f})}}{text}")
+def box_line(line: list[Word], active: Word | None) -> str:
+    """អត្ថបទដដែលសម្រាប់ layer ប្រអប់ (style `Box`, BorderStyle 3): អក្សរ និងស្រមោលថ្លា ហើយប្រអប់
+    របស់ពាក្យនីមួយៗថ្លា (`\\3a&HFF&`) លើកលែងពាក្យកំពុងនិយាយ — ដូច្នេះប្រអប់នៅពីក្រោយពាក្យនោះតែមួយ.
+    ពាក្យដូចគ្នា font ដូចគ្នា = ទទឹងដូចគ្នានឹង layer អក្សរ (វាស់ផ្ទៀងផ្ទាត់ក្នុង scratchpad មុនសាងសង់)."""
+    from pipeline import caption_fx
+    # alpha របស់ប្រអប់ (highlighter ថ្លា 0x60) — `\3a` ជំនួស alpha របស់ style ដូច្នេះត្រូវដាក់វានៅទីនេះ;
+    # ប្រអប់បិទវិញ**មុន**ដកឃ្លា បើមិនដូច្នោះវាគ្របដកឃ្លាផង (វាស់: ទទឹង 244 ធៀប 225 px)
+    shown = f"{{\\3a&H{caption_fx.box_alpha():02X}&}}"
+    parts = []
+    for word in line:
+        text = display_word(escape_ass_text(word.word.strip()))
+        if config.CAPTION_UPPERCASE:
+            text = text.upper()
+        parts.append(f"{shown}{text}{{\\3a&HFF&}}" if active is not None and word is active else text)
+    return "{\\1a&HFF&\\4a&HFF&\\3a&HFF&}" + " ".join(parts)
+
+
+def intro_tags(x: float, y: float, offset_ms: int) -> str:
+    """Tag ទីតាំង + ចលនាលេច — ឥឡូវនៅ `pipeline/caption_fx.py` (ចលនាច្រើនពេកសម្រាប់ file នេះ)."""
+    from pipeline import caption_fx
+    return caption_fx.intro_tags(x, y, offset_ms)
+
+
+def dialogue(start: float, end: float, y: float, text: str, offset_ms: int | None = None,
+             layer: int = 0, style: str = "Default", cue_ms: int | None = None, dx: float = 0) -> str:
+    """Dialogue មួយបន្ទាត់ ដាក់ទីតាំងដោយ `\\an5\\pos` (an5 = កណ្តាលទាំងផ្ដេកនិងបញ្ឈរ).
+
+    `offset_ms` = event នេះចាប់ផ្តើមប៉ុន្មាន ms ក្រោយ cue (None = គ្មានចលនាលេច).
+    `cue_ms` = រយៈពេល cue ទាំងមូល សម្រាប់ចលនាដែលរត់ពេញ cue (breathe, earthquake ...).
+    `dx` = រំកិលផ្ដេកជា px (ស្រទាប់ពណ៌របស់ glitch).
+    """
+    from pipeline import caption_fx
+    x = config.OUT_WIDTH / 2 + dx
+    tags = intro_tags(x, y, offset_ms) if offset_ms is not None else f"\\an5\\pos({x:.0f},{y:.0f})"
+    if offset_ms is not None and cue_ms:
+        tags += caption_fx.hold_tags(offset_ms, cue_ms)
+    extra = shadow_tags() if style == "Default" else ""      # ប្រអប់គ្មានស្រមោល
+    return (f"Dialogue: {layer},{ass_time(start)},{ass_time(end)},{style},,0,0,0,,"
+            f"{{{tags}{extra}}}{text}")
+
+
+def plain_line(line: list[Word], prefix: str) -> str:
+    """បន្ទាត់ដោយគ្មានពណ៌ពាក្យ, មានតែ `prefix` (ឧ. `\\1a&HFF&` = លាក់អក្សរ ទុកតែប្រអប់)."""
+    parts = []
+    for word in line:
+        text = display_word(escape_ass_text(word.word.strip()))
+        parts.append(text.upper() if config.CAPTION_UPPERCASE else text)
+    return f"{{{prefix}}}" + " ".join(parts)
+
+
+def line_events(start: float, end: float, y: float, line: list[Word], active: Word | None,
+                marked: dict[int, str], offset_ms: int, cue_ms: int | None = None) -> list[str]:
+    """Dialogue របស់បន្ទាត់មួយ: ស្រទាប់ខាងក្រោម (layer 0) + អក្សរ (layer 1) ពេលចលនាត្រូវការ.
+
+    box / highlighter = ប្រអប់ពីក្រោយពាក្យកំពុងនិយាយ; with_backdrop = ប្រអប់ពីក្រោយបន្ទាត់ទាំងមូល
+    (style `Backdrop`, BorderStyle 4); glitch = ស្រទាប់ក្រហម និងខៀវ រំកិលឆ្វេង/ស្តាំ.
+    """
+    from pipeline import caption_fx
+    timing = {"offset_ms": offset_ms, "cue_ms": cue_ms}
+    under: list[str] = []
+    if caption_fx.uses_box():
+        under.append(dialogue(start, end, y, box_line(line, active), style="Box", **timing))
+    if caption_fx.uses_backdrop():
+        under.append(dialogue(start, end, y, plain_line(line, r"\1a&HFF&"), style="Backdrop", **timing))
+    for dx, colour in caption_fx.glitch_ghosts():
+        ghost = rf"\bord0\shad0\c{ass_color(colour)}&\alpha&H{caption_fx.GLITCH_ALPHA:02X}&"
+        under.append(dialogue(start, end, y, plain_line(line, ghost), dx=dx, **timing))
+    text = dialogue(start, end, y, render_line(line, active, marked), layer=1 if under else 0, **timing)
+    return [*under, text]
 
 
 def cue_events(cue: Cue, anchor: str = "normal", margin_v: int | None = None,
-               clip_start: float = 0.0) -> list[str]:
+               clip_start: float = 0.0, index: int = 0) -> list[str]:
     """Dialogue ទាំងអស់សម្រាប់ cue មួយ.
 
     ពេលបើកការបំលេចតាមសំឡេង យើងបញ្ចេញបន្ទាត់ទាំងអស់ឡើងវិញក្នុងមួយចន្លោះពេលពាក្យ
     (ពាក្យ × បន្ទាត់ event) ព្រោះបន្ទាត់ផ្សេងត្រូវតែនៅលើអេក្រង់ដដែល។
     """
     ys = line_positions(len(cue.lines), anchor, margin_v)
+    marked = keyword_colours(cue, index)
+    cue_ms = round((cue.end - cue.start) * 1000)
 
     if not config.CAPTION_WORD_HIGHLIGHT:
         keywords = pick_keywords(cue)
@@ -525,7 +649,7 @@ def cue_events(cue: Cue, anchor: str = "normal", margin_v: int | None = None,
         for line, y in zip(cue.lines, ys):
             active = next((w for w in line
                            if re.sub(r"[^\w']", "", w.word.strip().lower()) in keywords), None)
-            events.append(dialogue(cue.start, cue.end, y, render_line(line, active)))
+            events.extend(line_events(cue.start, cue.end, y, line, active, marked, 0, cue_ms))
         return events
 
     words = [w for line in cue.lines for w in line]
@@ -535,16 +659,62 @@ def cue_events(cue: Cue, anchor: str = "normal", margin_v: int | None = None,
         # ចន្លោះ 0 វិនាទី។ Event បែបនេះគ្មានអ្វីបង្ហាញ ហើយជាសំរាមក្នុង .ass។
         if end - start < 0.02:
             continue
+        offset = round((start - cue.start) * 1000)
         for line, y in zip(cue.lines, ys):
-            events.append(dialogue(start, end, y, render_line(line, word)))
+            events.extend(line_events(start, end, y, line, word, marked, offset, cue_ms))
 
     if not events:        # គ្រប់ចន្លោះខ្លីពេក -> បង្ហាញ cue ដោយគ្មានការបំលេច
-        return [dialogue(cue.start, cue.end, y, render_line(line, None))
-                for line, y in zip(cue.lines, ys)]
+        return [event for line, y in zip(cue.lines, ys)
+                for event in line_events(cue.start, cue.end, y, line, None, marked, 0, cue_ms)]
     return events
 
 
 # ---------- ASS file ----------
+
+def shadow_colour() -> str:
+    """BackColour របស់ style (`&HAABBGGRR`) — ពណ៌ shadow ជាមួយ alpha ពាក់កណ្តាលដូចមុន."""
+    return f"&H{config.CAPTION_SHADOW_ALPHA:02X}{ass_color(config.CAPTION_SHADOW_COLOR)[4:]}"
+
+
+def shadow_tags() -> str:
+    """Tag shadow សម្រាប់ x / y ដាច់ពីគ្នា និង blur (`\\xshad \\yshad \\blur` របស់ libass).
+
+    (1, 1, 0) = Shadow=1 របស់ style ដដែល -> គ្មាន tag (.ass ដូចមុនបេះបិទ).
+    """
+    x, y, blur = config.CAPTION_SHADOW_XY_BLUR
+    if (x, y, blur) == (1, 1, 0):
+        return ""
+    return f"\\xshad{x}\\yshad{y}" + (f"\\blur{blur}" if blur else "")
+
+
+def box_style(font: str, margin_v: int) -> list[str]:
+    """Style `Box` (BorderStyle 3 = ប្រអប់ជំនួសគ្រោង) សម្រាប់ animation box / highlighter, ឬ [] .
+
+    font, ទំហំ, italic ដូច Default ដើម្បីឲ្យប្រអប់ត្រូវនឹងពាក្យ; ពណ៌ប្រអប់ = ពណ៌បំលេច.
+    """
+    from pipeline import caption_fx
+    if not caption_fx.uses_box():
+        return []
+    colour = f"&H{caption_fx.box_alpha():02X}{ass_color(config.CAPTION_KEYWORD_COLOR)[4:]}"
+    return [
+        f"Style: Box,{font},{config.CAPTION_FONT_SIZE},&HFF000000,&HFF000000,{colour},&HFF000000,"
+        f"-1,{-1 if config.CAPTION_ITALIC else 0},0,0,100,100,0,0,3,{caption_fx.box_padding()},0,2,"
+        f"{config.CAPTION_MARGIN_X},{config.CAPTION_MARGIN_X},{margin_v},1"
+    ]
+
+
+def backdrop_style(font: str, margin_v: int) -> list[str]:
+    """Style `Backdrop` (BorderStyle 4 របស់ libass = ប្រអប់មួយពីក្រោយបន្ទាត់ទាំងមូល, ពណ៌ BackColour)."""
+    from pipeline import caption_fx
+    if not caption_fx.uses_backdrop():
+        return []
+    colour = f"&H{caption_fx.BACKDROP_ALPHA:02X}{ass_color(caption_fx.BACKDROP_COLOR)[4:]}"
+    return [
+        f"Style: Backdrop,{font},{config.CAPTION_FONT_SIZE},&HFF000000,&HFF000000,{colour},{colour},"
+        f"-1,{-1 if config.CAPTION_ITALIC else 0},0,0,100,100,0,0,4,{caption_fx.backdrop_padding()},0,2,"
+        f"{config.CAPTION_MARGIN_X},{config.CAPTION_MARGIN_X},{margin_v},1"
+    ]
+
 
 def ass_header(font: str, margin_v: int | None = None) -> str:
     """ផ្នែកដើមនៃ `.ass`: resolution, style (font, ពណ៌, ទីតាំង).
@@ -570,10 +740,13 @@ def ass_header(font: str, margin_v: int | None = None) -> str:
         "BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
         (
             f"Style: Default,{font},{config.CAPTION_FONT_SIZE},{primary},{primary},"
-            f"{outline},&H80000000,-1,0,0,0,100,100,0,0,1,"
+            f"{outline},{shadow_colour()},-1,{-1 if config.CAPTION_ITALIC else 0},"
+            f"{-1 if config.CAPTION_UNDERLINE else 0},0,100,100,0,0,1,"
             f"{config.CAPTION_OUTLINE},{config.CAPTION_SHADOW},2,"
             f"{config.CAPTION_MARGIN_X},{config.CAPTION_MARGIN_X},{margin_v},1"
         ),
+        *box_style(font, margin_v),
+        *backdrop_style(font, margin_v),
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
@@ -603,9 +776,9 @@ def build_ass(
     chosen_font = font or resolve_font()[0]
 
     lines = [ass_header(chosen_font, margin_v)]
-    for cue in cues:
+    for index, cue in enumerate(cues):
         anchor = anchor_for(cue, clip.start, segments)
-        lines.extend(cue_events(cue, anchor, margin_v, clip_start=clip.start))
+        lines.extend(cue_events(cue, anchor, margin_v, clip_start=clip.start, index=index))
 
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)

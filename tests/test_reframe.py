@@ -342,6 +342,17 @@ def test_short_split_becomes_single():
     assert all(s.layout.kind == "single" for s in smoothed)
 
 
+def test_short_split_respects_a_layout_list_without_single():
+    """--layout fit,split (Fill បិទ): split ខ្លីធ្លាក់ទៅ center មិនមែន single ដោយស្ងាត់ទេ."""
+    segments = [split_segment(10, 13)]
+    smoothed = R.smooth_segments(segments, min_split_sec=4.0,
+                                 allowed=R.parse_layouts("fit,split"), size=(1280, 720))
+    assert smoothed[0].layout.kind == "center"
+    smoothed = R.smooth_segments(segments, min_split_sec=4.0,
+                                 allowed=R.parse_layouts("auto"), size=(1280, 720))
+    assert smoothed[0].layout.kind == "single"
+
+
 def test_long_split_is_kept():
     segments = [single_segment(0, 10), split_segment(10, 20)]
     smoothed = R.smooth_segments(segments, min_split_sec=4.0)

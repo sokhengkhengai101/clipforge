@@ -5,6 +5,7 @@
 
 import ctypes
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -25,6 +26,12 @@ FILLER_WORDS = ("yeah", "yes", "yep", "yup", "ok", "okay", "right", "sure",
                 "mm-hmm", "mhm", "uh-huh", "uh", "um", "er", "exactly", "totally")
 # ឃ្លាបំពេញ (ពាក្យច្រើន) — "you know same thing" ចាប់ផ្តើមមិនល្អដូច "Yeah" ដែរ
 FILLER_PHRASES = (("you", "know"), ("i", "mean"), ("i", "guess"), ("kind", "of"))
+# Speech cleanup (Edit Video): ពាក្យ "អឺ" ដែលអាចលុបពីកណ្តាលប្រយោគ — តិចជាង FILLER_WORDS ខាងលើ
+# ("yeah", "right", "exactly" ជាចម្លើយពិតក្នុងប្រយោគ មិនមែនសំឡេងរអាក់រអួលទេ).
+# ចំណាំ: Whisper ច្រើនតែមិនសរសេរ "um" / "uh" ទេ — បញ្ជីនេះចាប់បានតែអ្វីដែលវាសរសេរ.
+CLEANUP_FILLERS = ("um", "uh", "uhm", "umm", "er", "erm", "ah", "hmm", "mm", "mhm", "mm-hmm", "uh-huh")
+CLEANUP_PHRASES = (("you", "know"), ("i", "mean"))
+CLEANUP_BREATH_SEC = 0.12   # ទុកដង្ហើមខ្លីៗ សងខាង pause ដែលកាត់ — កាត់ស្ងាត់ទាំងស្រុងស្តាប់ទៅលឿនពេក
 FILLER_MAX_STRIP = 5       # ពិនិត្យត្រឹមប៉ុណ្ណេះពាក្យនាំមុខ
 FILLER_MIN_KEEP = 4        # ប្រយោគត្រូវនៅសល់យ៉ាងតិចប៉ុណ្ណេះពាក្យ ទើបដក
 
@@ -60,6 +67,14 @@ WHISPER_COMPUTE_GPU = "int8_float32"
 WHISPER_MODEL_CPU = "small"
 WHISPER_COMPUTE_CPU = "int8"
 WHISPER_LANGUAGE = None    # None = auto-detect
+# ភាសានិយាយដែល `--language` ទទួល (Whisper code -> ឈ្មោះ). តែភាសាអក្សរ Latin: caption ដុតដោយ
+# Montserrat ដែលគ្មានអក្សរ ខ្មែរ/ចិន/ថៃ... (ខ្មែរ = Phase 2 ជាមួយ font Battambang).
+WHISPER_LANGUAGES = {
+    "en": "English", "fr": "French", "es": "Spanish", "de": "German", "pt": "Portuguese",
+    "it": "Italian", "nl": "Dutch", "id": "Indonesian", "vi": "Vietnamese", "pl": "Polish",
+    "sv": "Swedish", "da": "Danish", "fi": "Finnish", "cs": "Czech", "hr": "Croatian",
+    "et": "Estonian", "tr": "Turkish", "ms": "Malay", "tl": "Tagalog", "ro": "Romanian",
+}
 
 # ---------- LLM ----------
 LLM_BACKEND = "ollama"                  # "ollama" (local) ឬ "anthropic" (API)
@@ -68,6 +83,10 @@ OLLAMA_MODEL = "qwen2.5:7b-instruct"    # ប្តូរទៅ "qwen2.5:3b" ព
 ANTHROPIC_MODEL = "claude-sonnet-5-5"   # ប្រើតែពេលមាន ANTHROPIC_API_KEY
 LLM_TEMPERATURE = 0.2                   # ទាប = ចម្លើយជាប់លាប់ជាង (យើងចង់បាន JSON មិនមែនកំណាព្យ)
 LLM_MAX_TOKENS = 2048                   # output tokens អតិបរមាក្នុងមួយ chunk
+# context របស់ Ollama (prompt + ចម្លើយ). ត្រូវកំណត់ផ្ទាល់: Ollama 0.40 ប្រើ ~2048 tokens ជាលំនាំដើម
+# ហើយ**កាត់ដើម prompt ចោលស្ងាត់ៗ** (ការណែនាំទាំងមូល). វាស់លើ chunk 5 នាទី: prompt 4188 tokens,
+# លំនាំដើមអានតែ 2050 -> 0 clips; 8192 -> 3 clips. 4188 + 2048 ចម្លើយ < 8192.
+OLLAMA_NUM_CTX = 8192
 HIGHLIGHT_PROMPT = "podcast_highlights.md"   # file ក្នុង prompts/
 RANK_PROMPT = "rank_clips.md"
 # ជំហានទី ២: សុំ model ដាក់លំដាប់ candidate ធៀបគ្នា ព្រោះពិន្ទុដាច់ដោយឡែករបស់វា
@@ -101,6 +120,10 @@ VIDEO_PRESET = "medium"
 # តែវាធ្វើឲ្យគេមច្បាស់ជាង។ វាស់លើ source 720p ដែលត្រូវពង្រីក 2.8x។ "" = បិទ។
 SHARPEN = "unsharp=5:5:0.8:5:5:0.0"
 VIDEO_ENCODER = "auto"
+# keyframe រៀងរាល់ N វិនាទី. NVENC ដាក់ ២៥០ frames (10.4 s នៅ 24 fps) ជាលំនាំដើម ហើយការ seek
+# ក្នុង app (ចុច shot លើ timeline) ត្រូវ decode រហូតដល់ ២៥០ frames: វាស់ 101-249 ms និង 0-4 frames
+# បោះចោលក្រោយ seek នីមួយៗ, ហើយអ្នកអភិវឌ្ឍឃើញរូបខូចមួយភ្លែតក្នុង WebView2. 2 s ជាតម្លៃ preview ធម្មតា.
+KEYFRAME_SEC = 2
 NVENC_PRESET = "p5"
 NVENC_CQ = 26
 AUDIO_BITRATE = "128k"
@@ -149,6 +172,11 @@ SUBJECT_MODEL_PATH = PROJECT_ROOT / "models" / "object_detection_yolox_2022nov.o
 SUBJECT_MODEL_URL = ("https://github.com/opencv/opencv_zoo/raw/main/models/"
                      "object_detection_yolox/object_detection_yolox_2022nov.onnx")
 SUBJECT_MIN_SCORE = 0.45
+# Manual subject tracking: ViT tracker (OpenCV 5.0 `TrackerVit`, 0.7 MB). វាស់លើ Rhino: 14 ms/frame
+# ធៀប MIL 94 ms, ហើយមាន score ពិត (MIL ឆ្លើយ "រកឃើញ" ជានិច្ច). គ្មាន file -> MIL.
+TRACKER_MODEL_PATH = PROJECT_ROOT / "models" / "object_tracking_vittrack_2023sep.onnx"
+TRACKER_MODEL_URL = ("https://github.com/opencv/opencv_zoo/raw/main/models/"
+                     "object_tracking_vittrack/object_tracking_vittrack_2023sep.onnx")
 # ប្រអប់រូបកាយយកកណ្តាល -> crop ធ្លាក់លើទ្រូង។ យើងយកត្រឹមប៉ុណ្ណេះខាងលើជា "ក្បាល"។
 SUBJECT_HEAD_RATIO = 0.25
 USE_SUBJECTS = True                 # False = ឥរិយាបថចាស់ (មុខ ឬ center តែប៉ុណ្ណោះ)
@@ -167,6 +195,27 @@ MOTION_MAX_UNIFORMITY = 0.45
 # សកម្មភាពព្រិល (សត្វរត់) 51-66 — គម្លាត ២០០ ដង ដូច្នេះដែន 1.0 មានសុវត្ថិភាព។
 FIT_MOTION_MAX = 1.0
 FIT_BLUR = "boxblur=20:5"
+# ផ្ទៃខាងក្រោយ Fit (menu Background របស់ Edit Video): blur | color | image
+FIT_BACKGROUND = "blur"
+# កម្លាំង blur 0-100: កាំ boxblur = កម្លាំង x 0.6 ដូច្នេះ 33 = boxblur=20:5 (តម្លៃដើម), 0 = គ្មាន blur
+FIT_BLUR_STRENGTH = 33
+FIT_COLOR = "#000000"
+FIT_IMAGE: str | None = None      # path រូប (ចម្លងចូល folder render ជា .fit_background)
+FIT_RADIUS = 0                    # ជ្រុងមូលរបស់វីដេអូកណ្តាល (px នៃ output)
+FIT_SPACING = 0                   # % នៃ output ដែលទុកជុំវិញវីដេអូកណ្តាល (0-20)
+
+# `screen` layout: អេក្រង់/slide ខាងលើ + មនុស្សក្នុង webcam ខាងក្រោម (podcast ដែលចែករំលែក
+# អេក្រង់ ហើយ webcam ជាប្រអប់តូចនៅគែម). វាស់លើ How-AI-agents (640x360, 10 frame):
+# មុខ webcam នៅ x 6-10% និង 89-93% នៃទទឹង, កម្ពស់ 13% នៃរូប; ប្រអប់ webcam ≈ 2.8 ដង
+# ទទឹងមុខ; ចលនាផ្ទៃរវាងប្រអប់ទាំងពីរ 0.07-5.1 (slide, ការប្តូរ slide, ការ scroll).
+# podcast/interview/webinar: មុខមិននៅគែមទេ (0 ក្នុង 30 frame) ដូច្នេះវាមិនប្តូរ.
+SCREEN_EDGE = 0.20            # កណ្តាលមុខក្នុង 20% ពីគែមឆ្វេង/ស្តាំ = ប្រអប់ webcam
+SCREEN_FACE_MAX = 0.30        # មុខ webcam តូច (<= 30% នៃកម្ពស់រូប); close-up ធំជាងនេះ
+SCREEN_TILE_RATIO = 2.8       # ទទឹងប្រអប់ webcam ÷ ទទឹងមុខ (វាស់: 105 / 38)
+SCREEN_MIN_WIDTH = 0.40       # ផ្ទៃ slide យ៉ាងតិច 40% នៃទទឹងរូប
+# slide ស្ងៀម 0.07-0.21; អេក្រង់ដែល scroll/រំកិល (tokenizer, whiteboard) 4.0-5.1; វីដេអូពិត 51-66
+SCREEN_MOTION_MAX = 15.0
+SCREEN_TOP_RATIO = 0.45       # ផ្ទាំង slide = 45% កម្ពស់ (1080x864 លើ 9:16), មនុស្សនៅក្រោម
 
 FACE_MATCH_THRESHOLD = 0.30         # cosine អប្បបរមាទើបរាប់ថាជាមនុស្សតែម្នាក់
 # វាស់លើ footage ពិត: មុខពិត 0.90-0.94, false positive (ចង្កៀង) 0.53-0.57
@@ -196,6 +245,17 @@ TRACK_SAMPLE_SEC = 1.0              # ចន្លោះពេលយក frame �
 TRACK_DEADZONE = 0.02               # ចលនាតូចជាងនេះ (ភាគរយទទឹង) មិនរំកិលទេ
 TRACK_MAX_POINTS = 40               # ចំណុចតាមដានអតិបរមាក្នុងមួយ shot (expression មិនឲ្យវែងពេក)
 TRACK_SMOOTH_WINDOW = 3             # មធ្យមរំកិល — បន្ថយការញ័ររបស់ detector
+# menu Tracker: False = crop នៅស្ងៀមក្នុងមួយ shot (`--no-tracking`);
+# NO_TRACK_RANGES = shot ដែលជាន់ចន្លោះទាំងនេះ មិនតាមដាន (`--no-track-ranges`, "បិទ scene នេះ")
+TRACKING = True
+NO_TRACK_RANGES: list[tuple[float, float]] = []
+# Manual subject tracking: ផ្លូវដែលអ្នកជ្រើស (`subject_track.Track`) — ឈ្នះ AI លើ shot របស់វា
+SUBJECT_TRACKS: list = []
+# Motion (Edit Video): `pipeline/motion.py` — ទាំងអស់បិទជាលំនាំដើម
+MOTION_ZOOM = "off"          # off | in (ពង្រីកយឺតៗក្នុង scene នីមួយៗ) | out (បង្រួម)
+MOTION_ZOOM_AMOUNT = 8       # % នៃ zoom ក្នុងមួយ scene
+MOTION_KEYWORDS = 0          # % zoom លើពាក្យសំខាន់ (0 = បិទ)
+MOTION_SHAKE = "off"         # off | loud (ពេលសំឡេងខ្លាំង) | all
 # វិភាគ shot ស្របគ្នា — ពេលភាគច្រើនចំណាយលើការរង់ចាំ FFmpeg មិនមែន CPU ទេ។
 PLAN_WORKERS = 4
 
@@ -277,6 +337,16 @@ CAPTION_WORD_HIGHLIGHT = True
 # វាស់រួច: \fs -> ទទឹង 692->708/712px (លោត); \fscy -> 692px ដដែល, កម្ពស់ 51->55px។
 # 1.0 = បំលេចតែពណ៌ គ្មានការពង្រីក។
 CAPTION_ACTIVE_SCALE = 1.10
+# របៀប caption លេចឡើង (menu Motion): pop = ពាក្យកំពុងនិយាយពង្រីក (ដូចមុន), bounce / fade / slide =
+# cue ទាំងមូលលេចដោយចលនា 160 ms, none = ពណ៌តែប៉ុណ្ណោះ
+CAPTION_ANIMATION = "pop"
+# ក្រុម A (ពេល cue លេច) នៅ pipeline/caption_fx.py; baby_steps = ពាក្យលេចម្តងមួយៗតាមការនិយាយ
+CAPTION_ANIMATIONS = ("pop", "bounce", "fade", "slide", "none",
+                      "slide_left", "blur_in", "soft_landing", "grow", "baby_steps",
+                      # ក្រុម B: ពាក្យកំពុងនិយាយ
+                      "scale", "underline", "box", "highlighter", "seamless_bounce", "blur_switch", "focus",
+                      # ក្រុម C: ពេញមួយ cue
+                      "breathe", "baby_earthquake", "glitch_infinite_zoom", "with_backdrop")
 CAPTION_MIN_WORD_SEC = 0.10         # ពាក្យខ្លីពេកធ្វើឲ្យការបំលេចភ្លឹបភ្លែត
 # លុបវណ្ណយុត្តិចេញពី caption (OpusClip ក៏មិនបង្ហាញដែរ)។ រក្សា ' និង - ព្រោះ
 # "WEVE" និង "LONGTERM" អានមិនបាន។ ការរកប្រយោគនៅតែប្រើអត្ថបទដើម។
@@ -469,8 +539,68 @@ def resolve_caption_color(value: str) -> str:
 # flag ទាំងនេះគ្រាន់តែកំណត់តម្លៃខាងលើ — មិនប្តូររបៀបបំបែក cue ឬ render ទេ។
 CAPTION_SIZE_RANGE = (70, 120)      # % នៃទំហំដែល apply_aspect គណនា; ធំជាង 120% ប្លុក
                                     # ១៦ តួអក្សររត់ចេញក្រៅទទឹង 1080 ដក margin
-CAPTION_OUTLINE_RANGE = (0, 8)
+CAPTION_OUTLINE_RANGE = (0, 12)
 CAPTION_POSITIONS = ("auto", "top", "middle", "bottom")
+# ផ្ទាំង Captions › Font / Effects (Edit Video, Subtitles). លំនាំដើម = .ass ដូចមុនបេះបិទ
+CAPTION_ITALIC = False
+CAPTION_UNDERLINE = False
+# shadow: (x, y, blur, ពណ៌) — (1, 1, 0) ខ្មៅពាក់កណ្តាលថ្លា ជា Shadow=1 ចាស់ដដែល
+CAPTION_SHADOW_XY_BLUR = (1, 1, 0)
+CAPTION_SHADOW_COLOR = "#000000"
+CAPTION_SHADOW_ALPHA = 0x80
+# AI keywords highlighter: ពាក្យសំខាន់ (pick_keywords) មានពណ៌ជានិច្ច ឆ្លាស់ពីរពណ៌តាម cue
+CAPTION_KEYWORD_HIGHLIGHT = False
+CAPTION_KEYWORD_COLORS = ("#04F827", "#FFFD03")
+
+
+def apply_caption_look(font: str | None = None, text_color: str | None = None,
+                       outline_color: str | None = None, italic: bool = False,
+                       underline: bool = False, shadow: str | None = None,
+                       keywords: bool = False, keyword_colors: str | None = None,
+                       lines: int | None = None) -> None:
+    """Font, ពណ៌, shadow, keyword highlighter និងចំនួនបន្ទាត់ — ហៅក្រោយ apply_caption_style.
+
+    `shadow` = "x,y,blur,#RRGGBB" (ឧ. "2,2,5,#000000"); `keyword_colors` = "#RRGGBB,#RRGGBB".
+    `lines` 1-3: ចំនួនបន្ទាត់អតិបរមាក្នុងមួយ cue (ទំហំ font មិនប្តូរទេ).
+    """
+    global CAPTION_FONT, CAPTION_TEXT_COLOR, CAPTION_OUTLINE_COLOR, CAPTION_ITALIC
+    global CAPTION_UNDERLINE, CAPTION_SHADOW_XY_BLUR, CAPTION_SHADOW_COLOR, CAPTION_SHADOW
+    global CAPTION_KEYWORD_HIGHLIGHT, CAPTION_KEYWORD_COLORS, CAPTION_MAX_LINES
+
+    def colour(value: str, flag: str) -> str:
+        text = value.strip()
+        if not re.fullmatch(r"#[0-9a-fA-F]{6}", text):
+            raise ValueError(f"{flag} ត្រូវជា #RRGGBB (ទទួលបាន {value})")
+        return text.upper()
+
+    if font:
+        CAPTION_FONT = font.strip()
+    if text_color:
+        CAPTION_TEXT_COLOR = colour(text_color, "--caption-text-color")
+    if outline_color:
+        CAPTION_OUTLINE_COLOR = colour(outline_color, "--caption-outline-color")
+    CAPTION_ITALIC = bool(italic)
+    CAPTION_UNDERLINE = bool(underline)
+    if shadow:
+        parts = [part.strip() for part in shadow.split(",")]
+        if len(parts) != 4:
+            raise ValueError("--caption-shadow ត្រូវជា x,y,blur,#RRGGBB ឬ off")
+        try:
+            x, y, blur = (max(-20, min(20, int(v))) for v in parts[:3])
+        except ValueError as error:
+            raise ValueError(f"--caption-shadow: {error}") from error
+        CAPTION_SHADOW_XY_BLUR = (x, y, max(0, blur))
+        CAPTION_SHADOW_COLOR = colour(parts[3], "--caption-shadow")
+    CAPTION_KEYWORD_HIGHLIGHT = bool(keywords)
+    if keyword_colors:
+        pair = [colour(part, "--caption-keyword-colors") for part in keyword_colors.split(",")]
+        if len(pair) != 2:
+            raise ValueError("--caption-keyword-colors ត្រូវជាពណ៌ពីរ #RRGGBB,#RRGGBB")
+        CAPTION_KEYWORD_COLORS = (pair[0], pair[1])
+    if lines is not None:
+        if not 1 <= lines <= 3:
+            raise ValueError("--caption-lines ត្រូវជា 1-3")
+        CAPTION_MAX_LINES = lines
 CAPTION_POSITION = "auto"           # auto = lower third, ឬស្នាមរបស់ split (reframe)
 
 

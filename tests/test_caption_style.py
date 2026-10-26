@@ -67,7 +67,7 @@ def test_forced_position_ignores_the_split_seam():
 
 
 @pytest.mark.parametrize("kwargs", [
-    {"size_percent": 69}, {"size_percent": 121}, {"outline": 9},
+    {"size_percent": 69}, {"size_percent": 121}, {"outline": 13},
     {"case": "title"}, {"position": "left"},
 ])
 def test_rejects_out_of_range(kwargs):
