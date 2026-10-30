@@ -101,3 +101,44 @@ def test_scenes_are_cached_by_video_size_and_mtime(tmp_path, monkeypatch):
     assert editor.scenes(video, tmp_path) == [[0.0, 10.0], [10.0, 20.0], [20.0, 30.0]]
     assert editor.scenes(video, tmp_path) == [[0.0, 10.0], [10.0, 20.0], [20.0, 30.0]]
     assert len(calls) == 1                                       # លើកទី ២ មកពី scenes.json
+
+
+# ---------- Transform video ----------
+
+def test_transform_is_validated_and_saved_in_the_look(tmp_path):
+    folder = tmp_path / "p"
+    folder.mkdir()
+    saved = manage.write_look(folder, {"transform": {"x": 0.5, "y": 0.42, "scale": 1.1,
+                                                     "crop": [0.14, 0, 0.72, 1]}})
+    assert saved["transform"] == {"x": 0.5, "y": 0.42, "scale": 1.1, "crop": [0.14, 0.0, 0.72, 1.0]}
+    assert manage.read_look(folder)["transform"]["scale"] == 1.1
+    assert manage.look_options(saved)["transform_crop"] == "0.14,0,0.72,1"
+    for bad in ({"x": 0.5}, {"x": 0.5, "y": 0.5, "scale": 9}, "big",
+                {"x": 0.5, "y": 0.5, "scale": 1, "crop": [0.9, 0, 0.5, 1]}):
+        with pytest.raises(ValueError):
+            manage.clean_look({"transform": bad})
+    manage.write_look(folder, {"transform": None})              # Reset = AI layout វិញ
+    # គ្មានអ្វីត្រូវរក្សាទុក -> project.json ត្រូវលុប (ដូច ratings / title)
+    assert manage.read_look(folder)["transform"] is None and not (folder / "project.json").exists()
+
+
+def test_a_job_gets_the_transform_flags(client, tmp_path, monkeypatch):
+    video = tmp_path / "talk.mp4"
+    video.write_bytes(b"x")
+    captured = {}
+    monkeypatch.setattr(J.JobRunner, "_run", lambda self, job: captured.update(args=job.args))
+    look = {"transform": {"x": 0.3, "y": 0.7, "scale": 0.5}}       # គ្មាន crop = វីដេអូទាំងមូល
+    assert client.post("/jobs", json={"video": str(video), "full": True, "look": look}).status_code == 200
+    time.sleep(0.2)
+    args = captured["args"]
+    assert args[args.index("--transform") + 1] == "0.3,0.7,0.5" and "--transform-crop" not in args
+    bad = {"transform": {"x": 0.3, "y": 0.7, "scale": 50}}
+    assert client.post("/jobs", json={"video": str(video), "full": True, "look": bad}).status_code == 400
+
+
+def test_put_look_keeps_the_transform(client, tmp_path):
+    (tmp_path / "output" / "talk").mkdir(parents=True)
+    body = {"transform": {"x": 0.5, "y": 0.4, "scale": 1, "crop": [0.1, 0, 0.8, 1]}}
+    assert client.put("/projects/talk/look", json=body).json()["transform"]["crop"] == [0.1, 0.0, 0.8, 1.0]
+    assert client.get("/projects/talk/look").json()["transform"]["y"] == 0.4
+    assert client.put("/projects/talk/look", json={"transform": {"x": 0.5, "y": 0.5, "scale": 99}}).status_code == 400

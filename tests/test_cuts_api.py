@@ -32,11 +32,11 @@ def test_cuts_live_beside_title_and_ratings(tmp_path):
     manage.write_title(tmp_path, "My show")
     manage.write_rating(tmp_path, 1.0, 5.0, "like")
     saved = manage.write_cuts(tmp_path, [[5, 6], [1, 2], [3, 3]], "hard")    # [3,3] = ទទេ ត្រូវដក
-    assert saved == {"cuts": [[1.0, 2.0], [5.0, 6.0]], "transition": "hard", "splits": []}
+    assert saved == {"cuts": [[1.0, 2.0], [5.0, 6.0]], "transition": "hard", "splits": [], "inserts": [], "order": []}
     assert manage.read_cuts(tmp_path) == saved
     assert manage.read_title(tmp_path) == "My show" and manage.read_ratings(tmp_path)
     manage.write_cuts(tmp_path, [], "punch")                                 # ទទេ = លុប
-    assert manage.read_cuts(tmp_path) == {"cuts": [], "transition": "punch", "splits": []}
+    assert manage.read_cuts(tmp_path) == {"cuts": [], "transition": "punch", "splits": [], "inserts": [], "order": []}
     with pytest.raises(ValueError):
         manage.write_cuts(tmp_path, [[1, 2]], "wipe")
 
@@ -45,11 +45,11 @@ def test_splits_are_saved_with_the_cuts_and_kept_by_a_job_that_only_writes_cuts(
     saved = manage.write_cuts(tmp_path, [[1, 2]], "punch", [20.0, 10.0, 10.0, 0])   # 0 / ដដែល = ដក
     assert saved["splits"] == [10.0, 20.0]
     manage.write_cuts(tmp_path, [[3, 4]], "hard")                # splits=None (job) = ទុក split
-    assert manage.read_cuts(tmp_path) == {"cuts": [[3.0, 4.0]], "transition": "hard", "splits": [10.0, 20.0]}
+    assert manage.read_cuts(tmp_path) == {"cuts": [[3.0, 4.0]], "transition": "hard", "splits": [10.0, 20.0], "inserts": [], "order": []}
     manage.write_cuts(tmp_path, [], "punch")                     # គ្មាន cut តែមាន split = នៅរក្សាទុក
     assert manage.read_cuts(tmp_path)["splits"] == [10.0, 20.0]
     manage.write_cuts(tmp_path, [], "punch", [])                 # គ្មានអ្វីទាំងអស់ = លុប key edit
-    assert manage.read_cuts(tmp_path) == {"cuts": [], "transition": "punch", "splits": []}
+    assert manage.read_cuts(tmp_path) == {"cuts": [], "transition": "punch", "splits": [], "inserts": [], "order": []}
     with pytest.raises(ValueError):
         manage.write_cuts(tmp_path, [], "punch", [float(at) for at in range(1, manage.MAX_SPLITS + 2)])
 
@@ -97,7 +97,7 @@ def test_job_with_cuts_writes_the_cut_file_and_renders_into_full_edit(client, tm
     time.sleep(0.2)
     args = captured["args"]
     cut_file = args[args.index("--cuts") + 1]
-    assert json.loads(open(cut_file, encoding="utf-8").read()) == {"cuts": [[1.0, 2.0], [5.0, 6.0]]}
+    assert json.loads(open(cut_file, encoding="utf-8").read()) == {"cuts": [[1.0, 2.0], [5.0, 6.0]], "inserts": []}
     assert args[args.index("--transition") + 1] == "hard"
     assert captured["folder"] == "full_edit_16x9"
     assert manage.read_cuts(tmp_path / "output" / "talk")["cuts"] == [[1.0, 2.0], [5.0, 6.0]]
@@ -116,3 +116,93 @@ def test_full_edit_folders_are_results_marked_edited(tmp_path):
     assert found == {"full": ("9:16", False), "full_edit": ("9:16", True), "full_edit_16x9": ("16:9", True)}
     assert J.output_folder({"full": True, "cuts": "c.json"}) == "full_edit"
     assert J.output_folder({"full": True}) == "full"
+
+
+# ---- inserts ("+ Extend a clip" -> Add, ផ្នែកដែលចម្លងទៅដាក់កន្លែងផ្សេង) ----
+
+def test_inserts_are_kept_in_order_validated_and_survive_writes_without_them(tmp_path):
+    hook = {"start": 40, "end": 44, "at": 0}
+    tail = {"start": 1.23456, "end": 2, "at": 55}
+    saved = manage.write_cuts(tmp_path, [], "punch", inserts=[tail, hook])     # គ្មាន cut តែមាន insert
+    assert saved["inserts"] == [{"start": 1.235, "end": 2.0, "at": 55.0}, {"start": 40.0, "end": 44.0, "at": 0.0}]
+    manage.write_cuts(tmp_path, [[3, 4]], "hard")                            # inserts=None (job/UI ចាស់) = ទុក
+    assert manage.read_cuts(tmp_path)["inserts"] == saved["inserts"]
+    for bad in ([{"start": 5, "end": 5.05, "at": 0}], [{"start": -1, "end": 2, "at": 0}],
+                [{"start": 1, "end": 2}], [[1, 2, 3]], [hook] * (manage.MAX_INSERTS + 1)):
+        with pytest.raises(ValueError):
+            manage.write_cuts(tmp_path, [], "punch", inserts=bad)
+    manage.write_cuts(tmp_path, [], "punch", [], [])                         # គ្មានអ្វីទាំងអស់ = លុប key edit
+    assert manage.read_cuts(tmp_path)["inserts"] == []
+    assert not (tmp_path / "project.json").exists()                          # គ្មាន title / look ទៀត = file ត្រូវលុប
+
+
+def test_put_cuts_takes_inserts_and_keeps_them_when_absent(client, tmp_path):
+    write_transcript(tmp_path / "output" / "p", [Word(" a", 0.0, 0.5)])
+    hook = {"start": 10, "end": 12, "at": 0}
+    assert client.put("/projects/p/cuts", json={"cuts": [], "inserts": [hook]}).json()["inserts"] == [
+        {"start": 10.0, "end": 12.0, "at": 0.0}]
+    assert client.put("/projects/p/cuts", json={"cuts": [[1, 2]]}).json()["inserts"] == [
+        {"start": 10.0, "end": 12.0, "at": 0.0}]                             # គ្មាន field = ទុក
+    assert client.get("/projects/p/cuts").json()["inserts"][0]["at"] == 0.0
+    assert client.put("/projects/p/cuts", json={"inserts": [{"start": 1, "end": 1}]}).status_code == 400
+
+
+def test_job_with_only_an_insert_writes_it_into_the_cut_file(client, tmp_path, monkeypatch):
+    video = tmp_path / "talk.mp4"
+    video.write_bytes(b"x")
+    captured = {}
+    monkeypatch.setattr(J.JobRunner, "_run", lambda self, job: captured.update(args=job.args, folder=job.folder))
+    hook = {"start": 40, "end": 44, "at": 0}
+    answer = client.post("/jobs", json={"video": str(video), "full": True, "aspect": "4:5", "inserts": [hook]})
+    assert answer.status_code == 200
+    time.sleep(0.2)
+    args = captured["args"]
+    assert "--inserts" not in args                                           # inserts មិនមែន flag
+    cut_file = json.loads(open(args[args.index("--cuts") + 1], encoding="utf-8").read())
+    assert cut_file == {"cuts": [], "inserts": [{"start": 40.0, "end": 44.0, "at": 0.0}]}
+    assert captured["folder"] == "full_edit_4x5"
+    # pipeline អានវាបាន
+    from pipeline.cuts import read_inserts
+    assert read_inserts(args[args.index("--cuts") + 1]) == [(40.0, 44.0, 0.0)]
+    bad = client.post("/jobs", json={"video": str(video), "full": True, "inserts": [{"start": 1, "end": 1, "at": 0}]})
+    assert bad.status_code == 400
+    assert client.post("/jobs", json={"video": str(video), "inserts": [hook]}).status_code == 400   # គ្មាន full
+
+
+# ---- order: ប្លុកដែលអូសប្តូរលំដាប់លើ timeline ----
+
+def test_order_is_saved_validated_and_a_time_order_means_no_change(tmp_path):
+    moved = [[10, 30], [0, 10]]
+    assert manage.write_cuts(tmp_path, [], "punch", order=moved)["order"] == [[10.0, 30.0], [0.0, 10.0]]
+    manage.write_cuts(tmp_path, [[3, 4]], "hard")                            # order=None (job/UI ចាស់) = ទុក
+    assert manage.read_cuts(tmp_path)["order"] == [[10.0, 30.0], [0.0, 10.0]]
+    assert manage.write_cuts(tmp_path, [], "punch", order=[[0, 10], [10, 30]])["order"] == []
+    for bad in ([[1]], [[5, 5]], [[-1, 3]], "x"):
+        with pytest.raises(ValueError):
+            manage.write_cuts(tmp_path, [], "punch", order=bad)
+
+
+def test_put_cuts_takes_order_and_keeps_it_when_absent(client, tmp_path):
+    (tmp_path / "output" / "p").mkdir(parents=True)
+    assert client.put("/projects/p/cuts", json={"cuts": [], "order": [[10, 30], [0, 10]]}).json()["order"] == [
+        [10.0, 30.0], [0.0, 10.0]]
+    assert client.put("/projects/p/cuts", json={"cuts": [[1, 2]]}).json()["order"] == [[10.0, 30.0], [0.0, 10.0]]
+    assert client.put("/projects/p/cuts", json={"order": [[1, 1]]}).status_code == 400
+
+
+def test_job_with_only_an_order_reaches_the_pipeline(client, tmp_path, monkeypatch):
+    video = tmp_path / "talk.mp4"
+    video.write_bytes(b"x")
+    captured = {}
+    monkeypatch.setattr(J.JobRunner, "_run", lambda self, job: captured.update(args=job.args, folder=job.folder))
+    # លំដាប់ពេលធម្មតា ហើយគ្មានការកែផ្សេង = គ្មានអ្វីត្រូវ render
+    assert client.post("/jobs", json={"video": str(video), "full": True, "order": [[0, 10], [10, 30]]}).status_code == 400
+    assert client.post("/jobs", json={"video": str(video), "order": [[10, 30], [0, 10]]}).status_code == 400   # គ្មាន full
+    answer = client.post("/jobs", json={"video": str(video), "full": True, "aspect": "4:5", "order": [[10, 30], [0, 10]]})
+    assert answer.status_code == 200
+    time.sleep(0.2)
+    args = captured["args"]
+    assert "--order" not in args                                             # order មិនមែន flag
+    assert captured["folder"] == "full_edit_4x5"
+    from pipeline.cuts import read_order
+    assert read_order(args[args.index("--cuts") + 1]) == [(10.0, 30.0), (0.0, 10.0)]

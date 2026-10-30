@@ -155,12 +155,15 @@ TRANSCRIPT_FORMATS = ("txt", "srt")
 PARAGRAPH_PAUSE_SEC = 1.0      # TXT: កថាខណ្ឌថ្មី ក្រោយ pause វែងជាងនេះ
 
 
-def transcript_text(folder: Path, fmt: str, cuts: list[list[float]] | None = None) -> str | None:
+def transcript_text(folder: Path, fmt: str, cuts: list[list[float]] | None = None,
+                    inserts: list[dict] | None = None, order: list[list[float]] | None = None) -> str | None:
     """Transcript ជាអត្ថបទ **ដូចវីដេអូដែល Export នឹងចេញ**: ពាក្យដែលកាត់ត្រូវដក ហើយពេលរំកិល.
 
     `txt` = អត្ថបទធម្មតា (វណ្ណយុត្តិដើម), កថាខណ្ឌថ្មីក្រោយ pause > 1 s.
     `srt` = cue ដូច captions.py (`wrap_into_cues` + `build_srt`), ពេលក្នុងវីដេអូដែលកាត់រួច.
     ឧ. cuts [[9.9, 20]]: ពាក្យនៅ 25 s ក្នុងវីដេអូដើម = 14.9 s ក្នុង SRT. `None` = គ្មាន transcript.
+    `inserts` (`manage.clean_inserts`): ផ្នែកដែលបន្ថែម ចូលតាមលំដាប់ដូច Export (`cuts.sequence`).
+    `order` (`manage.clean_order`): ប្លុកដែលអូសប្តូរលំដាប់ (`cuts.rearrange`).
     """
     from pipeline import captions, cuts as cut_tools
 
@@ -169,10 +172,13 @@ def transcript_text(folder: Path, fmt: str, cuts: list[list[float]] | None = Non
     transcript = load_transcript(Path(folder) / "transcript.json")
     if transcript is None:
         return None
-    if cuts:
-        clean = cut_tools.normalize([tuple(pair) for pair in cuts], transcript.duration)
-        if clean:
-            transcript = cut_tools.shift_transcript(transcript, cut_tools.keep_ranges(transcript.duration, clean))
+    clean = cut_tools.normalize([tuple(pair) for pair in cuts], transcript.duration) if cuts else []
+    added = [(item["start"], item["end"], item["at"]) for item in inserts or []]
+    blocks = [(start, end) for start, end in order or []]
+    if clean or added or blocks:
+        arranged = cut_tools.rearrange(cut_tools.keep_ranges(transcript.duration, clean), blocks)
+        parts = cut_tools.sequence(arranged, added, transcript.duration)
+        transcript = cut_tools.shift_transcript(transcript, parts)
     words = [word for segment in transcript.segments for word in segment.words]
     if fmt == "srt":
         return captions.build_srt(captions.wrap_into_cues(words, 0.0))

@@ -15,17 +15,34 @@ import os
 import re
 import shutil
 import subprocess
+import threading
+from functools import wraps
 from pathlib import Path
 
 TITLE_FILE = "project.json"
 TITLE_MAX = 80
 
 
+# Edit Video ផ្ញើ PUT /look, /motion, /cuts ក្នុងពេលតែមួយ (autosave) ហើយ FastAPI រត់វាក្នុង thread
+# ផ្សេងគ្នា. អ្នកសរសេរនីមួយៗ អាន -> ប្តូរ key របស់ខ្លួន -> សរសេរ file ទាំងមូល; គ្មាន lock = មួយសរសេរ
+# ពីលើការប្តូររបស់មួយទៀត. RLock: function មួយហៅមួយទៀតបាន (write_look -> store_background).
+_LOCK = threading.RLock()
+
+
+def _locked(function):
+    @wraps(function)
+    def run(*args, **kwargs):
+        with _LOCK:
+            return function(*args, **kwargs)
+    return run
+
+
 IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp")
 BACKGROUNDS = ("blur", "color", "image")
 HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 DEFAULT_LOOK = {"background": "blur", "blur": 33, "color": "#000000", "image": None,
-                "radius": 0, "spacing": 0, "tracking": True, "no_track": [], "subjects": []}
+                "radius": 0, "spacing": 0, "tracking": True, "no_track": [], "subjects": [],
+                "transform": None}   # Transform video: {x, y, scale, crop[4]} ឬ None = AI layout
 SUBJECTS_MAX = 200          # ផ្លូវដោយដៃក្នុងមួយ project (មួយក្នុងមួយ scene)
 
 
@@ -54,7 +71,30 @@ def clean_look(look: dict) -> dict:
     except (KeyError, TypeError, ValueError) as error:
         raise ValueError(f"subjects ខុសទម្រង់: {error}") from error
     out["subjects"] = sorted(subjects, key=lambda item: item["start"])
+    out["transform"] = clean_transform(out["transform"])
     return out
+
+
+def clean_transform(value) -> dict | None:
+    """Transform video ពី UI -> {x, y, scale, crop} ដែលត្រឹមត្រូវ (pipeline.transform.parse ពិនិត្យ).
+
+    ឧ. {"x": 0.5, "y": 0.42, "scale": 1.1, "crop": [0.14, 0, 0.72, 1]}. None = AI layout.
+    """
+    if value is None:
+        return None
+    from pipeline.transform import TransformError, parse
+    if not isinstance(value, dict):
+        raise ValueError("transform ត្រូវជា {x, y, scale, crop}")
+    try:
+        crop = value.get("crop") or [0, 0, 1, 1]
+        parsed = parse(f"{float(value['x'])},{float(value['y'])},{float(value['scale'])}",
+                       ",".join(str(float(v)) for v in crop))
+    except (KeyError, TypeError) as error:
+        raise ValueError(f"transform ខុសទម្រង់: {error}") from error
+    except TransformError as error:
+        raise ValueError(str(error)) from error
+    return {"x": round(parsed.x, 4), "y": round(parsed.y, 4), "scale": round(parsed.scale, 4),
+            "crop": [round(v, 4) for v in parsed.crop]}
 
 
 def store_background(folder: Path, image: str | Path) -> Path:
@@ -92,6 +132,7 @@ def read_look(folder: Path) -> dict:
     return look
 
 
+@_locked
 def write_look(folder: Path, look: dict) -> dict:
     """រក្សាទុក (រូបចម្លងចូល folder មុន). លំនាំដើមទាំងអស់ = លុប key ចេញពី project.json."""
     look = clean_look(look)
@@ -120,6 +161,11 @@ def look_options(look: dict) -> dict:
         options["fit_spacing"] = look["spacing"]
     if not look["tracking"]:
         options["no_tracking"] = True
+    if look["transform"]:
+        t = look["transform"]
+        options["transform"] = f"{t['x']:g},{t['y']:g},{t['scale']:g}"
+        if t["crop"] != [0, 0, 1, 1]:
+            options["transform_crop"] = ",".join(f"{v:g}" for v in t["crop"])
     return options
 
 
@@ -154,6 +200,7 @@ def read_motion(folder: Path) -> dict:
         return dict(DEFAULT_MOTION)
 
 
+@_locked
 def write_motion(folder: Path, motion: dict) -> dict:
     """រក្សាទុក Motion ក្នុង project.json (លំនាំដើម = លុប key) — look, cuts, title នៅដដែល."""
     motion = clean_motion(motion)
@@ -200,13 +247,20 @@ def _read(folder: Path) -> dict:
 
 
 def _write(folder: Path, data: dict) -> None:
-    """សរសេរ project.json — លុប key ទទេ ហើយលុប file បើគ្មានអ្វីនៅសល់."""
+    """សរសេរ project.json — លុប key ទទេ ហើយលុប file បើគ្មានអ្វីនៅសល់.
+
+    **atomic**: សរសេរ `.tmp` រួច `os.replace` ម្តង. `write_text` ផ្ទាល់ធ្វើឲ្យ file ទទេមួយភ្លែត
+    ហើយ thread ផ្សេងដែលអានពេលនោះ ឃើញ {} — វាបានលុប cuts/splits របស់អ្នកអភិវឌ្ឍ (វាស់ 2026-10-27).
+    """
     path = Path(folder) / TITLE_FILE
     data = {key: value for key, value in data.items() if value}
     if not data:
         path.unlink(missing_ok=True)
         return
-    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    temp = path.with_suffix(".json.tmp")
+    temp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    os.replace(temp, path)
+
 
 
 def read_title(folder: Path) -> str | None:
@@ -215,6 +269,7 @@ def read_title(folder: Path) -> str | None:
     return title.strip() if isinstance(title, str) and title.strip() else None
 
 
+@_locked
 def write_title(folder: Path, title: str) -> str | None:
     """សរសេរឈ្មោះបង្ហាញ; ឈ្មោះទទេ = ត្រឡប់ទៅឈ្មោះ folder វិញ. ការវាយតម្លៃ clip នៅដដែល."""
     title = " ".join(title.split())[:TITLE_MAX]      # ដកដកឃ្លាលើស និងបន្ទាត់ថ្មី
@@ -230,27 +285,88 @@ def rating_key(start: float, end: float) -> str:
 
 
 MAX_SPLITS = 2000
+MAX_INSERTS = 200
+INSERT_MIN_SEC = 0.1   # ដូច cuts.MIN_KEEP_SEC: ផ្នែកខ្លីជាងនេះ pipeline មិនយក
+
+
+def clean_inserts(items) -> list[dict]:
+    """ផ្នែកដែលបន្ថែម ("+ Extend a clip" -> Add): `[{"start", "end", "at"}, ...]` ពេលក្នុងវីដេអូដើម.
+
+    រក្សាលំដាប់ (inserts ដែល `at` ដូចគ្នា ចាក់តាមលំដាប់នេះ — `cuts.sequence`). ផ្នែកខ្លីជាង
+    INSERT_MIN_SEC, ពេលអវិជ្ជមាន ឬ dict ខុសទម្រង់ = ValueError (400), មិនមែនដកស្ងាត់ៗទេ.
+    """
+    if not isinstance(items, list):
+        raise ValueError("inserts ត្រូវជាបញ្ជី")
+    if len(items) > MAX_INSERTS:
+        raise ValueError(f"inserts ច្រើនពេក (អតិបរមា {MAX_INSERTS})")
+    out: list[dict] = []
+    for item in items:
+        try:
+            start, end, at = (round(float(item[key]), 3) for key in ("start", "end", "at"))
+        except (KeyError, TypeError, ValueError):
+            raise ValueError("insert នីមួយៗត្រូវជា {start, end, at}") from None
+        if start < 0 or at < 0 or end - start < INSERT_MIN_SEC:
+            raise ValueError(f"insert ខុស: start {start}, end {end}, at {at}")
+        out.append({"start": start, "end": end, "at": at})
+    return out
+
+
+def clean_order(items) -> list[list[float]]:
+    """ប្លុកតាមលំដាប់ចេញ (អូសលើ timeline): `[[start, end], ...]` ពេលក្នុងវីដេអូដើម.
+
+    លំដាប់ពេលធម្មតា = `[]`: វាមិនផ្ទុកព័ត៌មានអ្វីទេ (`cuts.rearrange` ឲ្យលទ្ធផលដដែល) ដូច្នេះ
+    "បានប្តូរលំដាប់ឬទេ" = បញ្ជីមិនទទេ. ទម្រង់ខុស = ValueError (400).
+    """
+    if not isinstance(items, list):
+        raise ValueError("order ត្រូវជាបញ្ជី")
+    if len(items) > MAX_SPLITS + 1:
+        raise ValueError(f"order ច្រើនពេក (អតិបរមា {MAX_SPLITS + 1})")
+    out: list[list[float]] = []
+    for item in items:
+        try:
+            start, end = (round(float(value), 3) for value in item)
+        except (TypeError, ValueError):
+            raise ValueError("ប្លុកនីមួយៗត្រូវជា [start, end]") from None
+        if start < 0 or end - start < INSERT_MIN_SEC:
+            raise ValueError(f"ប្លុកខុស: start {start}, end {end}")
+        out.append([start, end])
+    return [] if out == sorted(out) else out
 
 
 def read_cuts(folder: Path) -> dict:
-    """cut list ដែល editor រក្សាទុក: `{"cuts": [[start, end], ...], "transition": "punch", "splits": [10.2, ...]}`.
+    """cut list ដែល editor រក្សាទុក: `{"cuts": [[start, end], ...], "transition": "punch", "splits": [10.2, ...],
+    "inserts": [{"start", "end", "at"}, ...], "order": [[start, end], ...]}`.
+
+    `order` = លំដាប់ប្លុកដែលអូសលើ timeline; `[]` = លំដាប់ពេលធម្មតា.
 
     `splits` = ចំណុចបំបែកលើ timeline (ប៊ូតុង Split): វាមិនកាត់អ្វីទេ — វាគ្រាន់តែចែក timeline ជាផ្នែក
-    ដើម្បីជ្រើសផ្នែកមួយលុប. ការលុបពិតនៅតែជា `cuts`.
+    ដើម្បីជ្រើសផ្នែកមួយលុប. ការលុបពិតនៅតែជា `cuts`. `inserts` = ផ្នែកដែលចម្លងទៅដាក់នៅពេល `at`
+    (0 = hook នៅដើម) — ផ្នែកដែលបានកាត់ ហើយ Add នៅកន្លែងដើម គ្រាន់តែចេញពី `cuts`, មិនមែន insert ទេ.
     """
     data = _read(folder).get("edit")
     if not isinstance(data, dict):
-        return {"cuts": [], "transition": "punch", "splits": []}
-    cuts = [[float(a), float(b)] for a, b in data.get("cuts", []) if float(b) > float(a)]
+        return {"cuts": [], "transition": "punch", "splits": [], "inserts": [], "order": []}
+    cuts =[[float(a), float(b)] for a, b in data.get("cuts", []) if float(b) > float(a)]
     splits = sorted({float(at) for at in data.get("splits", []) if float(at) > 0})
-    return {"cuts": cuts, "transition": data.get("transition") or "punch", "splits": splits}
+    try:
+        inserts = clean_inserts(data.get("inserts", []))
+    except ValueError:
+        inserts = []   # file ដែលកែដោយដៃខុស — មិនឲ្យ editor បើកមិនបាន
+    try:
+        order = clean_order(data.get("order", []))
+    except ValueError:
+        order = []
+    return {"cuts": cuts, "transition": data.get("transition") or "punch", "splits": splits, "inserts": inserts,
+            "order": order}
 
 
+@_locked
 def write_cuts(folder: Path, cuts: list[list[float]], transition: str = "punch",
-               splits: list[float] | None = None) -> dict:
-    """រក្សាទុក cut list (ទទេ ហើយគ្មាន split = លុបវា). ឈ្មោះ និងការវាយតម្លៃនៅដដែល.
+               splits: list[float] | None = None, inserts: list[dict] | None = None,
+               order: list[list[float]] | None = None) -> dict:
+    """រក្សាទុក cut list (ទទេ ហើយគ្មាន split / insert / order = លុបវា). ឈ្មោះ និងការវាយតម្លៃនៅដដែល.
 
-    `splits=None` = ទុក split ដែលមានស្រាប់ (job ចាប់ផ្តើមសរសេរ cuts ដោយមិនដឹងពី split).
+    `splits=None` / `inserts=None` / `order=None` = ទុកអ្វីដែលមានស្រាប់ (job ឬ UI ចាស់ដែលមិនស្គាល់វា).
     """
     from pipeline.cuts import TRANSITIONS
     if transition not in TRANSITIONS:
@@ -262,13 +378,19 @@ def write_cuts(folder: Path, cuts: list[list[float]], transition: str = "punch",
         points = sorted({round(float(at), 3) for at in splits if float(at) > 0})
         if len(points) > MAX_SPLITS:
             raise ValueError(f"split ច្រើនពេក (អតិបរមា {MAX_SPLITS})")
+    added = read_cuts(folder)["inserts"] if inserts is None else clean_inserts(inserts)
+    blocks = read_cuts(folder)["order"] if order is None else clean_order(order)
     data = _read(folder)
     edit: dict = {"cuts": clean, "transition": transition}
     if points:
         edit["splits"] = points
-    data["edit"] = edit if clean or points else None
+    if added:
+        edit["inserts"] = added
+    if blocks:
+        edit["order"] = blocks
+    data["edit"] = edit if clean or points or added or blocks else None
     _write(folder, data)
-    return {"cuts": clean, "transition": transition, "splits": points}
+    return {"cuts": clean, "transition": transition, "splits": points, "inserts": added, "order": blocks}
 
 
 def read_ratings(folder: Path) -> dict[str, str]:
@@ -279,6 +401,7 @@ def read_ratings(folder: Path) -> dict[str, str]:
     return {key: value for key, value in ratings.items() if value in RATINGS}
 
 
+@_locked
 def write_rating(folder: Path, start: float, end: float, rating: str | None) -> None:
     """កំណត់ ឬលុប (None) ការវាយតម្លៃ clip មួយ. ឈ្មោះបង្ហាញនៅដដែល."""
     if rating is not None and rating not in RATINGS:

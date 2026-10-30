@@ -60,3 +60,17 @@ def test_export_writes_into_the_export_folder_and_never_overwrites(client, tmp_p
     assert client.post("/projects/talk/transcript/export", json={"cuts": [[1, 2, 3]]}).status_code == 400
     (tmp_path / "output" / "empty").mkdir()
     assert client.post("/projects/empty/transcript/export", json={}).status_code == 404
+
+
+def test_txt_follows_an_inserted_hook(tmp_path):
+    write_transcript(tmp_path)
+    # hook = ផ្នែកចុង (That's the difference) ដាក់នៅដើម: ពាក្យរបស់វាចេញពីរដង
+    text = editor.transcript_text(tmp_path, "txt", [], [{"start": 4.3, "end": 6.0, "at": 0.0}])
+    assert text.startswith("That's the difference.") and text.count("That's the difference.") == 2
+
+
+def test_transcript_follows_the_block_order(tmp_path):
+    write_transcript(tmp_path)
+    # ប្លុកទីពីរ ("That's the difference.") មកមុន
+    text = editor.transcript_text(tmp_path, "txt", [], [], [[4.0, 10.0], [0.0, 4.0]])
+    assert text.index("That's") < text.index("Coming")

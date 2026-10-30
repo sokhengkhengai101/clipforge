@@ -76,6 +76,8 @@ class JobRequest(BaseModel):
     transcribe_only: bool | None = None # Edit Video: audio + transcribe ប៉ុណ្ណោះ
     cuts: list[list[float]] | None = None  # Edit Video: ចន្លោះដែលត្រូវកាត់ [[start, end], ...]
     transition: str | None = None       # punch / hard (នៅកន្លែងកាត់)
+    inserts: list[dict] | None = Field(default=None, max_length=200)  # "+ Extend a clip": [{start, end, at}]
+    order: list[list[float]] | None = Field(default=None, max_length=2001)  # ប្លុកតាមលំដាប់ដែលអូសលើ timeline
     look: dict | None = None            # Edit Video: Background / Tracker (manage.clean_look)
     motion: dict | None = None          # Edit Video: Motion (manage.clean_motion)
     caption_animation: str | None = None  # ឈ្មោះណាមួយក្នុង config.CAPTION_ANIMATIONS (21)
@@ -144,19 +146,31 @@ def videos() -> list[dict]:
 @app.post("/jobs")
 def start_job(request: JobRequest) -> dict:
     options = request.model_dump(exclude={"video"}, exclude_none=True)
-    if "cuts" in options:
-        # cut list ជា JSON file សម្រាប់ `--cuts` (ក្នុង output/<name>/edit/) + រក្សាទុកសម្រាប់ editor
+    inserts = options.pop("inserts", None)   # មិនមែន flag: ចូល cuts.json ជាមួយ cuts
+    order = options.pop("order", None)       # ដូចគ្នា
+    if "cuts" in options or inserts or order:
+        # cut list + inserts + order ជា JSON file សម្រាប់ `--cuts` (ក្នុង output/<name>/edit/) + រក្សាទុកសម្រាប់ editor
         folder = PROJECT_ROOT / "output" / Path(request.video).stem
-        if not options.get("full") or not options["cuts"]:
-            raise HTTPException(status_code=400, detail="cuts ត្រូវការ full និងយ៉ាងតិច ១ ចន្លោះ")
+        cuts = options.get("cuts") or []
+        try:
+            moved = manage.clean_order(order or [])   # លំដាប់ពេលធម្មតា = [] = មិនមែនការកែ
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error))
+        if not options.get("full") or not (cuts or inserts or moved):
+            raise HTTPException(status_code=400, detail="cuts / inserts / order ត្រូវការ full និងយ៉ាងតិច ១ ការកែ")
         cut_file = folder / "edit" / "cuts.json"
         cut_file.parent.mkdir(parents=True, exist_ok=True)      # មុន project.json (folder អាចមិនទាន់មាន)
         try:
-            saved = manage.write_cuts(folder, options["cuts"], options.get("transition") or "punch")
+            # inserts / order មិនផ្ញើ (UI ចាស់) = render គ្មានវា, តែ project.json ទុកអ្វីដែលមាន
+            saved = manage.write_cuts(folder, cuts, options.get("transition") or "punch", inserts=inserts, order=order)
         except (ValueError, TypeError) as error:
             raise HTTPException(status_code=400, detail=str(error))
-        cut_file.write_text(json.dumps({"cuts": saved["cuts"]}), encoding="utf-8")
-        options["cuts"] = str(cut_file)
+        used = saved["inserts"] if inserts is not None else []
+        body = {"cuts": saved["cuts"], "inserts": used}
+        if moved:
+            body["order"] = moved
+        cut_file.write_text(json.dumps(body), encoding="utf-8")
+        options["cuts"] = str(cut_file)   # output_folder() មើល `cuts` -> full_edit*
     if "motion" in options:
         # Motion -> --motion-* / --caption-animation; រក្សាទុកក្នុង project.json ដូច look
         folder = PROJECT_ROOT / "output" / Path(request.video).stem
@@ -506,6 +520,8 @@ def project_words(name: str) -> dict:
 class TranscriptExportRequest(BaseModel):
     format: str = "txt"  # txt | srt
     cuts: list[list[float]] = Field(default_factory=list, max_length=20000)  # ការលុបរបស់ editor (ឥឡូវ)
+    inserts: list[dict] = Field(default_factory=list, max_length=200)  # ផ្នែកដែលបន្ថែម (ដូច Export)
+    order: list[list[float]] = Field(default_factory=list, max_length=2001)  # លំដាប់ប្លុក (ដូច Export)
 
 
 @app.post("/projects/{name}/transcript/export")
@@ -518,7 +534,8 @@ def export_transcript(name: str, request: TranscriptExportRequest) -> dict:
     if any(len(pair) != 2 for pair in request.cuts):
         raise HTTPException(status_code=400, detail="ចន្លោះនីមួយៗត្រូវជា [start, end]")
     try:
-        text = editor.transcript_text(folder, request.format, request.cuts)
+        text = editor.transcript_text(folder, request.format, request.cuts, manage.clean_inserts(request.inserts),
+                                      manage.clean_order(request.order))
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error))
     if text is None:
@@ -535,6 +552,8 @@ class CutsRequest(BaseModel):
     cuts: list[list[float]] = Field(default_factory=list, max_length=20000)
     transition: str = "punch"
     splits: list[float] | None = None  # ចំណុច Split លើ timeline; None = ទុកដែលមានស្រាប់
+    inserts: list[dict] | None = Field(default=None, max_length=200)  # ផ្នែកដែលបន្ថែម; None = ទុកដែលមាន
+    order: list[list[float]] | None = Field(default=None, max_length=2001)  # លំដាប់ប្លុក; None = ទុកដែលមាន
 
 
 @app.get("/projects/{name}/cuts")
@@ -552,7 +571,8 @@ def save_project_cuts(name: str, request: CutsRequest) -> dict:
     if any(len(pair) != 2 for pair in request.cuts):
         raise HTTPException(status_code=400, detail="ចន្លោះនីមួយៗត្រូវជា [start, end]")
     try:
-        return {"name": name, **manage.write_cuts(folder, request.cuts, request.transition, request.splits)}
+        return {"name": name, **manage.write_cuts(folder, request.cuts, request.transition, request.splits,
+                                                  request.inserts, request.order)}
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error))
 
@@ -685,6 +705,7 @@ class LookRequest(BaseModel):
     tracking: bool = True
     no_track: list[list[float]] = Field(default_factory=list, max_length=5000)
     subjects: list[dict] = Field(default_factory=list, max_length=200)
+    transform: dict | None = None  # Transform video {x, y, scale, crop}; None = AI layout
 
 
 @app.get("/projects/{name}/look")
