@@ -1,4 +1,5 @@
 import { createContext, createElement, useContext, useEffect, useState, type ReactNode } from 'react'
+import { khmerNumber } from './screens/khmer'
 
 /** ភាសា app (Settings → ទូទៅ → ភាសា app). មិនមែនភាសា subtitles ក្នុងវីដេអូទេ — នោះជា Phase 2.
  *
@@ -59,4 +60,10 @@ export function useLang(): LangState {
 export function useT(): (km: string | Text, en?: string) => string {
   const { lang } = useLang()
   return (km, en) => (typeof km === 'string' ? (lang === 'en' ? (en ?? km) : km) : km[lang])
+}
+
+/** លេខតាមភាសា app: ខ្មែរ "១២", English "12". `const num = useNum()` រួច `num(cuts.length)`. */
+export function useNum(): (value: number | string) => string {
+  const { lang } = useLang()
+  return (value) => (lang === 'en' ? String(value) : khmerNumber(value))
 }

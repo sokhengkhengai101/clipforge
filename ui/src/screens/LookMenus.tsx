@@ -3,6 +3,7 @@ import { imageUrl, type Look } from '../api'
 import { focusRing } from '../kit/styles'
 import { MenuButton, MenuItem } from './Menu'
 import { pickImage } from './pickFile'
+import { useT } from '../i18n'
 
 /* menu Background និង Tracker របស់ Edit Video — រចនាតាមរូប OpusClip (អ្នកអភិវឌ្ឍ 2026-10-26).
  * ការកំណត់ទាំងអស់ជា `Look` មួយ (api.ts), ហើយ Export ផ្ញើវាទៅ sidecar ជា flag `--fit-*` / `--no-tracking`. */
@@ -11,6 +12,7 @@ type Change = (patch: Partial<Look>) => void
 
 /** ផ្ទាំង Background: Blur (កម្លាំង), Color, Image, Video (Phase 3), ជ្រុងមូល, spacing. */
 export function BackgroundMenu({ look, onChange }: { look: Look; onChange: Change }) {
+  const t = useT()
   const [typing, setTyping] = useState(false) // browser: គ្មានផ្ទាំងជ្រើស -> វាយ path
   const [path, setPath] = useState('')
   const label = { blur: 'Blur', color: 'Color', image: 'Image' }[look.background]
@@ -23,12 +25,12 @@ export function BackgroundMenu({ look, onChange }: { look: Look; onChange: Chang
     <MenuButton label={`Background: ${label}`} icon={<BackgroundIcon />} menuLabel="Background" width={290}>
       {() => (
         <div className="flex flex-col gap-1">
-          <Heading>ជ្រើសរចនាផ្ទៃខាងក្រោយ</Heading>
+          <Heading>{t('ជ្រើសរចនាផ្ទៃខាងក្រោយ', 'Choose a background')}</Heading>
           <MenuItem checked={look.background === 'blur'} onClick={() => onChange({ background: 'blur' })}>
             Blur
           </MenuItem>
           {look.background === 'blur' && (
-            <Slider label="កម្លាំង blur" value={look.blur} max={100} onChange={(blur) => onChange({ blur })} />
+            <Slider label={t('កម្លាំង blur', 'Blur strength')} value={look.blur} max={100} onChange={(blur) => onChange({ blur })} />
           )}
           <MenuItem checked={look.background === 'color'} onClick={() => onChange({ background: 'color' })}>
             Color
@@ -39,7 +41,7 @@ export function BackgroundMenu({ look, onChange }: { look: Look; onChange: Chang
                 type="color"
                 value={look.color}
                 onChange={(event) => onChange({ color: event.target.value.toUpperCase() })}
-                aria-label="ពណ៌ផ្ទៃ"
+                aria-label={t('ពណ៌ផ្ទៃ', 'Background colour')}
                 className={`h-8 w-12 cursor-pointer rounded-field border-0 bg-transparent p-0 ${focusRing}`}
               />
               <span className="tabular-nums">{look.color}</span>
@@ -73,11 +75,11 @@ export function BackgroundMenu({ look, onChange }: { look: Look; onChange: Chang
                     value={path}
                     onChange={(event) => setPath(event.target.value)}
                     placeholder="D:\Pictures\bg.jpg"
-                    aria-label="path រូប"
+                    aria-label={t('path រូប', 'Image path')}
                     className={`min-w-0 flex-1 rounded-field border-0 bg-field px-2 py-1.5 type-hint text-text ${focusRing}`}
                   />
                   <button type="submit" className={`cursor-pointer rounded-field border-0 bg-raised-2 px-2 type-hint text-text ${focusRing}`}>
-                    ប្រើ
+                    {t('ប្រើ', 'Use')}
                   </button>
                 </form>
               ) : (
@@ -86,26 +88,26 @@ export function BackgroundMenu({ look, onChange }: { look: Look; onChange: Chang
                   onClick={() => void chooseImage()}
                   className={`self-start cursor-pointer rounded-field border-0 bg-raised-2 px-2.5 py-1 type-hint text-text hover:bg-raised-3 ${focusRing}`}
                 >
-                  ជ្រើសរូប…
+                  {t('ជ្រើសរូប…', 'Choose image…')}
                 </button>
               )}
             </div>
           )}
-          <MenuItem checked={false} disabled title="វីដេអូជាផ្ទៃខាងក្រោយ — Phase 3 (brand kits)">
+          <MenuItem checked={false} disabled title={t('វីដេអូជាផ្ទៃខាងក្រោយ — Phase 3 (brand kits)', 'A video as the background — Phase 3 (brand kits)')}>
             Video <span className="ml-auto text-[11px] font-bold text-text-4">PHASE 3</span>
           </MenuItem>
 
-          <Heading>កែតម្រូវ</Heading>
+          <Heading>{t('កែតម្រូវ', 'Adjust')}</Heading>
           <Slider label="Corner radius" value={look.radius} max={200} onChange={(radius) => onChange({ radius })} />
           <Slider label="Spacing" unit="%" value={look.spacing} max={20} onChange={(spacing) => onChange({ spacing })} />
 
           <div className="my-1 border-t border-line" />
           {/* render មួយប្រើ look មួយលើគ្រប់ shot Fit — ធីក និងចាក់សោ (ដូច "ប្រើ style លើ clips ទាំងអស់") */}
-          <label className="flex items-center gap-2 px-3 py-1 type-body text-text-3" title="render មួយប្រើការកំណត់មួយលើគ្រប់ shot Fit">
+          <label className="flex items-center gap-2 px-3 py-1 type-body text-text-3" title={t('render មួយប្រើការកំណត់មួយលើគ្រប់ shot Fit', 'One render uses one setting on every Fit shot')}>
             <input type="checkbox" checked disabled className="size-4 accent-gold" />
             Apply to all same layout
           </label>
-          <p className="m-0 px-3 pb-1 type-hint text-text-4">មានឥទ្ធិពលលើ shot Fit (slide / រូបស្ងៀម) ពេល reframe</p>
+          <p className="m-0 px-3 pb-1 type-hint text-text-4">{t('មានឥទ្ធិពលលើ shot Fit (slide / រូបស្ងៀម) ពេល reframe', 'Affects Fit shots (slides / still pictures) when reframing')}</p>
         </div>
       )}
     </MenuButton>
@@ -124,10 +126,11 @@ export function TrackerMenu({
   onChange: Change
   onManual: () => void // បើក dialog Manual subject tracking
 }) {
+  const t = useT()
   const overlaps = (range: [number, number]) => scene !== null && range[0] < scene[1] && range[1] > scene[0]
   const sceneOff = look.no_track.some(overlaps)
-  const manual = look.subjects.length ? ` · ដោយដៃ ${look.subjects.length}` : ''
-  const label = (!look.tracking ? 'OFF' : look.no_track.length ? `ON · បិទ ${look.no_track.length}` : 'ON') + manual
+  const manual = look.subjects.length ? ` · ${t('ដោយដៃ', 'manual')} ${look.subjects.length}` : ''
+  const label = (!look.tracking ? 'OFF' : look.no_track.length ? `ON · ${t('បិទ', 'off')} ${look.no_track.length}` : 'ON') + manual
   return (
     <MenuButton label={`Tracker: ${label}`} icon={<TrackerIcon />} menuLabel="Tracker" width={290}>
       {(close) => (
@@ -138,7 +141,7 @@ export function TrackerMenu({
           <MenuItem
             checked={sceneOff}
             disabled={!look.tracking || scene === null}
-            title={scene ? `scene ${scene[0].toFixed(1)}-${scene[1].toFixed(1)} s` : 'កំពុងរក scene…'}
+            title={scene ? `scene ${scene[0].toFixed(1)}-${scene[1].toFixed(1)} s` : t('កំពុងរក scene…', 'Finding scenes…')}
             onClick={() => {
               if (!scene) return
               onChange({
@@ -149,13 +152,16 @@ export function TrackerMenu({
               close()
             }}
           >
-            {sceneOff ? 'បើក tracking scene នេះវិញ' : 'បិទ tracking សម្រាប់ scene នេះ'}
+            {sceneOff ? t('បើក tracking scene នេះវិញ', 'Turn tracking back on for this scene') : t('បិទ tracking សម្រាប់ scene នេះ', 'Turn tracking off for this scene')}
           </MenuItem>
           <MenuItem checked={!look.tracking} onClick={() => (onChange({ tracking: !look.tracking }), close())}>
-            {look.tracking ? 'បិទ tracking ទាំងអស់' : 'បើក tracking វិញ'}
+            {look.tracking ? t('បិទ tracking ទាំងអស់', 'Turn all tracking off') : t('បើក tracking វិញ', 'Turn tracking back on')}
           </MenuItem>
           <p className="m-0 px-3 pt-1 type-hint text-text-4">
-            Tracking = crop រំកិលតាមមុខក្នុង shot. បិទ = crop នៅស្ងៀម. ដោយដៃ = តាមអ្វីដែលអ្នកចុច (ឈ្នះ AI)
+            {t(
+              'Tracking = crop រំកិលតាមមុខក្នុង shot. បិទ = crop នៅស្ងៀម. ដោយដៃ = តាមអ្វីដែលអ្នកចុច (ឈ្នះ AI)',
+              'Tracking = the crop follows the face in a shot. Off = the crop stays still. Manual = follows what you clicked (wins over the AI)',
+            )}
           </p>
         </div>
       )}

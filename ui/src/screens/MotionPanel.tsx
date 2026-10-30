@@ -1,6 +1,7 @@
 import type { Motion } from '../api'
 import { Segmented, Switch } from '../kit/controls'
 import { focusRing } from '../kit/styles'
+import { useT } from '../i18n'
 
 type Transition = 'punch' | 'hard'
 
@@ -20,11 +21,12 @@ export function MotionPanel({
   onTransition: (value: Transition) => void
   cutCount: number
 }) {
+  const t = useT()
   return (
     <div className="flex flex-col gap-5">
       <span className="type-label font-semibold">Motion</span>
 
-      <Section title="Camera zoom" hint="zoom យឺតៗក្នុង scene នីមួយៗ — ចាប់ផ្តើមឡើងវិញរាល់ scene">
+      <Section title="Camera zoom" hint={t('zoom យឺតៗក្នុង scene នីមួយៗ — ចាប់ផ្តើមឡើងវិញរាល់ scene', 'a slow zoom in each scene — starts again at every scene')}>
         <Segmented
           label="Camera zoom"
           size="sm"
@@ -32,26 +34,26 @@ export function MotionPanel({
           onChange={(zoom) => onChange({ zoom })}
           options={[
             { value: 'off', label: 'Off' },
-            { value: 'in', label: 'ពង្រីក' },
-            { value: 'out', label: 'បង្រួម' },
+            { value: 'in', label: t('ពង្រីក', 'In') },
+            { value: 'out', label: t('បង្រួម', 'Out') },
           ]}
         />
         {motion.zoom !== 'off' && (
-          <Slider label="កម្លាំង" value={motion.zoom_amount} min={1} max={20} unit="%" onChange={(zoom_amount) => onChange({ zoom_amount })} />
+          <Slider label={t('កម្លាំង', 'Strength')} value={motion.zoom_amount} min={1} max={20} unit="%" onChange={(zoom_amount) => onChange({ zoom_amount })} />
         )}
       </Section>
 
-      <Section title="Zoom លើពាក្យសំខាន់" hint="zoom ភ្លាមពេលពាក្យសំខាន់ (ពាក្យវែងក្នុង caption) — ឃ្លាតគ្នា ≥ 3 s">
+      <Section title={t('Zoom លើពាក្យសំខាន់', 'Keyword zoom')} hint={t('zoom ភ្លាមពេលពាក្យសំខាន់ (ពាក្យវែងក្នុង caption) — ឃ្លាតគ្នា ≥ 3 s', 'a quick zoom on keywords (long words in a caption) — at least 3 s apart')}>
         <div className="flex items-center justify-between">
-          <span className="type-body text-text-2">{motion.keywords > 0 ? 'បើក' : 'បិទ'}</span>
-          <Switch checked={motion.keywords > 0} onChange={(on) => onChange({ keywords: on ? 8 : 0 })} label="Zoom លើពាក្យសំខាន់" />
+          <span className="type-body text-text-2">{motion.keywords > 0 ? t('បើក', 'On') : t('បិទ', 'Off')}</span>
+          <Switch checked={motion.keywords > 0} onChange={(on) => onChange({ keywords: on ? 8 : 0 })} label={t('Zoom លើពាក្យសំខាន់', 'Keyword zoom')} />
         </div>
         {motion.keywords > 0 && (
-          <Slider label="កម្លាំង" value={motion.keywords} min={1} max={20} unit="%" onChange={(keywords) => onChange({ keywords })} />
+          <Slider label={t('កម្លាំង', 'Strength')} value={motion.keywords} min={1} max={20} unit="%" onChange={(keywords) => onChange({ keywords })} />
         )}
       </Section>
 
-      <Section title="Camera shake" hint="ញ័រ 0.6% ដូចកាន់កាមេរ៉ាដោយដៃ — គែមរូបត្រូវកាត់ 1.5%">
+      <Section title="Camera shake" hint={t('ញ័រ 0.6% ដូចកាន់កាមេរ៉ាដោយដៃ — គែមរូបត្រូវកាត់ 1.5%', 'a 0.6% shake like a handheld camera — the edges are cropped 1.5%')}>
         <Segmented
           label="Camera shake"
           size="sm"
@@ -59,8 +61,8 @@ export function MotionPanel({
           onChange={(shake) => onChange({ shake })}
           options={[
             { value: 'off', label: 'Off' },
-            { value: 'loud', label: 'សំឡេងខ្លាំង' },
-            { value: 'all', label: 'ពេញវីដេអូ' },
+            { value: 'loud', label: t('សំឡេងខ្លាំង', 'Loud moments') },
+            { value: 'all', label: t('ពេញវីដេអូ', 'Whole video') },
           ]}
         />
       </Section>
@@ -68,7 +70,7 @@ export function MotionPanel({
 
       <Section
         title="Transition"
-        hint={cutCount ? `នៅកន្លែងកាត់ ${cutCount} កន្លែង` : 'ប្រើពេលអ្នកកាត់ពាក្យ ឬ pause (មិនទាន់មានការកាត់)'}
+        hint={cutCount ? t(`នៅកន្លែងកាត់ ${cutCount} កន្លែង`, `at ${cutCount} cuts`) : t('ប្រើពេលអ្នកកាត់ពាក្យ ឬ pause (មិនទាន់មានការកាត់)', 'used where you cut words or pauses (no cuts yet)')}
       >
         <Segmented
           label="Transition"
@@ -81,7 +83,7 @@ export function MotionPanel({
           ]}
         />
       </Section>
-      <p className="m-0 type-hint text-text-4">Preview ប្រហាក់ប្រហែល — Export render ពិតលើវីដេអូទាំងមូល</p>
+      <p className="m-0 type-hint text-text-4">{t('Preview ប្រហាក់ប្រហែល — Export render ពិតលើវីដេអូទាំងមូល', 'An approximate preview — Export renders the real thing over the whole video')}</p>
     </div>
   )
 }

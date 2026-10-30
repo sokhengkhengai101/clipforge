@@ -827,14 +827,14 @@ export default function App() {
           job={mine}
           busy={(job.running || job.starting) && !mine}
           onTranscribe={() => job.start({ video: chosen.path, ...pack.options, transcribe_only: true })}
-          onExport={(settings, style, cuts, transition, look, motion) =>
+          onExport={(settings, style, cuts, transition, look, motion, inserts, order) =>
             startReframe(
               settings,
               {
                 ...styleOptions(style),
                 ...(style.off ? { no_captions: true } : {}),
-                // គ្មានការកាត់ = render វីដេអូទាំងមូលធម្មតា (folder full*); មានការកាត់ = full_edit*
-                ...(cuts.length ? { cuts, transition } : {}),
+                // គ្មានការកាត់ និងគ្មានផ្នែកបន្ថែម = render វីដេអូទាំងមូលធម្មតា (folder full*); មាន = full_edit*
+                ...(cuts.length || inserts.length || order.length ? { cuts, transition, inserts, order } : {}),
                 look, // Background / Tracker -> --fit-* / --no-tracking (លំនាំដើមមិនផ្ញើ flag)
                 motion, // Motion -> --motion-* / --caption-animation
               },

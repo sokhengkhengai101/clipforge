@@ -3,12 +3,14 @@ import { captionTextStyle } from '../captionLook'
 import { DEFAULT_STYLE, type StylePreset } from '../captionStyle'
 import { SubtitleIcon } from '../kit/icons'
 import { focusRing } from '../kit/styles'
+import { useT } from '../i18n'
 
 /* ប្រើដោយ Subtitles (Presets) និងទំព័រ Import (Quick presets) — preset ដដែល គូរដូចគ្នា. */
 
 /** គំរូតូចនៃ preset នីមួយៗ — preset ដែល render បាន គូរ "TO GET STARTED" ដោយ style ពិតរបស់វា
  *  (font, ពណ៌, stroke, italic) ដូចរូប OpusClip; Box និង Neon (មិនទាន់ render បាន) នៅជារូបគំរូ. */
 export function PresetCard({ preset, on, onPick }: { preset: StylePreset; on: boolean; onPick: () => void }) {
+  const t = useT()
   const real = preset.style && !preset.style.off ? { ...DEFAULT_STYLE, ...preset.style } : null
   const sample: Record<string, ReactNode> = {
     off: <SubtitleIcon name="none" size={32} />,
@@ -32,7 +34,7 @@ export function PresetCard({ preset, on, onPick }: { preset: StylePreset; on: bo
       aria-pressed={on}
       disabled={!preset.style}
       onClick={onPick}
-      title={preset.style ? undefined : 'renderer មិនទាន់គូរ style នេះបាន'}
+      title={preset.style ? undefined : t('renderer មិនទាន់គូរ style នេះបាន', 'The renderer cannot draw this style yet')}
       className={`flex cursor-pointer flex-col gap-1.5 border-0 bg-transparent p-0 text-left disabled:cursor-default disabled:opacity-40 ${
         on ? 'text-text' : 'text-text-3'
       } ${focusRing}`}
@@ -53,7 +55,7 @@ export function PresetCard({ preset, on, onPick }: { preset: StylePreset; on: bo
           sample[preset.id]
         )}
       </span>
-      <span className={`text-[13px] ${on ? 'font-semibold' : ''}`}>{preset.name}</span>
+      <span className={`text-[13px] ${on ? 'font-semibold' : ''}`}>{t(preset.name, preset.en)}</span>
     </button>
   )
 }

@@ -3,7 +3,7 @@ import { api, sourceFrameUrl, sourceUrl, type Look, type PickAnswer, type Video 
 import { Dialog } from '../kit/Dialog'
 import { focusRing } from '../kit/styles'
 import { pathAt, trackAt } from '../subjectPath'
-import { khmerNumber } from './khmer'
+import { useNum, useT } from '../i18n'
 
 type Box = [number, number, number, number]
 
@@ -30,6 +30,8 @@ export function SubjectTrackDialog({
   onLook: (look: Look) => void
   onClose: () => void
 }) {
+  const t = useT()
+  const num = useNum()
   const player = useRef<HTMLVideoElement>(null)
   const [time, setTime] = useState(initialTime)
   const [playing, setPlaying] = useState(false)
@@ -86,9 +88,14 @@ export function SubjectTrackDialog({
         const covered = found.good_until - found.good_from
         const whole = answer.scene[1] - answer.scene[0]
         setMessage(
-          `តាមបាន ${found.good_from.toFixed(1)}–${found.good_until.toFixed(1)} s ក្នុង scene ${answer.scene[0].toFixed(1)}–${answer.scene[1].toFixed(1)} s ` +
-            `(${khmerNumber(found.points.length)} ចំណុច, ${answer.seconds} s)` +
-            (covered < whole * 0.6 ? ' — ប្រធានបទត្រូវបាំង ឬរត់ចេញ: crop នៅស្ងៀមក្រៅចន្លោះនោះ' : ''),
+          t(
+            `តាមបាន ${found.good_from.toFixed(1)}–${found.good_until.toFixed(1)} s ក្នុង scene ${answer.scene[0].toFixed(1)}–${answer.scene[1].toFixed(1)} s `,
+            `Followed ${found.good_from.toFixed(1)}–${found.good_until.toFixed(1)} s in the scene ${answer.scene[0].toFixed(1)}–${answer.scene[1].toFixed(1)} s `,
+          ) +
+            `(${num(found.points.length)} ${t('ចំណុច', 'points')}, ${answer.seconds} s)` +
+            (covered < whole * 0.6
+              ? t(' — ប្រធានបទត្រូវបាំង ឬរត់ចេញ: crop នៅស្ងៀមក្រៅចន្លោះនោះ', ' — the subject was hidden or left the frame: the crop stays still outside that range')
+              : ''),
         )
         setClick(null)
         setPick(null)
@@ -106,7 +113,7 @@ export function SubjectTrackDialog({
         onLook({ ...look, ...saved })
         setClick(null)
         setPick(null)
-        setMessage('AI នឹងសម្រេច crop សម្រាប់ scene នេះម្តងទៀត')
+        setMessage(t('AI នឹងសម្រេច crop សម្រាប់ scene នេះម្តងទៀត', 'The AI will decide the crop for this scene again'))
       })
       .catch((error: Error) => setMessage(error.message))
   }
@@ -141,13 +148,13 @@ export function SubjectTrackDialog({
             <button
               type="button"
               disabled
-              title="រកប្រធានបទដដែលនៅគ្រប់ scene — ជំហានក្រោយ"
+              title={t('រកប្រធានបទដដែលនៅគ្រប់ scene — ជំហានក្រោយ', 'Find the same subject in every scene — a later step')}
               className="min-h-8 rounded-[6px] border-0 bg-transparent px-3 type-label text-text-4"
             >
               Whole clip
             </button>
           </div>
-          <span className="min-w-0 flex-1 type-hint text-text-3">Tips: ប្រធានបទនីមួយៗត្រូវតាមតែក្នុង scene ដែលមានបន្ទាត់ពីក្រោម។</span>
+          <span className="min-w-0 flex-1 type-hint text-text-3">{t('Tips: ប្រធានបទនីមួយៗត្រូវតាមតែក្នុង scene ដែលមានបន្ទាត់ពីក្រោម។', 'Tip: each subject is followed only in the scenes underlined below.')}</span>
           <button
             type="button"
             disabled={!track || state !== 'idle'}
@@ -162,19 +169,21 @@ export function SubjectTrackDialog({
             onClick={apply}
             className={`min-h-10 cursor-pointer rounded-button border-0 bg-white px-5 type-body font-bold text-bg disabled:cursor-default disabled:opacity-40 ${focusRing}`}
           >
-            {state === 'tracking' ? 'កំពុងតាម…' : 'Apply'}
+            {state === 'tracking' ? t('កំពុងតាម…', 'Tracking…') : 'Apply'}
           </button>
         </div>
       }
     >
-      <p className="-mt-2 type-body text-text-3">ជ្រើសប្រធានបទ ឬតំបន់ដែលចង់ឲ្យ AI តាម។ ការតាមដានប្រើលើ scene ទាំងមូល។</p>
+      <p className="-mt-2 type-body text-text-3">
+        {t('ជ្រើសប្រធានបទ ឬតំបន់ដែលចង់ឲ្យ AI តាម។ ការតាមដានប្រើលើ scene ទាំងមូល។', 'Choose a subject or an area for the AI to follow. Tracking applies to the whole scene.')}
+      </p>
 
       {/* ---- frame ធំ: ចុចលើប្រធានបទ ---- */}
       <div className="flex justify-center">
         <div
           role="button"
           tabIndex={0}
-          aria-label="ចុចលើប្រធានបទ"
+          aria-label={t('ចុចលើប្រធានបទ', 'Click the subject')}
           onClick={onFrameClick}
           onKeyDown={(event) => event.key === ' ' && (event.preventDefault(), playing ? player.current?.pause() : void player.current?.play())}
           className={`relative max-h-[52vh] w-full cursor-crosshair overflow-hidden rounded-[10px] bg-black ${focusRing}`}
@@ -198,7 +207,7 @@ export function SubjectTrackDialog({
           />
           {chosen && <span aria-hidden="true" className="absolute rounded-[4px] border-2 border-gold shadow-[0_0_0_9999px_rgba(0,0,0,0.35)]" style={percent(chosen)} />}
           {!chosen && followed && (
-            <span aria-label="ផ្លូវដែលតាមបាន" className="absolute rounded-[4px] border-2 border-ok" style={percent(followed as Box)} />
+            <span aria-label={t('ផ្លូវដែលតាមបាន', 'Followed path')} className="absolute rounded-[4px] border-2 border-ok" style={percent(followed as Box)} />
           )}
           {click && (
             <span
@@ -209,12 +218,12 @@ export function SubjectTrackDialog({
           )}
           {!click && !track && (
             <span className="pointer-events-none absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 rounded-[10px] bg-white px-4 py-2.5 type-body text-bg shadow-lg">
-              ចុចលើប្រធានបទក្នុង scene ដែលចង់តាម
+              {t('ចុចលើប្រធានបទក្នុង scene ដែលចង់តាម', 'Click the subject to follow in this scene')}
             </span>
           )}
           {state !== 'idle' && (
             <span className="pointer-events-none absolute top-3 left-3 rounded-[6px] bg-black/70 px-2.5 py-1 type-hint text-text">
-              {state === 'picking' ? 'កំពុងរកប្រធានបទ…' : 'កំពុងតាមពេញ scene…'}
+              {state === 'picking' ? t('កំពុងរកប្រធានបទ…', 'Finding the subject…') : t('កំពុងតាមពេញ scene…', 'Following through the scene…')}
             </span>
           )}
         </div>
@@ -224,11 +233,11 @@ export function SubjectTrackDialog({
           ជួរនេះ និងបន្ទាត់សារ នៅជានិច្ច (មិនលេច/បាត់): dialog នៅកណ្តាលអេក្រង់ ដូច្នេះកម្ពស់ដែលប្តូរ
           ធ្វើឲ្យវាលោតឡើងចុះរាល់ការចុច ("dialog ញាក់" — អ្នកអភិវឌ្ឍ 2026-10-26) */}
       <div className="flex min-h-8 flex-nowrap items-center gap-2">
-        <span className="type-label text-text-3">តាម:</span>
+        <span className="type-label text-text-3">{t('តាម:', 'Follow:')}</span>
         {(
           [
-            ['subject', !pick ? 'Subject' : pick.subject ? `Subject · ${pick.label}` : 'Subject · រកមិនឃើញ', !fresh?.subject],
-            ['area', 'Area · តំបន់ជុំវិញចំណុចចុច', !fresh],
+            ['subject', !pick ? 'Subject' : pick.subject ? `Subject · ${pick.label}` : `Subject · ${t('រកមិនឃើញ', 'not found')}`, !fresh?.subject],
+            ['area', `Area · ${t('តំបន់ជុំវិញចំណុចចុច', 'around the click')}`, !fresh],
           ] as const
         ).map(([value, label, disabled]) => (
           <button
@@ -245,7 +254,7 @@ export function SubjectTrackDialog({
           </button>
         ))}
         <span className="min-w-0 truncate type-hint text-text-4">
-          {pick ? 'វត្ថុក្នុងដៃមនុស្ស (ចាន, កែវ) = Area; មនុស្ស ឬសត្វ = Subject' : 'ចុចលើ frame ខាងលើជាមុនសិន'}
+          {pick ? t('វត្ថុក្នុងដៃមនុស្ស (ចាន, កែវ) = Area; មនុស្ស ឬសត្វ = Subject', 'Something held (a plate, a glass) = Area; a person or animal = Subject') : t('ចុចលើ frame ខាងលើជាមុនសិន', 'Click the frame above first')}
         </span>
       </div>
       {/* កម្ពស់ពីរបន្ទាត់ជានិច្ច: សារវែងបំផុត (Apply + ការព្រមាន) មានពីរបន្ទាត់ */}
@@ -269,13 +278,13 @@ export function SubjectTrackDialog({
               <button
                 key={start}
                 type="button"
-                title={`${start.toFixed(1)}–${end.toFixed(1)} s${tracked ? ' · តាមដានដោយដៃ' : ''}`}
+                title={`${start.toFixed(1)}–${end.toFixed(1)} s${tracked ? ` · ${t('តាមដានដោយដៃ', 'tracked by hand')}` : ''}`}
                 onClick={() => seek(start + Math.min(0.5, (end - start) / 2))}
                 className={`relative h-full min-w-0 cursor-pointer overflow-hidden border-0 border-r border-chrome p-0 ${here ? 'outline-2 outline-white -outline-offset-2 outline' : ''} ${focusRing}`}
                 style={{ width: `${((end - start) / (total || 1)) * 100}%` }}
               >
                 <img src={sourceFrameUrl(video.path, (start + end) / 2)} alt="" loading="lazy" className="size-full object-cover" />
-                {tracked && <span aria-label="មានផ្លូវ" className="absolute right-0 bottom-0 left-0 h-1 bg-gold" />}
+                {tracked && <span aria-label={t('មានផ្លូវ', 'Has a path')} className="absolute right-0 bottom-0 left-0 h-1 bg-gold" />}
               </button>
             )
           })}

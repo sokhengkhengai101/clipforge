@@ -273,7 +273,7 @@ export function SettingsDialog({
             {STYLE_PRESETS.map((item) => (
               // Box និង Neon: renderer មិនទាន់គូរបាន
               <option key={item.id} value={item.id} disabled={!item.style}>
-                {item.name}
+                {t(item.name, item.en)}
               </option>
             ))}
           </Select>

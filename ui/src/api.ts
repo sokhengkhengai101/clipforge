@@ -1,4 +1,5 @@
 /** ហៅ sidecar. គ្រប់ path ទៅតាម `/api` ដែល Vite proxy បញ្ជូនទៅ port 8765. */
+import type { Transform } from './transformBox'
 import type { CaptionAnimation } from './captionStyle'
 
 export type Health = {
@@ -109,6 +110,8 @@ export type JobOptions = {
   language?: string         // auto / en / fr ... (Auto Subtitles)
   transcribe_only?: boolean // Edit Video: audio + transcribe ប៉ុណ្ណោះ
   cuts?: [number, number][] // Edit Video: ចន្លោះដែលត្រូវកាត់
+  inserts?: { start: number; end: number; at: number }[] // + Extend a clip: ផ្នែកដែលចម្លងទៅដាក់នៅ `at`
+  order?: [number, number][] // ប្លុកតាមលំដាប់ដែលអូសលើ timeline
   transition?: 'punch' | 'hard'
   look?: Look // Edit Video: Background / Tracker (sidecar បម្លែងជា --fit-* / --no-tracking)
   motion?: Motion // Edit Video: ផ្ទាំង Motion (sidecar បម្លែងជា --motion-* / --caption-animation)
@@ -136,6 +139,7 @@ export type Look = {
   tracking: boolean
   no_track: [number, number][] // scene ដែលបិទ tracking (វិនាទីក្នុងវីដេអូដើម)
   subjects: SubjectTrack[] // Manual subject tracking: ផ្លូវមួយក្នុងមួយ scene
+  transform: Transform | null // Transform video ដោយដៃ (null = AI layout) — `manage.clean_transform`
 }
 /** ផ្លូវប្រធានបទក្នុង scene មួយ (`subject_track.Track`): ពេលជាវិនាទី, ប្រអប់ជា pixel នៃវីដេអូដើម. */
 export type SubjectTrack = {
@@ -164,6 +168,7 @@ export const DEFAULT_LOOK: Look = {
   tracking: true,
   no_track: [],
   subjects: [],
+  transform: null,
 }
 
 /** ---- Env (screen 01 · AI models) ---- */
@@ -258,7 +263,14 @@ export type EditorWords = {
   items: EditorItem[]
 }
 
-export type CutsAnswer = { name: string; cuts: [number, number][]; transition: 'punch' | 'hard'; splits?: number[] }
+export type CutsAnswer = {
+  name: string
+  cuts: [number, number][]
+  transition: 'punch' | 'hard'
+  splits?: number[]
+  inserts?: { start: number; end: number; at: number }[] // sidecar ចាស់គ្មាន field នេះ
+  order?: [number, number][] // ដូចគ្នា
+}
 
 export type CleanupSuggestion = { start: number; end: number; reason: 'pause' | 'filler'; text: string }
 
@@ -342,7 +354,10 @@ export const api = {
   words: (name: string) => send<EditorWords>(`/projects/${encodeURIComponent(name)}/words`),
   // cut list ដែល editor រក្សាទុក (project.json) និង Speech cleanup (pause + filler ដែលស្នើ)
   cuts: (name: string) => send<CutsAnswer>(`/projects/${encodeURIComponent(name)}/cuts`),
-  saveCuts: (name: string, body: { cuts: [number, number][]; transition: string; splits?: number[] }) =>
+  saveCuts: (
+    name: string,
+    body: { cuts: [number, number][]; transition: string; splits?: number[]; inserts?: { start: number; end: number; at: number }[]; order?: [number, number][] },
+  ) =>
     send<CutsAnswer>(`/projects/${encodeURIComponent(name)}/cuts`, 'PUT', body),
   cleanup: (name: string, pause: number, fillers: boolean) =>
     send<CleanupAnswer>(`/projects/${encodeURIComponent(name)}/cleanup?pause=${pause}&fillers=${fillers}`),
@@ -410,7 +425,10 @@ export const api = {
   /** បើក folder ក្នុង File Explorer. */
   reveal: (path: string) => send<{ ok: boolean }>('/reveal', 'POST', { path }),
   // ⬇ transcript ក្នុង Edit Video -> folder Export (មិនសរសេរពីលើ); ពាក្យក្នុង cuts ត្រូវដក
-  exportTranscript: (name: string, body: { format: 'txt' | 'srt'; cuts: [number, number][] }) =>
+  exportTranscript: (
+    name: string,
+    body: { format: 'txt' | 'srt'; cuts: [number, number][]; inserts?: { start: number; end: number; at: number }[]; order?: [number, number][] },
+  ) =>
     send<{ name: string; path: string; bytes: number; format: string }>(
       `/projects/${encodeURIComponent(name)}/transcript/export`,
       'POST',

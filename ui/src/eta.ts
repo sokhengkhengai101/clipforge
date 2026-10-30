@@ -19,10 +19,11 @@ export type RunPlan = {
 export function stepSeconds(plan: RunPlan): Record<string, number> {
   const minutes = (plan.seconds ?? 600) / 60 // មិនទាន់ដឹងប្រវែង -> សន្មត ១០ នាទី
   const gpu = plan.device === 'cuda'
-  // transcribe: GPU medium 12.4 s ក្នុងមួយនាទីវីដេអូ (7:18 / 35:25); small លឿនជាង ~2 ដង;
+  // transcribe: GPU medium batched (batch 4) 3.9 s ក្នុងមួយនាទីវីដេអូ (2:34 / 35:25, 2026-10-28; ម្តងមួយៗ
+  // ពីមុន 12.4); small batched មិនបានវាស់ — ប៉ាន់ ~ពាក់កណ្តាល ដូចពីមុន;
   // CPU small 1.4x realtime = 43 s/នាទី; CPU medium មិនបានវាស់ — ប៉ាន់ ~2.3 ដងនៃ small
   const whisperSmall = plan.whisperModel === 'small' || plan.whisperModel === 'base' || plan.whisperModel === 'tiny'
-  const transcribePerMinute = gpu ? (whisperSmall ? 6 : 12.4) : whisperSmall ? 43 : 100
+  const transcribePerMinute = gpu ? (whisperSmall ? 2 : 3.9) : whisperSmall ? 43 : 100
   // highlights: 7b + rubric 33 s/នាទី (19:30 / 35:25); 3b ~7 s; 14b មិនសម VRAM នេះ — ប៉ាន់ 2x នៃ 7b
   const highlightsPerMinute = plan.llm.includes('3b') ? 7 : plan.llm.includes('14b') ? 66 : 33
   // ថេរ (មិនអាស្រ័យប្រវែង): ផ្ទុក model Whisper / Ollama និងវិភាគ shot (មុខ + YOLOX) មុន render —

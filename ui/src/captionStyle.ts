@@ -26,8 +26,9 @@ export type CaptionStyle = {
 export const ANIMATION_GROUPS = [
   {
     label: 'ពាក្យកំពុងនិយាយ',
+    en: 'The spoken word',
     items: [
-      ['pop', 'Pop — ធំបញ្ឈរ 110%'],
+      ['pop', 'Pop — ធំបញ្ឈរ 110%', 'Pop — 110% taller'],
       ['scale', 'Scale'],
       ['underline', 'Underline'],
       ['box', 'Box'],
@@ -35,12 +36,13 @@ export const ANIMATION_GROUPS = [
       ['seamless_bounce', 'Seamless bounce'],
       ['blur_switch', 'Blur switch'],
       ['focus', 'Focus'],
-      ['baby_steps', 'Baby steps — លេចម្តងមួយពាក្យ'],
-      ['none', 'None — ពណ៌ប៉ុណ្ណោះ'],
+      ['baby_steps', 'Baby steps — លេចម្តងមួយពាក្យ', 'Baby steps — one word at a time'],
+      ['none', 'None — ពណ៌ប៉ុណ្ណោះ', 'None — colour only'],
     ],
   },
   {
     label: 'ពេល cue លេច',
+    en: 'As a cue appears',
     items: [
       ['bounce', 'Bounce'],
       ['fade', 'Fade'],
@@ -53,6 +55,7 @@ export const ANIMATION_GROUPS = [
   },
   {
     label: 'ពេញមួយ cue',
+    en: 'The whole cue',
     items: [
       ['breathe', 'Breathe'],
       ['baby_earthquake', 'Baby earthquake'],
@@ -88,26 +91,28 @@ export const DEFAULT_STYLE: CaptionStyle = {
 
 /** config.CAPTION_COLOR_PRESETS. */
 export const CAPTION_COLORS = [
-  { name: 'លឿង', hex: '#FFD23F' },
-  { name: 'បៃតង', hex: '#00E054' },
-  { name: 'ខៀវខ្ចី', hex: '#00E5FF' },
-  { name: 'ទឹកក្រូច', hex: '#FF7A00' },
-  { name: 'ស', hex: '#FFFFFF' },
+  { name: 'លឿង', en: 'Yellow', hex: '#FFD23F' },
+  { name: 'បៃតង', en: 'Green', hex: '#00E054' },
+  { name: 'ខៀវខ្ចី', en: 'Cyan', hex: '#00E5FF' },
+  { name: 'ទឹកក្រូច', en: 'Orange', hex: '#FF7A00' },
+  { name: 'ស', en: 'White', hex: '#FFFFFF' },
 ]
 
 export type StylePreset = {
   id: string
   name: string
+  en?: string // ឈ្មោះជា English ពេលខុសពី name (app ជា English)
   style: Partial<CaptionStyle> | null // null = renderer មិនទាន់គូរបាន (Box, Neon)
 }
 
 /** Preset = បណ្តុំ flag ដូច Home presets. Box ខ្មៅ ត្រូវការ BorderStyle 3 របស់ ASS ហើយ
  *  Neon ត្រូវការ blur/glow — renderer មិនទាន់មាន ដូច្នេះពួកវានៅលើអេក្រង់ តែចុចមិនបាន. */
 export const STYLE_PRESETS: StylePreset[] = [
-  { id: 'off', name: 'គ្មាន captions', style: { off: true } },
+  { id: 'off', name: 'គ្មាន captions', en: 'No captions', style: { off: true } },
   {
     id: 'bold',
     name: 'Bold លឿង',
+    en: 'Bold yellow',
     style: { off: false, font: 'Montserrat ExtraBold', italic: false, color: '#FFD23F', uppercase: true, outline: 4, size: 100 },
   },
   {
@@ -126,10 +131,11 @@ export const STYLE_PRESETS: StylePreset[] = [
     name: 'Impact',
     style: { off: false, font: 'Impact', italic: false, color: '#FFFD03', uppercase: true, outline: 3, size: 100 },
   },
-  { id: 'box', name: 'Box ខ្មៅ', style: null },
+  { id: 'box', name: 'Box ខ្មៅ', en: 'Black box', style: null },
   {
     id: 'clean',
     name: 'ស្អាត ស',
+    en: 'Clean white',
     style: { off: false, font: 'Montserrat ExtraBold', italic: false, color: '#FFFFFF', uppercase: false, outline: 2, size: 90 },
   },
   { id: 'neon', name: 'Neon', style: null },

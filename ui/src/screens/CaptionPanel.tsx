@@ -3,7 +3,7 @@ import { useCaptionFonts } from '../captionLook'
 import { ANIMATION_GROUPS, CAPTION_COLORS, presetOf, STYLE_PRESETS, type CaptionAnimation, type CaptionStyle } from '../captionStyle'
 import { Chip, Segmented, Select, Switch } from '../kit/controls'
 import { focusRing } from '../kit/styles'
-import { khmerNumber } from './khmer'
+import { useNum, useT } from '../i18n'
 import { PresetCard } from './PresetCard'
 
 type Tab = 'presets' | 'font' | 'effects'
@@ -59,6 +59,7 @@ export function CaptionPanel({
 
 function PresetsTab({ style, onStyle }: { style: CaptionStyle; onStyle: (style: CaptionStyle) => void }) {
   const fonts = useCaptionFonts()
+  const t = useT()
   const current = presetOf(style)
   const installed = (face: string | undefined) => !face || fonts.length === 0 || fonts.some((font) => font.face === face)
   return (
@@ -74,14 +75,18 @@ function PresetsTab({ style, onStyle }: { style: CaptionStyle; onStyle: (style: 
         ))}
       </div>
       <p className="m-0 type-hint text-text-4">
-        Preset នីមួយៗជាបណ្តុំការកំណត់ពិត ហើយអាចកែបន្តនៅ Font និង Effects។ Box ខ្មៅ និង Neon មិនទាន់មានក្នុង renderer ទេ។
-        {current === null && ' · style ផ្ទាល់ខ្លួន'}
+        {t(
+          'Preset នីមួយៗជាបណ្តុំការកំណត់ពិត ហើយអាចកែបន្តនៅ Font និង Effects។ Box ខ្មៅ និង Neon មិនទាន់មានក្នុង renderer ទេ។',
+          'Each preset is a set of real settings you can keep editing in Font and Effects. Black box and Neon are not in the renderer yet.',
+        )}
+        {current === null && ` · ${t('style ផ្ទាល់ខ្លួន', 'custom style')}`}
       </p>
     </>
   )
 }
 
 function FontTab({ style, change }: { style: CaptionStyle; change: (part: Partial<CaptionStyle>) => void }) {
+  const t = useT()
   const fonts = useCaptionFonts()
   const current = fonts.find((font) => font.face === style.font)
   const families = [...new Set(fonts.map((font) => font.family))]
@@ -105,7 +110,7 @@ function FontTab({ style, change }: { style: CaptionStyle; change: (part: Partia
             <option key={name}>{name}</option>
           ))}
         </Select>
-        <Select aria-label="កម្រាស់" value={style.font} onChange={(event) => change({ font: event.target.value })}>
+        <Select aria-label={t('កម្រាស់', 'Weight')} value={style.font} onChange={(event) => change({ font: event.target.value })}>
           {(weights.length ? weights : [{ face: style.font, weight: 'ExtraBold' }]).map((font) => (
             <option key={font.face} value={font.face}>
               {font.weight}
@@ -114,9 +119,9 @@ function FontTab({ style, change }: { style: CaptionStyle; change: (part: Partia
         </Select>
       </div>
       <div className="flex items-center gap-2">
-        <ColourInput label="ពណ៌អក្សរ" value={style.textColor} onChange={(textColor) => change({ textColor })} />
+        <ColourInput label={t('ពណ៌អក្សរ', 'Text colour')} value={style.textColor} onChange={(textColor) => change({ textColor })} />
         <label className="flex min-w-0 flex-1 items-center gap-2 type-hint text-text-3">
-          ទំហំ
+          {t('ទំហំ', 'Size')}
           <input
             type="range"
             min={70}
@@ -124,7 +129,7 @@ function FontTab({ style, change }: { style: CaptionStyle; change: (part: Partia
             step={5}
             value={style.size}
             onChange={(event) => change({ size: Number(event.target.value) })}
-            aria-label="ទំហំអក្សរ"
+            aria-label={t('ទំហំអក្សរ', 'Text size')}
             className={`min-w-0 flex-1 cursor-pointer accent-gold ${focusRing}`}
           />
           <span className="w-10 text-right tabular-nums text-text">{style.size}%</span>
@@ -142,15 +147,15 @@ function FontTab({ style, change }: { style: CaptionStyle; change: (part: Partia
         </span>
       </Row>
       {style.italic && current && !current.italic_face && (
-        <p className="-mt-2 m-0 type-hint text-text-4">{current.face} គ្មាន italic ពិត — libass ទ្រេតវាខ្លួនឯង</p>
+        <p className="-mt-2 m-0 type-hint text-text-4">{current.face} {t('គ្មាន italic ពិត — libass ទ្រេតវាខ្លួនឯង', 'has no real italic — libass slants it')}</p>
       )}
       <Row label="Uppercase">
         <Switch label="Uppercase" checked={style.uppercase} onChange={(uppercase) => change({ uppercase })} />
       </Row>
       <Row label="Font stroke">
         <span className="flex items-center gap-2">
-          <ColourInput label="ពណ៌ stroke" value={style.outlineColor} onChange={(outlineColor) => change({ outlineColor })} />
-          <NumberField label="កម្រាស់ stroke" unit="px" value={style.outline} min={0} max={12} onChange={(outline) => change({ outline })} />
+          <ColourInput label={t('ពណ៌ stroke', 'Stroke colour')} value={style.outlineColor} onChange={(outlineColor) => change({ outlineColor })} />
+          <NumberField label={t('កម្រាស់ stroke', 'Stroke width')} unit="px" value={style.outline} min={0} max={12} onChange={(outline) => change({ outline })} />
         </span>
       </Row>
       <Row label="Font shadows">
@@ -158,7 +163,7 @@ function FontTab({ style, change }: { style: CaptionStyle; change: (part: Partia
       </Row>
       {style.shadow.on && (
         <div className="-mt-1 flex items-center gap-2">
-          <ColourInput label="ពណ៌ shadow" value={style.shadow.color} onChange={(color) => change({ shadow: { ...style.shadow, color } })} />
+          <ColourInput label={t('ពណ៌ shadow', 'Shadow colour')} value={style.shadow.color} onChange={(color) => change({ shadow: { ...style.shadow, color } })} />
           <NumberField label="Shadow x" unit="x" value={style.shadow.x} min={-20} max={20} onChange={(x) => change({ shadow: { ...style.shadow, x } })} />
           <NumberField label="Shadow y" unit="y" value={style.shadow.y} min={-20} max={20} onChange={(y) => change({ shadow: { ...style.shadow, y } })} />
           <NumberField label="Shadow blur" unit="blur" value={style.shadow.blur} min={0} max={20} onChange={(blur) => change({ shadow: { ...style.shadow, blur } })} />
@@ -173,7 +178,7 @@ function FontTab({ style, change }: { style: CaptionStyle; change: (part: Partia
         {style.keywordColors.map((colour, at) => (
           <label key={at} className="flex items-center gap-2 rounded-field bg-raised px-2.5 py-1.5 type-hint text-text-3">
             <ColourInput
-              label={`ពណ៌ពាក្យសំខាន់ ${at + 1}`}
+              label={`${t('ពណ៌ពាក្យសំខាន់', 'Keyword colour')} ${at + 1}`}
               value={colour}
               onChange={(value) => {
                 const next: [string, string] = [...style.keywordColors]
@@ -186,17 +191,19 @@ function FontTab({ style, change }: { style: CaptionStyle; change: (part: Partia
         ))}
         <p className="m-0 type-hint text-text-4">
           {/* អត្ថបទដដែលទាំងបើក និងបិទ: អត្ថបទបន្ថែម " (បិទ...)" រុំជាពីរបន្ទាត់ ហើយរុញ panel (ញាក់) */}
-          ពាក្យវែងបំផុតក្នុង cue នីមួយៗ — ពណ៌ទី ១ និងទី ២ ឆ្លាស់គ្នាតាម cue
+          {t('ពាក្យវែងបំផុតក្នុង cue នីមួយៗ — ពណ៌ទី ១ និងទី ២ ឆ្លាស់គ្នាតាម cue', 'The longest word in each cue — colours 1 and 2 alternate by cue')}
         </p>
       </div>
       <p className="m-0 flex items-center gap-2 type-hint text-text-4">
-        Font ខ្មែរ (Battambang) <Chip>PHASE 2</Chip>
+        {t('Font ខ្មែរ (Battambang)', 'Khmer font (Battambang)')} <Chip>PHASE 2</Chip>
       </p>
     </>
   )
 }
 
 function EffectsTab({ style, change }: { style: CaptionStyle; change: (part: Partial<CaptionStyle>) => void }) {
+  const t = useT()
+  const num = useNum()
   return (
     <>
       <Heading>Position</Heading>
@@ -222,15 +229,15 @@ function EffectsTab({ style, change }: { style: CaptionStyle; change: (part: Par
           </button>
         ))}
       </div>
-      <p className="-mt-2 m-0 type-hint text-text-4">Auto: មួយភាគបីខាងក្រោម ហើយលើស្នាមកណ្ដាល ពេលអេក្រង់ចែកជាផ្ទាំង</p>
+      <p className="-mt-2 m-0 type-hint text-text-4">{t('Auto: មួយភាគបីខាងក្រោម ហើយលើស្នាមកណ្ដាល ពេលអេក្រង់ចែកជាផ្ទាំង', 'Auto: the lower third, and on the seam when the screen is split into panels')}</p>
 
       <Heading>Animation</Heading>
       <Select aria-label="Animation" value={style.animation} onChange={(event) => change({ animation: event.target.value as CaptionAnimation })}>
         {ANIMATION_GROUPS.map((group) => (
-          <optgroup key={group.label} label={group.label}>
-            {group.items.map(([value, label]) => (
+          <optgroup key={group.label} label={t(group.label, group.en)}>
+            {group.items.map(([value, label, en]) => (
               <option key={value} value={value}>
-                {label}
+                {t(label, en)}
               </option>
             ))}
           </optgroup>
@@ -250,20 +257,20 @@ function EffectsTab({ style, change }: { style: CaptionStyle; change: (part: Par
         />
       </Row>
 
-      <Heading>ពាក្យក្នុងមួយ cue</Heading>
+      <Heading>{t('ពាក្យក្នុងមួយ cue', 'Words per cue')}</Heading>
       <Segmented
-        label="ពាក្យក្នុងមួយ cue"
+        label={t('ពាក្យក្នុងមួយ cue', 'Words per cue')}
         size="sm"
         tone="gold"
         value={String(style.words)}
-        options={['2', '3', '4', '5', '6', '7', '8'].map((count) => ({ value: count, label: khmerNumber(count) }))}
+        options={['2', '3', '4', '5', '6', '7', '8'].map((count) => ({ value: count, label: num(count) }))}
         onChange={(value) => change({ words: Number(value) })}
       />
 
       <Row label="Highlighted word color">
         <ColourInput label="Highlighted word color" value={style.color} onChange={(color) => change({ color })} />
       </Row>
-      <div role="group" aria-label="ពណ៌រហ័ស" className="-mt-2 flex flex-wrap gap-2">
+      <div role="group" aria-label={t('ពណ៌រហ័ស', 'Quick colours')} className="-mt-2 flex flex-wrap gap-2">
         {CAPTION_COLORS.map((option) => {
           const on = option.hex.toLowerCase() === style.color.toLowerCase()
           return (
@@ -271,8 +278,8 @@ function EffectsTab({ style, change }: { style: CaptionStyle; change: (part: Par
               key={option.hex}
               type="button"
               aria-pressed={on}
-              aria-label={option.name}
-              title={option.name}
+              aria-label={t(option.name, option.en)}
+              title={t(option.name, option.en)}
               onClick={() => change({ color: option.hex })}
               className={`size-8 cursor-pointer rounded-full border-2 ${on ? 'border-text' : 'border-raised-3'} ${focusRing}`}
               style={{ background: option.hex }}

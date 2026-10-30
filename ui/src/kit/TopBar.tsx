@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import { IN_TAURI } from '../api'
 import { CloseIcon, MaximizeIcon, MinimizeIcon, PlayMark } from './icons'
 import { focusRing } from './styles'
+import { useT } from '../i18n'
 
 /** របារខាងលើរបស់ screen ទាំងអស់ (Review.html `<header>`): ផ្ទៃ `chrome`,
  *  បន្ទាត់ `line` ខាងក្រោម, logo + ឈ្មោះ + breadcrumb ខាងឆ្វេង, window controls ខាងស្តាំ.
@@ -19,6 +20,7 @@ export function TopBar({
   onHome?: () => void // logo + ឈ្មោះ = ត្រឡប់ទៅ Home (design គ្មានផ្លូវត្រឡប់ផ្សេងពី Import)
   children?: ReactNode
 }) {
+  const t = useT()
   return (
     <header
       data-tauri-drag-region
@@ -29,7 +31,7 @@ export function TopBar({
           type="button"
           onClick={onHome}
           disabled={!onHome}
-          title={onHome ? 'ទំព័រដើម' : undefined}
+          title={onHome ? t('ទំព័រដើម', 'Home') : undefined}
           className={`flex cursor-pointer items-center gap-2.5 rounded-field border-0 bg-transparent p-0 text-text disabled:cursor-default ${focusRing}`}
         >
           <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-[7px] bg-gold text-on-gold">
