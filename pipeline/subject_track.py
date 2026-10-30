@@ -219,17 +219,20 @@ def tracks_for_shot(start: float, end: float) -> "Track | None":
 
 
 def shift_track(track: Track, keeps: list[tuple[float, float]]) -> list[Track]:
-    """ផ្លូវក្នុងវីដេអូដើម -> ផ្លូវក្នុងច្បាប់ចម្លងដែលបានកាត់ (ចំណុចក្នុងការកាត់ត្រូវដក)."""
-    from pipeline.cuts import shift_range, shift_time
+    """ផ្លូវក្នុងវីដេអូដើម -> ផ្លូវក្នុងច្បាប់ចម្លងដែលបានកាត់ (ចំណុចក្នុងការកាត់ត្រូវដក).
+
+    ដើរតាម part នីមួយៗជាមួយ offset របស់វា: ផ្នែកដែលបានចម្លង (insert) = ផ្លូវលេចពីរដង.
+    """
+    from pipeline.cuts import placed
 
     out = []
-    for new_start, new_end in shift_range((track.start, track.end), keeps):
-        points = []
-        for t, cx, cy in track.points:
-            moved = shift_time(t, keeps)
-            if moved is not None and new_start <= moved <= new_end:
-                points.append((moved, cx, cy))
+    for part_start, part_end, offset in placed(keeps):
+        a, b = max(track.start, part_start), min(track.end, part_end)
+        if b <= a:
+            continue
+        points = [(round(offset + t - part_start, 3), cx, cy) for t, cx, cy in track.points if a <= t <= b]
         if points:
-            out.append(Track(start=new_start, end=new_end, box=track.box, label=track.label,
+            out.append(Track(start=round(offset + a - part_start, 3), end=round(offset + b - part_start, 3),
+                             box=track.box, label=track.label,
                              points=points, good_from=points[0][0], good_until=points[-1][0]))
     return out

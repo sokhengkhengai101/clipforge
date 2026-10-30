@@ -147,7 +147,7 @@ def main(
                                     help="render តែ clip_XX_clean.mp4 (គ្មាន caption) សម្រាប់ "
                                          "preview — មិនប៉ះ clip_XX.mp4 ឬ .ass/.srt/.vtt"),
     cuts: Path = typer.Option(None, "--cuts", exists=True, dir_okay=False,
-                              help="cut list (JSON) — លុបចន្លោះទាំងនេះ (Edit Video); ត្រូវការ --full"),
+                              help="cut list (JSON) — លុបចន្លោះទាំងនេះ ហើយ inserts (ផ្នែកដែលបន្ថែម) (Edit Video); ត្រូវការ --full"),
     transition: str = typer.Option("punch", "--transition",
                                    help="នៅកន្លែងកាត់: punch (zoom 100/110% ឆ្លាស់) ឬ hard"),
     transcribe_only: bool = typer.Option(False, "--transcribe-only",
@@ -163,6 +163,10 @@ def main(
                                    help="ជ្រុងមូលរបស់វីដេអូកណ្តាល px (0-200)"),
     fit_spacing: int = typer.Option(config.FIT_SPACING, "--fit-spacing",
                                     help="ចន្លោះជុំវិញវីដេអូកណ្តាល % (0-20)"),
+    transform: str = typer.Option(None, "--transform",
+                                  help="Transform ដោយដៃ x,y,scale (ប្រភាគ: កណ្តាល x/y, ទទឹង/ទទឹង output) — ជំនួស AI layout"),
+    transform_crop: str = typer.Option(None, "--transform-crop",
+                                       help="crop វីដេអូដើមមុន transform x,y,w,h (ប្រភាគ 0-1)"),
     no_tracking: bool = typer.Option(False, "--no-tracking",
                                      help="crop មិនតាមមុខក្នុង shot (នៅស្ងៀម)"),
     no_track_ranges: Path = typer.Option(None, "--no-track-ranges", exists=True, dir_okay=False,
@@ -232,6 +236,16 @@ def main(
     config.FIT_IMAGE = str(fit_image) if fit_image else None
     config.FIT_RADIUS = max(0, min(200, fit_radius))
     config.FIT_SPACING = max(0, min(20, fit_spacing))
+    if transform_crop and not transform:
+        console.print("[red]--transform-crop ត្រូវការ --transform[/red]")
+        raise typer.Exit(code=2)
+    if transform:
+        from pipeline.transform import TransformError, parse
+        try:
+            config.TRANSFORM = parse(transform, transform_crop)
+        except TransformError as error:
+            console.print(f"[red]{error}[/red]")
+            raise typer.Exit(code=2)
     config.TRACKING = not no_tracking
     if no_track_ranges is not None:
         from pipeline.cuts import read_cut_list
@@ -301,8 +315,8 @@ def main(
     title_stem = video.stem
     if cuts is not None:
         from pipeline.cuts import (TRANSITIONS, cut_video, edit_folder, frame_rate, keep_ranges,
-                                   normalize, read_cut_list, shift_transcript, snap_to_frames,
-                                   video_seconds)
+                                   normalize, read_cut_list, read_inserts, read_order, rearrange, sequence,
+                                   shift_transcript, snap_to_frames, video_seconds, video_start)
         from pipeline.transcribe import save_transcript
         if not full:
             console.print("[red]--cuts ត្រូវប្រើជាមួយ --full[/red] (កាត់វីដេអូទាំងមូល)")
@@ -315,15 +329,21 @@ def main(
             console.print("[red]គ្មាន transcript — រត់ --transcribe-only មុន[/red] (ការកាត់ត្រូវការពាក្យ)")
             raise typer.Exit(code=2)
         # រយៈពេលរូប (មិនមែន file): សំឡេងអាចវែងជាងរូប ហើយផ្នែកចុងក្រោយនឹងគ្មាន frame
-        source_seconds = video_seconds(video) or probe_duration(video)
+        first_frame = video_start(video)
+        source_seconds = first_frame + video_seconds(video) if video_seconds(video) else probe_duration(video)
         removed = normalize(read_cut_list(cuts), source_seconds)
-        # គែមនៅលើ frame: រូប និងសំឡេងកាត់ចំពេលដូចគ្នា, transcript រំកិលតាមពេលដដែលនោះ
-        keeps = snap_to_frames(keep_ranges(source_seconds, removed), frame_rate(video))
-        if not removed or not keeps:
+        inserts = read_inserts(cuts)   # "+ Extend a clip": ផ្នែកដែលចម្លងទៅដាក់កន្លែងផ្សេង (ឧ. hook)
+        # parts តាមលំដាប់ចេញ, គែមនៅលើ frame: រូប និងសំឡេងកាត់ចំពេលដូចគ្នា, transcript រំកិលតាមនោះ
+        in_time = keep_ranges(source_seconds, removed)
+        arranged = rearrange(in_time, read_order(cuts))   # លំដាប់ដែលអូសលើ timeline
+        # គ្មានផ្នែកណាចាប់ផ្តើមមុន frame ទីមួយ: សំឡេងនោះគ្មានរូប ហើយរុញផ្នែកបន្ទាប់ឲ្យលែងត្រូវគ្នា
+        parts = [(max(start, first_frame), end) for start, end in sequence(arranged, inserts, source_seconds)]
+        keeps = snap_to_frames(parts, frame_rate(video))
+        if not (removed or inserts or arranged != in_time) or not keeps:
             console.print("[red]cut list ទទេ ឬលុបវីដេអូទាំងមូល[/red]")
             raise typer.Exit(code=2)
         work_dir = out_dir / "edit"
-        with console.status(f"[cyan]0/6 cut[/cyan] — លុប {len(removed)} ចន្លោះ ({transition})..."):
+        with console.status(f"[cyan]0/6 cut[/cyan] — លុប {len(removed)} ចន្លោះ, បន្ថែម {len(inserts)} ({transition})..."):
             video = cut_video(video, keeps, work_dir / "source.mp4",
                               size=probe_dimensions(video), transition=transition)
             save_transcript(shift_transcript(original, keeps), work_dir / "transcript.json")
@@ -336,7 +356,7 @@ def main(
                                  for part in shift_track(track, keeps)]
         kept = sum(b - a for a, b in keeps)
         console.print(f"[green]✔ 0/6 cut[/green]         {short_path(video)}  "
-                      f"{source_seconds:.1f}s -> {kept:.1f}s ({len(removed)} ចន្លោះ, {transition})")
+                      f"{source_seconds:.1f}s -> {kept:.1f}s ({len(removed)} ចន្លោះ, +{len(inserts)}, {transition})")
         clips_dir = out_dir / edit_folder(aspect)
 
     console.print("\n[bold]ClipForge Studio[/bold] — Phase 0\n")
@@ -394,9 +414,7 @@ def main(
                     wav, cache, force=redo_transcribe, model_name=whisper_model,
                     on_progress=lambda sec: (progress.update(task, completed=min(sec, duration)),
                                              report_progress("transcribe", min(sec, duration), duration)),
-                    on_fallback=lambda err: console.print(
-                        f"[yellow]⚠ GPU បរាជ័យ -> ប្តូរទៅ CPU:[/yellow] {err}"
-                    ),
+                    on_fallback=lambda message: console.print(f"[yellow]⚠[/yellow] {message}"),
                 )
                 progress.update(task, completed=duration)
                 report_progress("transcribe", duration, duration)  # segment ចុងក្រោយចប់មុនចុងវីដេអូ

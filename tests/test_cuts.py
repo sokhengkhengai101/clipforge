@@ -105,3 +105,100 @@ def test_snap_to_frames_moves_every_edge_up_to_a_frame():
             assert abs(edge * fps - round(edge * fps)) < 1e-3     # ចំពេល frame
     assert snapped[0] == (0.0, round(311 / fps, 6))               # 12.96 s = frame 310.6 -> 311
     assert C.snap_to_frames([(1.0, 2.0)], None) == [(1.0, 2.0)]   # គ្មាន fps = មិនប្តូរ
+
+
+# ---- inserts ("+ Extend a clip"): ផ្នែកដែលចម្លងទៅដាក់កន្លែងផ្សេង ----
+
+def test_sequence_places_a_hook_before_everything():
+    keeps = [(0.0, 30.0)]
+    assert C.sequence(keeps, [(20.0, 25.0, 0.0)], 30.0) == [(20.0, 25.0), (0.0, 30.0)]
+    assert C.sequence(keeps, [], 30.0) == keeps                        # គ្មាន insert = ដូចមុន
+
+
+def test_sequence_splits_the_keep_at_the_playhead_and_handles_cuts_and_the_end():
+    keeps = [(0.0, 10.0), (20.0, 30.0)]                                # 10-20 ត្រូវកាត់
+    # at 5 (ក្នុង keep) -> keep បែកជាពីរ ហើយផ្នែកដែលបន្ថែមនៅកណ្តាល
+    assert C.sequence(keeps, [(25.0, 27.0, 5.0)], 30.0) == [(0.0, 5.0), (25.0, 27.0), (5.0, 10.0), (20.0, 30.0)]
+    # at 15 (ក្នុងការកាត់) -> មុន keep បន្ទាប់
+    assert C.sequence(keeps, [(1.0, 2.0, 15.0)], 30.0) == [(0.0, 10.0), (1.0, 2.0), (20.0, 30.0)]
+    # at ចុង -> ក្រោយគេ; inserts ដែល at ដូចគ្នា តាមលំដាប់ក្នុងបញ្ជី
+    assert C.sequence(keeps, [(1.0, 2.0, 30.0), (3.0, 4.0, 30.0)], 30.0)[-2:] == [(1.0, 2.0), (3.0, 4.0)]
+    # at ជិតគែម keep (តិចជាង 0.1 s) = មិនបំបែក (គ្មានបំណែកតូច)
+    assert C.sequence(keeps, [(25.0, 27.0, 9.95)], 30.0) == [(0.0, 10.0), (25.0, 27.0), (20.0, 30.0)]
+    # ផ្នែកខ្លីពេក ឬនៅក្រៅវីដេអូ = មិនយក
+    assert C.sequence(keeps, [(5.0, 5.05, 0.0), (40.0, 50.0, 0.0)], 30.0) == keeps
+
+
+def test_shift_range_and_time_with_a_repeated_part():
+    parts = [(20.0, 25.0), (0.0, 30.0)]                                # hook 20-25 រួចវីដេអូទាំងមូល
+    assert C.shift_range((21.0, 22.0), parts) == [(1.0, 2.0), (26.0, 27.0)]   # លេចពីរដង
+    assert C.shift_time(21.0, parts) == 1.0                            # កន្លែងដំបូង
+    assert C.shift_time(2.0, parts) == 7.0
+
+
+def test_shift_transcript_repeats_the_words_of_a_hook():
+    words = [Word(" One", 1.0, 1.5), Word(" two", 21.0, 21.5), Word(" three", 28.0, 28.5)]
+    transcript = Transcript(language="en", language_probability=0.9, duration=30.0, model="m", device="cuda",
+                            segments=[Segment(id=0, start=1.0, end=28.5, text="x", words=words)])
+    shifted = C.shift_transcript(transcript, [(20.0, 25.0), (0.0, 30.0)])
+    flat = [(w.word, w.start) for s in shifted.segments for w in s.words]
+    assert flat == [(" two", 1.0), (" One", 6.0), (" two", 26.0), (" three", 33.0)]
+    assert shifted.duration == 35.0
+    # hook មួយ segment, រួចវីដេអូទាំងមូលជា segment មួយ (បន្តតាមពេល)
+    assert [s.text for s in shifted.segments] == ["two", "One two three"]
+
+
+def test_cut_filter_trims_parts_in_output_order():
+    graph = C.cut_filter([(20.0, 25.0), (0.0, 30.0)], "hard", 1280, 720, audio=True)
+    assert graph.index("[sv0]trim=start=20.000000") < graph.index("[sv1]trim=start=0.000000")
+
+
+# ---- order: ប្លុកដែលអូសប្តូរលំដាប់លើ timeline ----
+
+def test_rearrange_swaps_blocks_and_an_unchanged_order_changes_nothing():
+    keeps = [(0.0, 30.0)]
+    assert C.rearrange(keeps, [(10.0, 30.0), (0.0, 10.0)]) == [(10.0, 30.0), (0.0, 10.0)]
+    assert C.rearrange(keeps, [(0.0, 10.0), (10.0, 30.0)]) == keeps    # split តែមិនប្តូរ = គ្មានកន្លែងភ្ជាប់ថ្មី
+    assert C.rearrange(keeps, []) == keeps
+
+
+def test_rearrange_respects_cuts_and_never_loses_a_part():
+    keeps = [(0.0, 10.0), (20.0, 30.0)]                                # 10-20 ត្រូវកាត់
+    # ប្លុក 0-25 មានការកាត់នៅកណ្តាល: ផ្នែកដែលកាត់មិនត្រឡប់មកវិញទេ
+    assert C.rearrange(keeps, [(25.0, 30.0), (0.0, 25.0)]) == [(25.0, 30.0), (0.0, 10.0), (20.0, 25.0)]
+    # ផ្នែកដែល order មិននិយាយដល់ ទៅនៅចុង
+    assert C.rearrange(keeps, [(20.0, 30.0)]) == [(20.0, 30.0), (0.0, 10.0)]
+
+
+def test_sequence_keeps_an_insert_with_its_piece_after_a_rearrange():
+    moved = [(15.0, 30.0), (0.0, 15.0)]
+    # at 15 = មុនប្លុក 15-30 ដែលឥឡូវនៅមុនគេ (មិនមែនតាមទីតាំងចេញ)
+    assert C.sequence(moved, [(1.0, 2.0, 15.0)], 30.0) == [(1.0, 2.0), (15.0, 30.0), (0.0, 15.0)]
+    # at 20 បំបែកប្លុកដែលផ្លាស់ទី; insert នៅកណ្តាលវា
+    assert C.sequence(moved, [(1.0, 2.0, 20.0)], 30.0) == [(15.0, 20.0), (1.0, 2.0), (20.0, 30.0), (0.0, 15.0)]
+
+
+def test_shift_transcript_follows_the_new_order():
+    words = [Word(" One", 1.0, 1.5), Word(" two", 21.0, 21.5)]
+    transcript = Transcript(language="en", language_probability=0.9, duration=30.0, model="m", device="cuda",
+                            segments=[Segment(id=0, start=1.0, end=21.5, text="x", words=words)])
+    shifted = C.shift_transcript(transcript, [(10.0, 30.0), (0.0, 10.0)])
+    assert [(w.word, w.start) for s in shifted.segments for w in s.words] == [(" two", 11.0), (" One", 21.0)]
+
+
+def test_read_order_is_empty_without_the_key(tmp_path):
+    a = tmp_path / "a.json"
+    a.write_text(json.dumps({"cuts": [], "order": [[10, 30], [0, 10]]}))
+    assert C.read_order(a) == [(10.0, 30.0), (0.0, 10.0)]
+    b = tmp_path / "b.json"
+    b.write_text(json.dumps({"cuts": [[1, 2]]}))
+    assert C.read_order(b) == []
+
+
+def test_read_inserts_accepts_both_shapes_and_cut_lists_without_them(tmp_path):
+    a = tmp_path / "a.json"
+    a.write_text(json.dumps({"cuts": [], "inserts": [{"start": 136.46, "end": 300.7, "at": 0}, [1, 2, 3]]}))
+    assert C.read_inserts(a) == [(136.46, 300.7, 0.0), (1.0, 2.0, 3.0)]
+    b = tmp_path / "b.json"
+    b.write_text(json.dumps({"cuts": [[1, 2]]}))
+    assert C.read_inserts(b) == []

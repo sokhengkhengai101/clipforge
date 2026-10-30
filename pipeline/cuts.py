@@ -7,6 +7,11 @@ transcript តាម (`edit/transcript.json`). បន្ទាប់មក rende
 
 ឧ. វីដេអូ 55.75 s, cuts [(12.40, 38.87)] -> រក្សា [(0, 12.40), (38.87, 55.75)] = 29.28 s;
 ពាក្យនៅ 40.00 s ក្លាយជា 40.00 - 26.47 = 13.53 s.
+
+**Inserts** ("+ Extend a clip" -> បន្ថែម): ចម្លងផ្នែកមួយ `(start, end)` ទៅដាក់នៅពេល `at` ក្នុងវីដេអូដើម
+(0 = ដើម ជា hook, playhead, ឬចុង). ដូច្នេះច្បាប់ចម្លងគឺជា **parts** តាមលំដាប់ចេញ — អាចដដែល
+និងមិនតាមលំដាប់ពេល (`sequence`). `cut_filter` ភ្ជាប់ parts តាមលំដាប់ណាក៏បាន; `shift_*` ខាងក្រោម
+គិតគ្រប់កន្លែងដែលពេលមួយលេចឡើង (ពាក្យក្នុងផ្នែកដែលចម្លង មាននៅ caption ពីរដង).
 """
 
 import json
@@ -25,6 +30,7 @@ PUNCH_ZOOM = 1.10      # zoom punch-in: ផ្នែកឆ្លាស់ 100% /
 TRANSITIONS = ("punch", "hard")
 
 Range = tuple[float, float]
+Insert = tuple[float, float, float]   # (start, end, at) — ពេលក្នុងវីដេអូដើមទាំងបី
 
 
 def normalize(cuts: list[Range], duration: float) -> list[Range]:
@@ -54,6 +60,74 @@ def keep_ranges(duration: float, cuts: list[Range]) -> list[Range]:
     return keeps
 
 
+def sequence(keeps: list[Range], inserts: list[Insert], duration: float) -> list[Range]:
+    """parts តាមលំដាប់ចេញ: `keeps` (តាមពេល) ជាមួយ inserts ដាក់នៅពេល `at` របស់វា.
+
+    keep ដែលមាន `at` នៅកណ្តាល ត្រូវបំបែកជាពីរ ហើយ insert នៅចន្លោះ; `at` ក្នុងការកាត់ = មុន keep បន្ទាប់;
+    `at` ជិតគែម keep ជាង MIN_KEEP_SEC = នៅគែមនោះ (កុំឲ្យសល់បំណែកតូច). inserts ដែល `at` ដូចគ្នា
+    តាមលំដាប់ក្នុងបញ្ជី. ឧ. keeps [(0, 30)], insert (20, 25) at 0 -> [(20, 25), (0, 30)] (hook).
+    """
+    clean: list[Insert] = []
+    for start, end, at in inserts:
+        start, end = max(0.0, float(start)), min(duration, float(end))
+        if end - start >= MIN_KEEP_SEC:
+            clean.append((round(start, 3), round(end, 3), min(max(0.0, float(at)), duration)))
+    if not clean:
+        return list(keeps)
+    # បំបែក keep នៅ `at` ដែលនៅកណ្តាលវា
+    pieces: list[Range] = []
+    for start, end in keeps:
+        cuts_at = sorted({at for _, _, at in clean if start + MIN_KEEP_SEC <= at <= end - MIN_KEEP_SEC})
+        edges = [start, *cuts_at, end]
+        pieces.extend((round(a, 3), round(b, 3)) for a, b in zip(edges, edges[1:]))
+    # insert ដែល `at` នៅមុន (ឬជិត) ដើម piece មួយ ចូលមុន piece នោះ. រកតាមលំដាប់ពេល ព្រោះ `rearrange`
+    # អាចប្តូរលំដាប់ pieces: insert ត្រូវតាម piece ដើមរបស់វា មិនមែនតាមទីតាំងចេញ.
+    before: dict[Range, list[Insert]] = {}
+    waiting = list(clean)
+    for piece in sorted(pieces):
+        ready = [item for item in waiting if item[2] < piece[0] + MIN_KEEP_SEC]
+        waiting = [item for item in waiting if item not in ready]
+        before.setdefault(piece, []).extend(ready)
+    out: list[Range] = []
+    for piece in pieces:
+        out.extend((a, b) for a, b, _ in before.get(piece, []))
+        out.append(piece)
+    out.extend((a, b) for a, b, _ in waiting)   # at ក្រោយ keep ចុងក្រោយ = ចុងវីដេអូ
+    return out
+
+
+def rearrange(keeps: list[Range], order: list[Range]) -> list[Range]:
+    """ដាក់ `keeps` តាមលំដាប់ដែលអ្នកប្រើអូសលើ timeline (`order` = ប្លុកតាមលំដាប់ចេញ, ពេលក្នុងវីដេអូដើម).
+
+    យកតែផ្នែកដែលនៅរក្សា: ប្លុកដែលមានការកាត់នៅកណ្តាលនៅតែបាត់ផ្នែកនោះ. ផ្នែកដែល `order` មិននិយាយដល់
+    (ឧ. ទើបស្តារការកាត់) ទៅនៅចុង កុំឲ្យបាត់. ផ្នែកជាប់គ្នាតាមពេលត្រូវភ្ជាប់វិញ ដូច្នេះលំដាប់ដែលមិនប្រែ
+    ឲ្យលទ្ធផលដូច `keeps` បេះបិទ (គ្មានកន្លែងភ្ជាប់ថ្មី, zoom punch-in មិនផ្លាស់).
+    ឧ. keeps [(0, 30)], order [(10, 30), (0, 10)] -> [(10, 30), (0, 10)].
+    """
+    out: list[Range] = []
+    left = list(keeps)   # ផ្នែកដែលមិនទាន់ដាក់
+    for block_start, block_end in order:
+        rest: list[Range] = []
+        for start, end in left:
+            a, b = max(start, block_start), min(end, block_end)
+            if b - a < MIN_KEEP_SEC:
+                rest.append((start, end))
+                continue
+            out.append((round(a, 3), round(b, 3)))
+            if a - start >= MIN_KEEP_SEC:
+                rest.append((start, round(a, 3)))
+            if end - b >= MIN_KEEP_SEC:
+                rest.append((round(b, 3), end))
+        left = rest
+    joined: list[Range] = []
+    for start, end in out + left:
+        if joined and abs(joined[-1][1] - start) < 0.001:
+            joined[-1] = (joined[-1][0], end)
+        else:
+            joined.append((start, end))
+    return joined
+
+
 def frame_rate(video: Path) -> float | None:
     """fps ពិត (r_frame_rate, ឧ. 24000/1001 = 23.976), ឬ None បើ ffprobe មិនឆ្លើយ."""
     try:
@@ -81,6 +155,22 @@ def video_seconds(video: Path) -> float | None:
         return None
 
 
+def video_start(video: Path) -> float:
+    """ពេលនៃ frame ទីមួយ (start_time របស់ stream v:0), 0 បើ ffprobe មិនឆ្លើយ.
+
+    វាស់លើ Rhino: frame ទីមួយនៅ 0.0417 s, ចុងក្រោយនៅ 55.6389 s. ដូច្នេះចុងពិតរបស់រូប = start_time +
+    duration = 55.6806 s, ហើយផ្នែកដែលចាប់ពី 0 មានសំឡេង 42 ms ដែលគ្មានរូប — បើមិនកាត់ទេ ពេលផ្នែកនោះ
+    មិននៅចុង (ប្តូរលំដាប់) គ្រប់ផ្នែកបន្ទាប់មានសំឡេងលឿនជាងរូបមួយ frame.
+    """
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=start_time",
+             "-of", "csv=p=0", str(video)], capture_output=True, text=True, timeout=30)
+        return max(0.0, float(result.stdout.strip()))
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return 0.0
+
+
 def snap_to_frames(keeps: list[Range], fps: float | None) -> list[Range]:
     """រំកិលគែមនីមួយៗទៅពេលរបស់ frame (ឡើងលើ) — រូប និងសំឡេងត្រូវកាត់ចំពេលដូចគ្នា.
 
@@ -91,40 +181,48 @@ def snap_to_frames(keeps: list[Range], fps: float | None) -> list[Range]:
     """
     if not fps or fps <= 0:
         return keeps
+    # 0.02 frame: `keeps` ត្រូវបានបង្គត់ជា 3 ខ្ទង់ ដូច្នេះពេលលើ frame ពិតអាចលើសបន្តិច. បើមិនអត់ឱនទេ វារំកិលមួយ
+    # frame ហួសចុងវីដេអូ ហើយផ្នែកនោះមានសំឡេងវែងជាងរូប.
+    slack = 0.02
     snapped = []
     for start, end in keeps:
-        a = math.ceil(start * fps - 1e-6) / fps
-        b = math.ceil(end * fps - 1e-6) / fps
+        a = math.ceil(start * fps - slack) / fps
+        b = math.ceil(end * fps - slack) / fps
         if b - a >= MIN_KEEP_SEC:
             snapped.append((round(a, 6), round(b, 6)))
     return snapped
 
 
-def shift_time(seconds: float, keeps: list[Range]) -> float | None:
-    """ពេលក្នុងវីដេអូដើម -> ពេលក្នុងច្បាប់ចម្លង. `None` = ពេលនោះត្រូវបានកាត់ចេញ."""
+def placed(parts: list[Range]) -> list[tuple[float, float, float]]:
+    """`(start, end, offset)`: part នីមួយៗ និងពេលដែលវាចាប់ផ្តើមក្នុងច្បាប់ចម្លង."""
+    out = []
     offset = 0.0
-    for start, end in keeps:
-        if seconds < start:
-            return None
-        if seconds <= end:
-            return round(offset + seconds - start, 3)
+    for start, end in parts:
+        out.append((start, end, offset))
         offset += end - start
+    return out
+
+
+def shift_time(seconds: float, keeps: list[Range]) -> float | None:
+    """ពេលក្នុងវីដេអូដើម -> ពេលក្នុងច្បាប់ចម្លង (កន្លែងដំបូង បើដដែល). `None` = ពេលនោះត្រូវបានកាត់ចេញ."""
+    for start, end, offset in placed(keeps):
+        if start <= seconds <= end:
+            return round(offset + seconds - start, 3)
     return None
 
 
 def shift_range(span: Range, keeps: list[Range]) -> list[Range]:
     """ចន្លោះពេលក្នុងវីដេអូដើម -> ចន្លោះក្នុងច្បាប់ចម្លង (អាចបែកជាច្រើន បើការកាត់នៅកណ្តាល).
 
-    ឧ. keeps [(0, 10), (20, 30)], span (5, 25) -> [(5, 10), (10, 15)].
+    ឧ. keeps [(0, 10), (20, 30)], span (5, 25) -> [(5, 10), (10, 15)]. ផ្នែកដែលចម្លង (insert) =
+    ចន្លោះលេចច្រើនដង, តាមលំដាប់ចេញ.
     """
     start, end = span
     out: list[Range] = []
-    offset = 0.0
-    for keep_start, keep_end in keeps:
+    for keep_start, keep_end, offset in placed(keeps):
         a, b = max(start, keep_start), min(end, keep_end)
         if b > a:
             out.append((round(offset + a - keep_start, 3), round(offset + b - keep_start, 3)))
-        offset += keep_end - keep_start
     return out
 
 
@@ -132,22 +230,33 @@ def shift_transcript(transcript: Transcript, keeps: list[Range]) -> Transcript:
     """transcript នៃច្បាប់ចម្លង: ពាក្យដែល**កណ្តាល**របស់វានៅក្នុងការកាត់ ត្រូវដកចេញ, នៅសល់រំកិលពេល.
 
     ពាក្យដែលនៅលើគែម keep (ចាប់ផ្តើមមុន ចប់ក្រោយ) ត្រូវបានកាត់ឲ្យនៅក្នុង keep នោះ.
+    ដើរតាម parts តាមលំដាប់ចេញ: ផ្នែកដែលចម្លង = ពាក្យរបស់វាលេចម្តងទៀតនៅទីនោះ. segment មួយដែលឆ្លង
+    ការកាត់ នៅតែជា segment មួយ ដរាបណា parts បន្តតាមលំដាប់ពេល (ដូចមុនពេលមាន inserts).
     """
     segments: list[Segment] = []
-    for segment in transcript.segments:
-        words: list[Word] = []
-        for word in segment.words:
-            middle = (word.start + word.end) / 2
-            new_middle = shift_time(middle, keeps)
-            if new_middle is None:
+    owner: list[tuple[int, int]] = []   # (segment ដើម, part) របស់ segment ចេញនីមួយៗ
+    previous_end = None
+    for index, (keep_start, keep_end, offset) in enumerate(placed(keeps)):
+        forward = previous_end is not None and keep_start >= previous_end   # បន្តតាមពេល (មិនមែន insert)
+        previous_end = keep_end
+        for number, segment in enumerate(transcript.segments):
+            words: list[Word] = []
+            for word in segment.words:
+                middle = (word.start + word.end) / 2
+                if not keep_start <= middle <= keep_end:
+                    continue
+                start = round(offset + max(word.start, keep_start) - keep_start, 3)
+                end = round(offset + min(word.end, keep_end) - keep_start, 3)
+                words.append(replace(word, start=start, end=max(start, end)))
+            if not words:
                 continue
-            keep = next(k for k in keeps if k[0] <= middle <= k[1])
-            start = shift_time(max(word.start, keep[0]), keeps)
-            end = shift_time(min(word.end, keep[1]), keeps)
-            words.append(replace(word, start=start, end=max(start, end)))
-        if words:
+            if forward and owner and owner[-1] == (number, index - 1):
+                words = segments[-1].words + words   # segment ដដែលបន្តក្រោយការកាត់
+                segments.pop()
+                owner.pop()
             segments.append(Segment(id=len(segments), start=words[0].start, end=words[-1].end,
                                     text="".join(w.word for w in words).strip(), words=words))
+            owner.append((number, index))
     total = round(sum(end - start for start, end in keeps), 3)
     return replace(transcript, segments=segments, duration=total)
 
@@ -252,6 +361,26 @@ def read_cut_list(path: Path) -> list[Range]:
         else:
             out.append((float(item[0]), float(item[1])))
     return out
+
+
+def read_inserts(path: Path) -> list[Insert]:
+    """`{"inserts": [{"start", "end", "at"}, ...]}` (ឬ `[start, end, at]`) -> list of (start, end, at)."""
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    items = data.get("inserts", []) if isinstance(data, dict) else []
+    out: list[Insert] = []
+    for item in items:
+        if isinstance(item, dict):
+            out.append((float(item["start"]), float(item["end"]), float(item["at"])))
+        else:
+            out.append((float(item[0]), float(item[1]), float(item[2])))
+    return out
+
+
+def read_order(path: Path) -> list[Range]:
+    """`{"order": [[start, end], ...]}` -> ប្លុកតាមលំដាប់ចេញ; គ្មាន = លំដាប់ពេលធម្មតា."""
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    items = data.get("order", []) if isinstance(data, dict) else []
+    return [(float(item[0]), float(item[1])) for item in items]
 
 
 def edit_folder(aspect: str) -> str:

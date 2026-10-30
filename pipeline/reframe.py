@@ -104,7 +104,8 @@ class Layout:
 
     kind: str                      # "split" | "three" | "four" | "screen1" | "screen2" | "single" | "fit" | "center"
     panels: list[Box] = field(default_factory=list)
-    box: Box | None = None         # single / center (និងប្រអប់បម្រុងរបស់ split)
+    box: Box | None = None         # single / center (និងប្រអប់បម្រុងរបស់ split); custom = crop
+    place: tuple[int, int, int, int] | None = None   # custom: ទទឹង, កម្ពស់, x, y លើ output
     person: str | None = None      # single: "left" / "right" / None (អ្នកណាក្នុង close-up)
 
     @property
@@ -1149,6 +1150,10 @@ def plan_clip(video_path: Path, clip: Clip, size: tuple[int, int],
     """
     allowed = ALL_LAYOUTS if allowed is None else allowed
 
+    if config.TRANSFORM is not None:
+        # Transform ដោយដៃ ជំនួស AI: segment មួយ (ទីតាំងថេរ) — មិនបាច់រក shot ឬមុខ
+        return [Segment(start=clip.start, end=clip.end, layout=custom_layout(config.TRANSFORM, size))]
+
     if allowed == frozenset({"center"}):
         # center តែមួយ -> មិនបាច់រកការកាត់ camera ឬមុខទេ (លឿន)
         frame_w, frame_h = size
@@ -1172,6 +1177,17 @@ def plan_clip(video_path: Path, clip: Clip, size: tuple[int, int],
                 for (a, b), layout in zip(shots, layouts)]
     segments = smooth_segments(segments, allowed=allowed, size=size)
     return order_split_panels(segments, size, seats)
+
+
+def custom_layout(transform, size: tuple[int, int]) -> Layout:
+    """Layout `custom` ពី Transform: crop ជា pixel នៃវីដេអូដើម + ទំហំ/ទីតាំងលើ output."""
+    from pipeline import transform as tf
+
+    frame_w, frame_h = size
+    x, y, w, h = tf.crop_pixels(transform, frame_w, frame_h)
+    fg = tf.foreground_size(transform, frame_w, frame_h, config.OUT_WIDTH)
+    left, top = tf.top_left(transform, fg, config.OUT_WIDTH, config.OUT_HEIGHT)
+    return Layout(kind="custom", box=Box(x, y, w, h), place=(fg[0], fg[1], left, top))
 
 
 def order_split_panels(segments: list[Segment], size: tuple[int, int],

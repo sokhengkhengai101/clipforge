@@ -91,7 +91,7 @@ def test_force_bypasses_cache(tmp_path, monkeypatch):
 
     calls = []
 
-    def fake_run(wav_path, device, model_name, compute_type, on_progress):
+    def fake_run(wav_path, device, model_name, compute_type, on_progress, batch_size=0):
         calls.append(device)
         return fake_transcript(device)
 
@@ -108,10 +108,10 @@ def test_gpu_failure_falls_back_to_cpu(tmp_path, monkeypatch):
 
     monkeypatch.setattr(config, "detect_device", lambda: ("cuda", "medium", "int8_float32"))
 
-    def fail_on_gpu(wav_path, device, model_name, compute_type, on_progress):
+    def fail_on_gpu(wav_path, device, model_name, compute_type, on_progress, batch_size=0):
         tried.append(device)
         if device == "cuda":
-            raise RuntimeError("CUDA out of memory (សាកល្បង)")
+            raise RuntimeError("cuDNN failed to initialize (សាកល្បង)")
         return fake_transcript("cpu")
 
     monkeypatch.setattr(T, "_transcribe_with", fail_on_gpu)
@@ -195,7 +195,7 @@ def test_on_fallback_is_called_when_gpu_fails(tmp_path, monkeypatch):
 
     monkeypatch.setattr(config, "detect_device", lambda: ("cuda", "medium", "int8_float32"))
 
-    def fail_on_gpu(wav_path, device, model_name, compute_type, on_progress):
+    def fail_on_gpu(wav_path, device, model_name, compute_type, on_progress, batch_size=0):
         if device == "cuda":
             raise RuntimeError("Library cublas64_12.dll is not found")
         return fake_transcript("cpu")
@@ -203,8 +203,71 @@ def test_on_fallback_is_called_when_gpu_fails(tmp_path, monkeypatch):
     monkeypatch.setattr(T, "_transcribe_with", fail_on_gpu)
     T.transcribe(wav, None, on_fallback=warnings.append)
 
+    # DLL បាត់ មិនមែនអស់ VRAM -> មិនសាក GPU ម្តងមួយៗ ទៅ CPU តែម្តង
     assert len(warnings) == 1
     assert "cublas64_12.dll" in warnings[0]
+    assert "CPU" in warnings[0]
+
+
+def test_gpu_tries_batched_first(tmp_path, monkeypatch):
+    """GPU: batched (batch 4) ជាមុន; CPU មិនដែល batched ទេ."""
+    wav = tmp_path / "audio.wav"
+    wav.write_bytes(b"x")
+    calls = []
+
+    def record(wav_path, device, model_name, compute_type, on_progress, batch_size=0):
+        calls.append((device, batch_size))
+        return fake_transcript(device)
+
+    monkeypatch.setattr(T, "_transcribe_with", record)
+    monkeypatch.setattr(config, "detect_device", lambda: ("cuda", "medium", "int8_float32"))
+    T.transcribe(wav, None)
+    monkeypatch.setattr(config, "detect_device", lambda: ("cpu", "small", "int8"))
+    T.transcribe(wav, None)
+
+    assert calls == [("cuda", config.WHISPER_BATCH_SIZE), ("cpu", 0)]
+
+
+def test_batched_out_of_memory_retries_on_gpu_one_by_one(tmp_path, monkeypatch):
+    """batched អស់ VRAM -> GPU ម្តងមួយៗ (មិនទាន់ CPU), ហើយប្រាប់អ្នកប្រើ."""
+    wav = tmp_path / "audio.wav"
+    wav.write_bytes(b"x")
+    calls, warnings = [], []
+
+    def oom_when_batched(wav_path, device, model_name, compute_type, on_progress, batch_size=0):
+        calls.append((device, batch_size))
+        if batch_size:
+            raise RuntimeError("CUDA failed with error out of memory")
+        return fake_transcript(device)
+
+    monkeypatch.setattr(T, "_transcribe_with", oom_when_batched)
+    monkeypatch.setattr(config, "detect_device", lambda: ("cuda", "medium", "int8_float32"))
+    result = T.transcribe(wav, None, on_fallback=warnings.append)
+
+    assert calls == [("cuda", config.WHISPER_BATCH_SIZE), ("cuda", 0)]
+    assert result.device == "cuda"
+    assert len(warnings) == 1 and "VRAM" in warnings[0]
+
+
+def test_out_of_memory_twice_falls_back_to_cpu(tmp_path, monkeypatch):
+    """batched និងម្តងមួយៗ អស់ VRAM ទាំងពីរ -> CPU."""
+    wav = tmp_path / "audio.wav"
+    wav.write_bytes(b"x")
+    calls, warnings = [], []
+
+    def oom_on_gpu(wav_path, device, model_name, compute_type, on_progress, batch_size=0):
+        calls.append((device, batch_size))
+        if device == "cuda":
+            raise RuntimeError("CUDA failed with error out of memory")
+        return fake_transcript(device)
+
+    monkeypatch.setattr(T, "_transcribe_with", oom_on_gpu)
+    monkeypatch.setattr(config, "detect_device", lambda: ("cuda", "medium", "int8_float32"))
+    result = T.transcribe(wav, None, on_fallback=warnings.append)
+
+    assert calls == [("cuda", config.WHISPER_BATCH_SIZE), ("cuda", 0), ("cpu", 0)]
+    assert result.device == "cpu"
+    assert len(warnings) == 2 and "CPU" in warnings[1]
 
 
 # ---------- CUDA DLL setup ----------
@@ -224,3 +287,43 @@ def test_enable_cuda_dlls_is_idempotent():
     second = config.enable_cuda_dlls()
     assert first == second
     assert len(config._CUDA_DLL_HANDLES) == handles_after_first
+
+
+# ---------- batched: កាត់ segment វែងជាប្រយោគ ----------
+
+def _words(*items):
+    """(word, start, end) -> [Word]."""
+    return [T.Word(word=w, start=s, end=e) for w, s, e in items]
+
+
+def test_split_segments_at_sentence_end_and_pause():
+    """segment 26 s មួយ -> ប្រយោគ: ក្រោយ '.' (បើ >= 4 s) និងនៅ pause > 1 s."""
+    words = _words((" We", 0.0, 0.5), (" start", 0.6, 4.5), (" here.", 4.6, 5.0),   # 5 s + '.' -> កាត់
+                   (" Okay.", 5.2, 5.6),                                             # ខ្លី: មិនកាត់ក្រោយ '.'
+                   (" then", 5.8, 6.2),                                              # pause 2 s បន្ទាប់
+                   (" more", 8.2, 8.6), (" words", 8.7, 9.0))
+    segment = T.Segment(id=0, start=0.0, end=9.0, text="", words=words)
+    result = T.split_segments([segment])
+
+    assert [s.text for s in result] == ["We start here.", "Okay. then", "more words"]
+    assert [(s.start, s.end) for s in result] == [(0.0, 5.0), (5.2, 6.2), (8.2, 9.0)]
+    assert [s.id for s in result] == [0, 1, 2]
+    assert sum(len(s.words) for s in result) == len(words)   # គ្មានពាក្យបាត់
+
+
+def test_split_segments_caps_long_runs_at_the_biggest_gap():
+    """គ្មានវណ្ណយុត្តិ គ្មាន pause > 1 s: កាត់នៅចន្លោះធំបំផុត រហូត <= 15 s."""
+    words = [T.Word(word=" w", start=i * 1.0, end=i * 1.0 + 0.5) for i in range(30)]
+    words[12] = T.Word(word=" w", start=12.4, end=12.9)       # ចន្លោះធំបំផុត 0.9 s មុនពាក្យនេះ
+    segment = T.Segment(id=0, start=0.0, end=29.5, text="", words=words)
+    result = T.split_segments([segment])
+
+    assert all(s.end - s.start <= T.SPLIT_MAX_SEC for s in result)
+    assert result[0].words[-1].start == 11.0 and result[1].words[0].start == 12.4
+    assert sum(len(s.words) for s in result) == 30
+
+
+def test_split_segments_keeps_segments_without_words():
+    """គ្មាន word timestamps -> មិនដឹងកាត់ត្រង់ណា: ទុកដូចដើម."""
+    segment = T.Segment(id=0, start=0.0, end=26.0, text="hello", words=[])
+    assert T.split_segments([segment]) == [segment]

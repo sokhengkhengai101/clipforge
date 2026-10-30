@@ -66,6 +66,12 @@ WHISPER_MODEL_GPU = "medium"
 WHISPER_COMPUTE_GPU = "int8_float32"
 WHISPER_MODEL_CPU = "small"
 WHISPER_COMPUTE_CPU = "int8"
+# Batched (GPU តែប៉ុណ្ណោះ): ផ្ញើផ្នែកសំឡេង N ក្នុងពេលតែមួយទៅ GPU ជំនួសម្តងមួយៗ. វាស់លើ 5 នាទីនៃ
+# How-AI-agents (GTX 1060 3GB, medium): beam 5 ម្តងមួយៗ 73-85 s (4x realtime), batch 4 + beam 1
+# 20.7 s (14.5x), VRAM ខ្ពស់បំផុត 2.6 GB; ពាក្យខុស 1.6 % ("gonna" -> "going to"), ម៉ោងពាក្យ p95 150 ms.
+# batch 8 អស់ VRAM 2 ដងក្នុង 4 ដង. 0 = បិទ (ម្តងមួយៗ, beam 5 ដូចមុន).
+WHISPER_BATCH_SIZE = 4
+WHISPER_BATCH_BEAM = 1
 WHISPER_LANGUAGE = None    # None = auto-detect
 # ភាសានិយាយដែល `--language` ទទួល (Whisper code -> ឈ្មោះ). តែភាសាអក្សរ Latin: caption ដុតដោយ
 # Montserrat ដែលគ្មានអក្សរ ខ្មែរ/ចិន/ថៃ... (ខ្មែរ = Phase 2 ជាមួយ font Battambang).
@@ -203,6 +209,9 @@ FIT_COLOR = "#000000"
 FIT_IMAGE: str | None = None      # path រូប (ចម្លងចូល folder render ជា .fit_background)
 FIT_RADIUS = 0                    # ជ្រុងមូលរបស់វីដេអូកណ្តាល (px នៃ output)
 FIT_SPACING = 0                   # % នៃ output ដែលទុកជុំវិញវីដេអូកណ្តាល (0-20)
+# Transform video (Edit Video): None = AI layout; ឬ pipeline.transform.Transform = វីដេអូដាក់ដោយដៃ
+# (crop -> scale -> overlay លើ background របស់ Fit) ជំនួស AI ក្នុងគ្រប់ shot
+TRANSFORM = None
 
 # `screen` layout: អេក្រង់/slide ខាងលើ + មនុស្សក្នុង webcam ខាងក្រោម (podcast ដែលចែករំលែក
 # អេក្រង់ ហើយ webcam ជាប្រអប់តូចនៅគែម). វាស់លើ How-AI-agents (640x360, 10 frame):

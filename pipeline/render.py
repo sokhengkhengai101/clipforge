@@ -239,6 +239,23 @@ def layout_chain(layout: Layout, index: int, source_label: str, out_label: str,
             f"setsar=1{suffix}[{out_label}]"
         )
 
+    if layout.kind == "custom" and layout.place and layout.box:
+        # Transform ដោយដៃ: crop -> scale -> overlay នៅ (x, y) លើ background របស់ Fit (ដាក់ក្រៅ
+        # អេក្រង់បាន: overlay កាត់ផ្នែកដែលចេញក្រៅ); ជ្រុងមូលដូច Fit (mask ទំហំ fg)
+        fg_w, fg_h, left, top = layout.place
+        background = fit_background(f"f{index}", f"bg{index}", out_width, out_height)
+        foreground = f"[g{index}]{layout.box.as_filter()},scale={fg_w}:{fg_h}:flags=lanczos"
+        if config.FIT_RADIUS > 0:
+            foreground += (f",format=yuva420p[r{index}];movie={FIT_MASK_FILE},format=gray[a{index}];"
+                           f"[r{index}][a{index}]alphamerge")
+        return (
+            f"[{source_label}]split=2[f{index}][g{index}];"
+            f"{background}"
+            f"{foreground}[fg{index}];"
+            f"[bg{index}][fg{index}]overlay={left}:{top},"
+            f"setsar=1{suffix}[{out_label}]"
+        )
+
     box = layout.box
     if box is None:
         raise RenderError(f"layout '{layout.kind}' គ្មានប្រអប់ crop")
@@ -497,7 +514,7 @@ def render_segments(video_path: Path, clip: Clip, segments: list[Segment],
     # Fit: រូប background និង mask ជ្រុងមូល ជា file ក្នុង folder render (`movie=` អានពី cwd)
     extra_files: list[Path] = []
     fit_size = None
-    if any(segment.layout.kind == "fit" for segment in segments):
+    if any(segment.layout.kind in ("fit", "custom") for segment in segments):
         if config.FIT_BACKGROUND == "image" and config.FIT_IMAGE:
             image = out_path.parent / FIT_IMAGE_FILE
             # PNG ជានិច្ច: FFmpeg បម្លែង jpg/webp ម្តង — ឈ្មោះ file ថេរ គ្មានតួពិសេស
@@ -505,7 +522,13 @@ def render_segments(video_path: Path, clip: Clip, segments: list[Segment],
                             "-i", str(Path(config.FIT_IMAGE).resolve()), "-frames:v", "1", str(image)],
                            check=True)
             extra_files.append(image)
-        if fit_styled():
+        custom = next((s.layout.place for s in segments if s.layout.kind == "custom"), None)
+        if custom is not None:
+            # Transform: mask ជ្រុងមូលទំហំវីដេអូដែលដាក់ដោយដៃ (fit_size មិនប្រើ)
+            mask = fit_mask(custom[:2], out_path.parent / FIT_MASK_FILE)
+            if mask is not None:
+                extra_files.append(mask)
+        elif fit_styled():
             fit_size = fit_foreground_size(*probe_dimensions(video_path),
                                            config.OUT_WIDTH, config.OUT_HEIGHT)
             mask = fit_mask(fit_size, out_path.parent / FIT_MASK_FILE)

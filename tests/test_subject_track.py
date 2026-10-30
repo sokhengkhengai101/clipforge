@@ -100,3 +100,11 @@ def test_a_box_that_covers_the_frame_is_lost_but_growing_is_fine(monkeypatch):
     assert len(follow(monkeypatch, growing)) == 3
     spread = [((100, 100, 200, 60), 0.4), ((0, 0, 600, 350), 0.7)]    # ឈុតរមាស: score ខ្ពស់ តែពេញ frame
     assert len(follow(monkeypatch, spread)) == 2
+
+
+def test_shift_track_repeats_a_path_inside_an_inserted_part():
+    path = track([(21.0, 100.0, 0.0), (22.0, 200.0, 0.0)], start=21.0, end=22.0)
+    parts = st.shift_track(path, [(20.0, 25.0), (0.0, 30.0)])       # hook 20-25 រួចវីដេអូទាំងមូល
+    assert [(p.start, p.end) for p in parts] == [(1.0, 2.0), (26.0, 27.0)]
+    assert parts[0].points == [(1.0, 100.0, 0.0), (2.0, 200.0, 0.0)]
+    assert parts[1].points == [(26.0, 100.0, 0.0), (27.0, 200.0, 0.0)]
