@@ -2352,3 +2352,745 @@ and Open folder sent it to `/reveal`; CC ON -> OFF removed the live caption and 
   another language is transcribed again.
 - Review output: `python review.py <video name> --frames`
 - Test: `pytest -q`
+
+**Transform video, step 1 of 4: the pipeline (2026-10-27), planned with the developer first**
+(OpusClip screenshot: the video as a box with corner handles over the canvas, a crop button above).
+Decided: one transform for the **whole video**, and it **replaces the AI layout** (Layout reads
+"Custom"; Reset returns to the AI). It is a hand-placed Fit, so the background (blur / colour /
+image) and the corner radius are Fit's own code. `pipeline/transform.py`: `Transform(x, y, scale,
+crop)` -- the box's centre as fractions of the output, its width as a fraction of the output width
+(0.1-3, so it may run off screen), and a crop of the source as fractions (`parse`, `crop_pixels`,
+`foreground_size` with even sizes, `top_left`, which may be negative). `make_clips --transform
+x,y,scale --transform-crop x,y,w,h` sets `config.TRANSFORM`; `plan_clip` then returns one `custom`
+segment (no shot or face detection), and `layout_chain` draws crop -> scale -> `overlay=left:top` on
+`fit_background` (`overlay` clips what lies outside), with the radius mask sized to the box. Tests:
+`tests/test_transform.py` (4); 688 pass.
+Measured on 6 s of How-AI-agents (640x360 screen-share with two webcam tiles), rendered to the
+scratchpad on a black colour background so the box can be read off the frame: sent / measured
+`0,657 1080x606` / `0,656 1080x606`; `54,1193 540x302` (radius 40) / `54,1192 540x302`; the crop
+`0.14,0,0.72,1` at scale 1.1 removed both webcam tiles and filled the width with the slide (sent
+x -54, measured 0 -- off screen by design); every file 1080x1920, 6.000 s video and audio; 4.4-4.9 s
+per render (7.0 s with blur); no temp files left; the source MD5 unchanged. Nothing in `output/` was
+written. Next: the sidecar (`transform` in the look), then the UI (box with handles, Crop, Reset).
+**Step 2, the sidecar.** `transform` is one more key of the look (`manage.DEFAULT_LOOK`, `None` = the
+AI layout): `clean_transform` checks `{x, y, scale, crop}` through `pipeline.transform.parse` (a bad
+one is 400 before any job), `look_options` turns it into `--transform` and, unless the crop is the
+whole frame, `--transform-crop`; Reset is `transform: null`, and a look with nothing left removes
+`project.json`'s key as before. No `JobRequest` change: look options already become flags by name.
+Tests: 2 more in `tests/test_look_api.py`; 690 pass. A real job through a test sidecar on Rhino
+(1280x720, 4:5, black colour background, crop `0.25,0,0.5,1`, scale 0.8): 1 shot `custom` in
+`layout.json`, 1080x1350, 55.64 s; expected box `108,189 864x972`, measured `108,188 864x972`. The
+job saved its look in Rhino's `project.json` (by design: Export keeps what was exported); it was put
+back to the developer's own look (blur 60), the test folder `full_4x5` deleted, the source MD5
+unchanged, the test sidecar stopped.
+**Step 3, the UI.** Layout -> **Custom (Transform)** turns `look.transform` on (Fit in the middle,
+`initialTransform`) and the label reads "Layout: Custom"; any other layout item sets it back to null.
+`src/transformBox.ts` is the geometry in fractions, mirroring `transform.py` (`boxRect`, `fullRect`,
+`fitScale` / `fillScale`, `moveBy` with a 3 % snap to the centre lines, `scaleFromCorner` -- the
+opposite corner stays put and the ratio is kept -- and `cropFromCorner`, which keeps the kept part where
+it is on screen and rounds a crop within 0.5 % of an edge to the edge). `screens/TransformBox.tsx`
+always wraps the `<video>`, changing only styles, so switching to Custom never re-creates it (the
+time stayed at 600.00 s); in Custom the wrapper is the box (`overflow: hidden`, the radius) and the
+video inside is sized `1/cw x 1/ch` and offset by the crop, drawn over `FitBackdrop`. The frame,
+four corner handles, snap guides and the toolbar (Crop / Fit / Fill / centre / ↺ AI) go through a
+`createPortal` into an **unclipped overlay** above the stage: the stage's `overflow-hidden` cut the
+handles at the screen edge in half and a mouse on the edge missed them (measured: the bottom-right
+crop drag did nothing). Arrow keys nudge (Shift = more), Escape leaves Crop, then deselects.
+Two bugs the test found: `PUT /look`'s `LookRequest` had no `transform`, so pydantic dropped it and
+nothing was saved (step 2's test went through `POST /jobs` only) -- fixed, with a test; and snap at
+1.5 % was ~4 px on a 263 px preview, so a 4 px drag never snapped. 691 pass, tsc and oxlint clean.
+Measured in the browser on How-AI-agents at 9:16 (test sidecar + Vite, `POST /jobs` answered 503):
+Custom -> box `0, 0.342, 1 x 0.316` of the stage = 1080 x 607 of 1920, saved `{0.5, 0.5, 1}`; a drag
+up snapped x to 0.5 with the gold guide shown; crop corners to 14 % / 86 % -> `[0.14, 0, 0.72, 1]`, box
+width 1 -> 0.72 at the same place; Fill -> scale 2.2758 (= 0.72 x 1.778 / 0.5625); a corner drag 1 ->
+0.7 wide with the top-left fixed; Export sent the transform; no console errors. How-AI-agents' look
+was reset afterwards (its saved split untouched); the test servers were stopped.
+**Step 4: preview against the real render.** Four transforms on How-AI-agents (640x360) at 9:16 on a
+black colour background, the render at 603 s of a 600-606 s piece (scratchpad) against the Edit
+Video preview paused at 603 s (each look saved through `PUT /look`), boxes in output pixels:
+
+| case | sent | render measured | preview (DOM) | picture diff (12 px shifted) |
+|---|---|---|---|---|
+| plain | 0, 657, 1080x606 | 0, 656, 1080x606 | 0, 656.2, 1080x607.5 | 4.6 (10.2) |
+| crop 0.14/0.72, scale 1.1 | -54, 342, 1188x928 | 0, 342 (off screen) | -54, 342.3, 1188x928.1 | 2.0 (4.3) |
+| small, radius 40 | 54, 1193, 540x302 | 54, 1192, 540x302 | 54, 1192.1, 540x303.7 | 8.8 (20.6) |
+| crop on 4 sides, off the edge | 238, 285, 864x582 | 238, 284 (clipped) | 237.6, 284.3, 864x583.2 | 2.4 (6.4) |
+
+The picture diff is the mean |preview - render| inside the box (0-255), with the same preview moved
+12 px as the control, so the crop's content lines up, not only the box. Found on the way:
+- **A box larger than the stage covered the preview toolbar** (16:9, Layout ...): the frame is a
+  click target in the unclipped overlay. The overlay is now 12 px larger than the stage with
+  `overflow: hidden`, so edge handles show in full but the box stops 12 px out.
+- **Data loss in the sidecar, real and reproduced.** The first measuring run deleted
+  How-AI-agents' `project.json`, and with it the developer's saved split (272.31). Edit Video's
+  autosave sends `PUT /look`, `/motion` and `/cuts` at once, FastAPI runs them in separate threads,
+  and each writer read `project.json`, changed its key and wrote the whole file back with no lock --
+  while `write_text` empties the file before writing, so a reader in that instant got `{}` (`_read`
+  treats a broken file as empty) and wrote back only its own key, or deleted the file when that key
+  was a default. Fixed in `server/manage.py`: the five writers run under one `threading.RLock`
+  (`@_locked`), and `_write` writes `project.json.tmp` then `os.replace`s it, so no reader ever sees
+  half a file. `tests/test_project_file_race.py` runs four writers 150 times each at once: every key
+  survives; with the lock removed and the old `write_text` put back, the same test loses data, so it
+  really catches the race. The split was restored from the session's own record (`cuts []`,
+  `transition punch`, `splits [272.31]`) before anything else; how many earlier edits this race may
+  have eaten silently is not known.
+693 pass, tsc and oxlint clean; How-AI-agents' look reset, its split intact, the source MD5
+unchanged, nothing written to `output/`, the test servers stopped.
+
+**Layout menu, click-to-transform and a Crop dialog (OpusClip screenshots, 2026-10-27).**
+- **Layout menu** (`screens/LayoutMenu.tsx`, helpers in `screens/layoutChoice.ts`): "Global layout
+  settings ›" opens a checkbox submenu of the layouts the AI may use (Fill / Fit / Split / Three /
+  Four / ScreenShare; at least one stays on), sent as `--layout` when the current layout is **Auto**;
+  "Current layout" is Auto, one layout forced on the whole video (`layoutFlags`; ScreenShare sends
+  `screen,fill`), or Custom (Transform). Picture in picture and Gameplay are drawn with a Phase 3
+  badge. The submenu's open state lives in the panel mounted with the menu: kept in `LayoutMenu` it
+  stayed open from the last time, so the next click closed it (measured).
+- **TransformBox in every layout:** hovering the video shows a dashed outline and "Transform ·
+  click to edit"; a click selects it (handles + the screenshot's small toolbar: ✂ Crop, 🖼 replace
+  media disabled as Phase 3, ⌄ Fit / Fill / centre / back to AI) without saving anything; the first
+  drag starts from `startFrom` -- `coverTransform` (the AI preview's centre crop) or the Fit box -- so
+  the picture does not jump, and the layout becomes Custom.
+- **Crop dialog** (`screens/CropDialog.tsx`), replacing the in-preview crop mode: a real frame at
+  the playhead (`/probe/frame`), the crop with 4 corner + 4 edge handles and a draggable middle,
+  Aspect ratio Custom / same as output / 9:16 / 1:1 / 4:5 / 16:9 (`cropToRatio`, `dragCrop` in
+  `transformBox.ts` keep the ratio and the opposite edge), Reset and Apply (only `crop` changes; the
+  box keeps its centre and width). With Split, Three and Four all off it shows OpusClip's note and
+  its "Enable layout" link turns them back on. The dim outside the crop is an inline `box-shadow`
+  clipped by the image (the Tailwind arbitrary class did not draw there).
+Measured in the browser on How-AI-agents at 9:16 (`POST /jobs` answered 503): Current layout lists
+Auto + 8 + Custom, Global starts with 6 on; unticking Three / Four leaves 4; hover shows the hint; a
+click gives the 3-button toolbar, keeps "Layout: Auto" and saves nothing; a drag gives Custom with crop
+`[0.3418, 0, 0.3164, 1]` (= 0.5625 / 1.778, the AI preview's crop) and y 0.4; the dialog has 8
+handles, 1:1 -> `0.22, 0, 0.56, 1`, a corner drag keeps 1:1, Apply saved a crop whose pixel ratio is
+1.000; the note appears once Split is off too, and its link restores Split / Three / Four; Export
+sent `layout fill,fit,split,three,four,screen` and the transform. A test trap: a run stopped halfway
+leaves its transform saved, and the next run opens in Custom -- the test now resets the look first.
+How-AI-agents' look was reset and its split (272.31) intact; the test servers stopped.
+**Hover looks like OpusClip's -- asked for by the developer** (screenshot: a solid thin white frame
+with four round corners, no dashes). Hover now draws the selected look -- a solid 2 px white outline
+and the four corner circles -- without selecting: the corners are `pointer-events: none` until a
+click, so moving onto one does not end the hover (no flicker) and cannot start a resize. The
+"Transform · click to edit" chip became the frame's tooltip. Measured read-only against the
+developer's running app (hover only): before `outline none`, 0 corners; hover `solid 2px`, 4 corners,
+not clickable; on a corner still solid; away back to none. The only writes were the editor's usual
+autosave of the values it had just loaded.
+**Transform box: selected on open, hover = edit, smooth drag, Logo / Image menu (2026-10-27) -- asked
+for by the developer, planned first.** The box starts selected when Edit Video opens (toolbar and
+corners shown, nothing saved, Layout stays Auto); a `pointerdown` anywhere outside it -- transcript,
+timeline, menus -- deselects (a `document` listener in `TransformBox`, which ignores elements marked
+`data-transform-ui` and any `role="dialog"`, so Crop does not deselect); hovering shows the frame and
+corners and both can be dragged at once (an 80 ms delay before hiding, so moving from the frame onto a
+corner does not end the hover). **Drag was not smooth because every `pointermove` called `setLook`
+and re-rendered the whole editor** (transcript, timeline, captions): 90 moves took 24.4 s, frame gap
+p95 417 ms, long tasks of 126-582 ms on nearly every move. The drag now lives in a local `draft`
+inside `TransformBox` and `onChange` runs once on release (one autosave, one undo step): the same
+90 moves 1.7 s, p95 16.7 ms, one 216 ms frame left (the first move). The toolbar sits above the box
+(clamped inside the stage) and its menus are `absolute` under it -- inside the toolbar they widened
+it and moved it on every open. The developer then removed the separate ⌄ menu (Fit / Fill / centre /
+back to AI): the caret belongs to the image button, so the toolbar is ✂ and one 🖼⌄ button; back to AI
+is Layout -> Auto. 🖼⌄ opens **Logo / Image**, both disabled "ជំហានបន្ទាប់" until a real
+image overlay exists. Measured read-only against the developer's running app (PUTs answered by the
+test): on open toolbar + 4 corners; the Logo / Image menu and then ⌄ left the box and toolbar at
+the same pixels; a click in the transcript deselected; hover gave 4 corners with
+`pointer-events: auto`, still shown on a corner; a corner drag shrank the box 540 -> 480 px wide
+with one PUT after release; no console errors.
+**Crop dialog: Aspect ratio dropdown like OpusClip's (2026-10-27) -- asked for by the developer with a
+screenshot.** The `<select>` became `RatioMenu` in `CropDialog.tsx`: a bordered button showing the
+current shape icon and name, and a list **Custom / Original / 9:16 / 1:1 / 16:9 / 4:3 / 9:8 / 4:5**,
+each with an icon drawn at its real ratio (Custom = dashed frame with a box inside, Original = dashed
+frame) and ✓ on the current one. Original is the source video's own ratio (the whole frame); "same as
+output" was dropped because the screenshot has no such item, and with it the dialog's `outputRatio`
+prop. It closes on an outside click or Escape, and Escape closes only the list, not the dialog.
+Custom shows all 8 handles; any locked ratio (Original included) shows only the 4 corners, since
+dragging one edge alone cannot keep a ratio (developer's request; measured 8 -> 4 -> 8).
+Found by the developer: a crop touching the frame edge (9:16 = full height) cut its corner handles in
+half, because the image box was `overflow-hidden` to clip the dim. Now only an inner layer (image + the
+dim's box-shadow) clips, and the frame with its handles sits above it unclipped; measured at 9:16: all
+four corners 16x16 with their top and bottom pixels hit-testing as the handle, and a drag started 2 px
+from the top of the nw corner moved it.
+Choosing a **different** ratio now resets the crop (the developer's request, planned first): the largest
+crop of that ratio centred in the frame (`cropToRatio` from the whole frame), Custom = the whole frame;
+choosing the ratio already selected changes nothing, so an edit is not lost. Before, the new ratio was
+cut from the current crop and kept its centre, so a small crop in a corner stayed small in the corner.
+Measured (Apply not clicked): a corner crop -> 1:1 `0.22, 0, 0.56, 1`; an edited 1:1 -> 1:1 again
+unchanged; 9:16 `0.34, 0, 0.32, 1`; 16:9 the whole frame; 4:3 `0.13, 0, 0.75, 1`; Custom the whole
+frame with 8 handles.
+The multi-speaker note now shows **every time** the Crop dialog opens, as in OpusClip's screenshot (it
+used to show only with Split / Three / Four all off), in the app language (`useT`; English is
+OpusClip's sentence). The reason it always applies: a crop is a Custom transform, which replaces the
+AI layout for the whole video, so split / three / four never run while it is on. **Enable layout** now
+turns Split / Three / Four on, sets the layout to Auto, clears `look.transform` and closes the dialog
+-- the hand-placed box and crop are dropped. Measured read-only: the note shown, the link closed the
+dialog, the label read "Layout: Auto" and the autosave sent `transform: null` (answered by the test).
+Measured read-only against the developer's running app: 8 items in that order, 4:3 on the 16:9 source
+gave crop `0.13, 0, 0.75, 1` (pixel ratio 1.333), Original gave the whole frame, no console errors,
+Apply not clicked.
+**Snap guides at the frame edges (2026-10-27) -- found by the developer** ("when drag video out of
+frame no snap guide"). `moveBy` only snapped the box's centre to the centre lines, so a box dragged
+off the frame never snapped or showed a guide. It now takes the box's size and snaps, within the same
+3 % (`SNAP`), the centre to 0.5 and each box edge to each frame edge from inside or outside (left edge
+to 0, right edge to 1, right edge to 0 when the box sits off to the left, left edge to 1 off to the
+right; the same vertically); the guide is drawn at the line it snapped to (0, 0.5 or 1). Arrow-key
+nudges pass `null` and do not snap -- before, a nudge near the centre was pulled straight back.
+Measured read-only in the developer's running app (PUTs answered by the test): the box's right edge
+and then its left edge snapped to the frame's left edge at x 660 with a guide there, its bottom edge
+to the top edge at y 199 with a guide there, nothing far out, no guide after release, no console errors.
+Then, at the developer's request, a guide shows only when the box **comes onto** a line, not while it
+stays on the line it started the drag on: a box that starts centred and is dragged sideways had the
+horizontal centre guide lit for the whole drag. `leftLine` (a ref, reset per drag) remembers per axis
+whether the box has been off every line since the drag began. Measured: a sideways move from the
+centre shows no guide; reaching the frame's left edge shows only x@660; back to the centre shows
+x@994; reaching the top edge then adds y@199. A guide on a frame edge is a **solid 2 px yellow** line (gold #FFD23F,
+the developer's request); the centre guides stay dashed 1 px (measured: `solid 2px` at x 660 and y 199,
+`dashed 1px` at the centre).
+**"When drag video not smooth" -- found by the developer, right after edge snapping.** Frame timing was
+fine (90 moves: p95 16.8 ms); the jerk was the snap. It was 3 % of the stage, i.e. **20 px** on the
+668 px-wide 16:9 preview, so a box that starts centred stayed stuck on the centre lines for the first
+20 px of mouse travel and then jumped, and the edge lines added more such zones. Now the distance is
+`SNAP_PX` 6 px of the preview (converted per axis from the stage's size), and an axis does not snap at
+all to the line it started the drag on until it has left every line (the same `leftLine` that hides
+the guide). Measured: mouse +2 ... +30 px from the centre moves the box +2 ... +30 px exactly; edge
+and centre snapping and guides unchanged otherwise.
+**Resizable transcript / preview in Edit Video (2026-10-27) -- asked for by the developer** (screenshot,
+"<->"). The 1 px border between the two panels is now `screens/PanelResizer.tsx`, a `role="separator"`:
+drag it to widen or narrow the transcript (hover/drag shows a gold line and a ⇔ knob), ←/→ move it
+20 px (Shift 80), double-click returns to the default (46 %, 360-640 px). The width is clamped to
+280 px and to leave the preview at least 420 px beside whatever right panel is open (Captions, Motion,
+tools), and saved in localStorage `kcs.transcriptWidth` (try/catch). While dragging, `onLive` writes
+the panel's `style.width` directly and state changes once on release -- re-rendering the whole editor
+per mouse move is what made the Transform drag stutter. Measured in the developer's running app
+(1440 px): 640 -> 390 px by dragging (saved 390), dragged far right clamped at 928 with the preview at
+420, ArrowLeft 908, the same 908 after a reload, double-click back to 640 with the key removed, no
+horizontal page scroll, no console errors.
+**Timeline redrawn after OpusClip's (2026-10-27) -- asked for by the developer, planned first.** The
+toolbar is one row in three parts: tools on the left as icon buttons with tooltips (Hide timeline,
+⦚ Split, 🔗 link/unlink audio **disabled "next step"**, 🗑 delete / ↺ restore the picked part, and
+**Fit** = zoom back to 1x, lit while at 1x), **⏮ ▶ ⏭ and `00:01.06 / 00:55.16`** in the centre (moved
+from under the preview, which gains that height; they stay when the timeline is hidden), and zoom
+− slider + on the right. The ruler labels only big marks (at least 500 px apart, e.g. 0 · 30) with
+dots between that divide them (`rulerSteps`); the layout band is a plain grey bar with each shot's
+label ("Original · not reframed" without a reframe); the clip strip is a rounded block with a
+disabled **+** on each side (add a video before / after -- next step); the waveform has its own
+rounded panel; the playhead has a rounded head on the ruler. Cuts, the picked part, splits and the
+trim handles moved with the new geometry (strip at 56 px). `EDGE_PX` 10 px inside the scroller keeps
+the playhead's head whole at 0 s. Measured in the browser on Rhino with a test sidecar + Vite (the
+developer's app was not running; both stopped afterwards, PUTs answered by the test): ruler `0` · `30`,
+no transport left under the preview, Play -> Pause, ⏭ +5 s to 00:05.00, zoom in turns Fit off and Fit
+turns it back on, Hide keeps the transport and removes the strip, the scroller does not scroll at 1x
+(1696 / 1696), no page scroll at 1100x700, no console errors.
+**Resizing the Transform box snaps to the frame edges too (2026-10-27) -- asked for by the developer**
+("when transform touch frame show solid yellow"). Only moving snapped; a corner drag that met the frame
+edge showed nothing. `scaleSnapped` (`transformBox.ts`) wraps `scaleFromCorner`: when the **dragged**
+edge comes within `SNAP_PX` of a frame edge (0 or 1) it is pulled exactly onto it -- the box keeps its
+ratio and its opposite corner -- and the solid 2 px yellow guide shows on that edge (both when the
+corner meets two edges at once). The fixed (anchor) edges do not count, so a box already full-width
+does not light a guide while it is resized. Measured read-only in the developer's running app on
+How-AI-agents at 16:9 (PUTs answered by the test): a small drag no guide; near the right edge the box
+snapped to right 1808 / bottom 743 (the stage's edges) with `x@1806 solid` and `y@741 solid`; far past
+no guide; none after release; no console errors.
+**Speech cleanup panel redrawn after OpusClip's (2026-10-28) -- asked for by the developer with a
+screenshot.** `screens/CleanupPanel.tsx` is now cards: **"N pauses found"** with a checkbox (count
+pauses in or out), ^ `1/N` v (jump to the previous / next pause, 1 s before it) and a **Pause
+duration** slider 0.3-3 s (was three buttons 0.5 / 1 / 2; the sidecar already took 0.1-10 s, so no
+backend change) that asks `/cleanup` only once it rests 300 ms; **"N filler words found"** with the
+same checkbox and ^ / v, and "view all fillers" folding out the per-filler checkboxes; **Bad takes**
+drawn with Detect now disabled ("next step" -- nothing detects retakes yet; OpusClip's "free trial"
+left out, no billing); a "cut N s · N places" line and a white **Remove all** (Edit Video only; the
+Silence dialog keeps its own Export). Default pause is 0.5 s (was 1). Edit Video's aside is 340 px
+(was 300; "pauses found" truncated). Measured in the browser with a test sidecar + Vite (stopped
+afterwards; PUTs answered and `POST /jobs` 503 by the test): How-AI-agents 164 pauses / 31 fillers,
+5 slider presses -> one request (`pause=1`) -> 38 pauses; ^ / v 1/164 -> 2/164 -> 1/164 seeking 27.88
+/ 32.74 s; unticking pauses 67.9 -> 10.4 s; unticking one filler 69 -> 68 places; Remove all closed
+the panel with 66 cuts. Rhino: 3 pauses, the filler card disabled at 0/0; the Silence dialog sends
+`[[10.54,11.34],[12.98,39.21],[48.69,49.21]]`. No console errors; tsc and oxlint clean.
+**Speech cleanup closes on an outside click (2026-10-28) -- asked for by the developer.** A
+`document` `pointerdown` listener in `EditorScreen` (only while the panel is open) closes it when
+the press lands outside the aside. It ignores the Speech cleanup button itself (`data-cleanup-toggle`,
+in the transcript toolbar -- without that, a click closed the panel and the button's own click
+reopened it, measured), the right-hand tools column (its buttons switch panels themselves) and any
+`role="dialog"`. Measured read-only against the developer's running app: ^ / v and the slider keep
+it open; a click on the preview or the timeline closes it; the button toggles it; the Captions tool
+swaps to Captions; no console errors.
+**Resizable timeline (2026-10-28) -- asked for by the developer.** The timeline's top edge is a
+`role="separator"` (gold line and a ⇕ knob on hover): drag up for a taller timeline, down for a
+shorter one, ↑ / ↓ move 8 px, double-click returns to the default. The frame strip and the waveform
+grow together (waveform = 86 % of the strip, so the default 56 px keeps the old 56 / 48); the
+height is a CSS variable `--strip-h` on the section, written straight to the element while dragging
+and committed to state once on release, so a drag never re-renders the 60 frame tiles. Clamped to
+32 px and to keep the whole timeline under 55 % of the window (`stripMax`, at most 200), saved in
+localStorage `kcs.timelineStrip` (try/catch; the default removes the key). Overlays (cuts, picked
+part, splits, trim handles) already ran to `bottom-0`, and the side "+" blocks follow `--strip-h`.
+Measured read-only against the developer's running app (PUTs answered, `POST /jobs` 503) on Rhino at
+1440x900: timeline 237 / preview 602 at the start; dragging up 150 px -> 388 / 451 (strip 137, wave
+118); far up clamped at 499 / 340; far down at 193 / 646 (strip 32); ↑ x2 -> 48 px, kept after a
+reload; double-click -> 56 with the key removed; at 1100x700 the maximum is 390 / 249 with no page
+scroll; no console errors.
+**Whisper batched: transcribe ~3x faster (2026-10-28) -- asked about by the developer** ("Whisper takes
+long, can I use Google AI offline?"). Google's speech APIs upload audio, and the local Gemma models
+give no word timestamps, which captions, cuts and Speech cleanup all need -- so Whisper stays and is
+made faster. Benchmarked first on 5 min of How-AI-agents (GTX 1060 3 GB, `medium`, no job running):
+sequential beam 5 (the old setting) 73-85 s = 4x realtime, peak 2.5 GB; sequential beam 1 no faster
+(83 s); batched 8 + beam 1 33 s but **out of memory 2 of 4 times** (and the CUDA context then failed
+the next setting with "invalid device ordinal"); batched 16 58 s; **batched 4 + beam 1 20.7 s =
+14.5x, peak 2.6 GB, stable twice**, 1.6 % of words differ ("gonna" -> "going to", "a" -> "an").
+`config.WHISPER_BATCH_SIZE = 4` / `WHISPER_BATCH_BEAM = 1` (0 = the old sequential path);
+`_transcribe_with(batch_size=)` uses faster-whisper 1.2.1's `BatchedInferencePipeline` on the GPU only.
+Fallback order in `transcribe()`: batched -> on **out of memory only** the GPU again sequentially with
+beam 5 -> CPU `small`; `_attempt` returns the error without its traceback (the traceback holds the
+model's VRAM) and `gc.collect()` runs before the retry; the messages now carry their own wording, so
+`make_clips` prints them as given. Batched returns whole VAD chunks (How-AI-agents: 80 segments,
+median 27 s, against 434 / 4.7 s), and `highlights` shows the LLM one `[start - end] text` line per
+segment to pick times from, so `split_segments` cuts them back into sentences from the word
+timestamps: after `.?!` once a piece is >= 4 s, at a pause > 1 s, and at the biggest gap while over
+15 s -> 360 segments, median 5.2 s, 43-70 lines per 5-min chunk (was 46-65); no word is lost.
+Measured on the whole How-AI-agents (35:25) through the real `transcribe()` into the scratchpad
+(the project's own `transcript.json` untouched): **153.8 s against 7:18 (2.8x faster, 13.8x
+realtime)**, no fallback; 6773 words against 6662, 2.28 % different, start times median 10 ms /
+p95 170 ms apart (4 % over 200 ms); pauses > 0.5 / 1 / 2 s 136 / 34 / 5 against 164 / 38 / 8, so
+Speech cleanup suggests fewer. Visible differences to judge: numbers come out as words ("95 %" ->
+"ninety five percent", which the burned captions then show) and a few words change ("claw" ->
+"cloud"). Which version is more accurate was not measured. Existing transcripts are kept (cache);
+only new transcribes or `--redo transcribe` use batched. `eta.ts` transcribe GPU medium 12.4 -> 3.9
+s per minute of video (small 6 -> 2, not measured). Tests: 5 new in `tests/test_transcribe.py`
+(batched first on GPU and never on CPU, OOM -> sequential GPU, OOM twice -> CPU, sentence split,
+15 s cap, wordless segments kept); 699 pass. Not yet run through `make_clips` / the app on a new
+video.
+
+**Edit Video UI/UX audit (2026-10-28), fix 1 of the list -- the preview vanished on a small window.**
+At 1100x700 with Captions open the stage measured **122x11 px**: the transcript was `shrink-0` at
+46 % (min 360), so the 340 px aside and the 92 px tools column took their width from the preview
+alone, and its toolbar wrapped into a column. The transcript is now `shrink` (min 280) and the
+preview has `minWidth: max(360px, min(40%, 100% - 720px))` (`PREVIEW_MIN_CSS`), so flex narrows the
+transcript instead; `PanelResizer`'s max reads that min-width from the computed style. Measured
+(transcript / preview / stage), Captions open: 1100 288 / 380 / 340x191, 1280 336 / 512 / 472x266,
+1440 432 / 576 / 536x302 (was 640 / 368 / 328x185); with no panel open the widths are unchanged;
+no horizontal scroll, no console errors. Still open from the audit: undo covers only cuts/splits,
+autosave fails silently, no Space play/pause, words not keyboard-focusable, search has no
+next/previous, Edit Video not translated, Delete / S fire while a button or select has focus.
+**Audit fixes 2-4 (2026-10-28): Space, shortcut guard, save status.** (1) **Space** plays / pauses
+the preview (`togglePlay`), except on a real `<button>`, which Space clicks. (2) Every editor
+shortcut goes through `editorOwnsKey`: nothing fires from an input, textarea, select,
+contenteditable or inside `role="dialog" / "menu" / "listbox"` -- before, only input/textarea were
+skipped, so Backspace on a Captions select could cut the picked timeline part. The timeline's
+`role="slider"` stays allowed, so click a part then Delete still cuts it. (3) Autosave of cuts /
+look / motion goes through `saveIfChanged`: it remembers the JSON the sidecar already has
+(`lastSaved` ref + `savedBodies` state, set on load and on success) and sends a PUT only when it
+differs, so **opening the editor writes nothing** (was 3 PUTs); the top bar shows `SaveStatus` --
+"កំពុងរក្សាទុក…" while anything differs (including the 0.6 s debounce), "✓ បានរក្សាទុក", or a red
+"⚠ រក្សាទុកមិនបាន" whose tooltip is the server's error and whose click retries (`retry` re-runs the
+three effects). Measured in the browser (PUTs answered by the test, one forced 500): open -> 0 PUTs
+and no status; Space on a word -> `play,pause`, no page scroll; Space on Speech cleanup -> the panel
+opens, no play; Delete / Backspace / S in a Captions select -> 0 words cut, 0 cuts PUTs; Delete on a
+word -> "កំពុងរក្សាទុក…" then "✓ បានរក្សាទុក"; a 500 -> "⚠ រក្សាទុកមិនបាន" (tooltip "disk full (test)"),
+retry -> saved; no PUT while idle; no console errors; tsc and oxlint clean. A test trap: typing a
+letter in a focused `<select>` picks the first option starting with it (native type-ahead), which
+is a real change and a real save.
+**Audit fixes 5-8 (2026-10-28): transcript keyboard, search steps, follow on seek, English.**
+(5) The transcript is one Tab stop (`tabIndex 0`, pause chips now `tabIndex -1` -- before, Tab
+stopped on every pause, 340 on How-AI-agents); ← / → select the previous / next shown item and seek
+there, Shift extends (`stepSelection`; with nothing selected the first press takes the spoken word),
+skipping pauses or cut words the Filter hides. (6) Search keeps a cursor (`hitCursor`, tied to the
+needle): Enter / ↓ next, Shift+Enter / ↑ previous, wrapping, with ˄ ˅ buttons and "3/84"; the current
+match gets a gold outline. (7) The transcript follows the spoken word when paused too (timeline
+click, ⏭), not only while playing; `block: 'nearest'` keeps it still when the word is already in
+view. (8) Edit Video speaks English: `t()` in `EditorScreen`, `EditorTimeline`, `CleanupPanel`,
+`MotionPanel`, `CaptionPanel` (so the Subtitles screen's panel too), `LookMenus`, `LayoutMenu`,
+`TransformBox`, `SubjectTrackDialog`, `PresetCard` and the kit `TopBar`'s Home tooltip; data gained
+English beside the Khmer (`layoutKinds` `en`, caption presets `en`, colour names `en`, animation
+groups `en` and a third tuple item for the three Khmer animation labels -- the Python test that reads
+the ids still passes); `i18n.useNum()` gives Khmer or Western digits. Left in Khmer on purpose: the
+sample artwork on the Box / Neon preset cards (like tool art). Measured in the browser: How-AI-agents
+"skill" 84 matches, Enter 1/84 -> 2/84, Shift+Enter 1/84, ↑ wraps to 84/84, a new needle resets;
+→ x3 then Shift+→ x2 selects "what are people"; 1 Tab stop in the transcript; a paused timeline
+click at 80 % brings word 5622 into view; in English a text + attribute scan of the editor, Filter /
+Transcript / Aspect / Layout / Background / Tracker menus, the Captions tabs, Motion, Speech cleanup
+and the subject-tracking dialog finds no Khmer except that artwork; the Khmer runs of fixes 2-4 still
+pass; no console errors, no PUT; tsc, oxlint and `tests/test_caption_fx.py` clean.
+**"+ Extend a clip" = Add a section from transcript (2026-10-28) -- asked for by the developer with
+OpusClip's dialog.** OpusClip edits a clip cut from a long video; Edit Video edits the **whole** video
+through one cut list, so adding a section means **taking that range out of the cut list**: it comes
+back into the video at its own place in time (after a ‖ trim or deleted words). No pipeline or
+sidecar change. `screens/ExtendDialog.tsx` (1100 px): left, the transcript as sentences with
+`[0:00:01]` stamps (`sentencesOf`: ends after `.?!`, at a pause >= 1 s, or at any pause once a
+sentence is over 20 s -- Rhino's transcript has no punctuation), click a stamp or a word = the whole
+sentence, drag across words = that range, words cut now struck through, the selection one continuous
+band (the space between two chosen words is coloured too); right, the source video at the start with
+a ▶ that plays only the section (pauses at its end), a two-handle slider over the whole video and
+− / + 0.1 s under each handle (←/→ 0.1 s, Shift 1 s). The footer says how many cut seconds Add brings
+back (`removedSeconds(cuts) - removedSeconds(subtract(cuts, range))`); a section already fully in the
+video disables Add, and with no cuts at all it says to trim or delete first. Add is `change(subtract(
+cuts, range))`, so it is one undo step, then seeks there. Opens on the sentence at the playhead.
+Measured in the browser on How-AI-agents (PUTs answered by the test): 615 sentences; no cuts -> Add
+disabled with the note; after deleting 21 words -> 21 struck, opens on the playhead's sentence,
+"Adds back 1.5 s"; a stamp click selects that sentence ("already in the video" for an uncut one);
+dragging word 15 -> 30 spans two sentences, 3.34-7.38 s; the end handle 7.38 -> 7.48 (→) -> 7.58 (+);
+selecting 0-12.18 s -> "Adds back 5.7 s", Add closed the dialog and all 21 words returned, Ctrl+Z
+cut them again; Khmer and English both complete; no console errors; tsc and oxlint clean.
+**Extend dialog: View menu (2026-10-28) -- asked for by the developer with OpusClip's menu.** A
+split-panel icon button at the right of the dialog's subtitle row opens **Side by side** (transcript +
+video, the default) / **Caption only** (no video or slider, the transcript alone and the dialog 760 px
+instead of 1100, so lines stay readable); the button shows the current view's icon, the choice is
+remembered in localStorage `kcs.extendView` (try/catch), and Escape closes only the menu (capture +
+`stopPropagation`, as in `Menu.tsx`). Measured in the browser: the menu lists both with Side by side
+checked, Escape leaves the dialog open, Caption only removes the video and widens the list 580 -> 704
+px, still Caption only after a reload, Side by side brings the video back; the Add flow test still
+passes; no console errors. Seen on the way: `VideoPicker`'s "វីដេអូគំរូ" is not translated yet (i18n
+steps 2-4 cover the dialogs outside Edit Video).
+**Real "Add" in the Extend dialog, step 1 of 4: the pipeline (2026-10-29), planned with the developer
+first.** Decided: the dialog asks **where** each added section goes (its own place when it is cut =
+restore, as before; the start as a hook; the playhead; the end), and the timeline stays in source time
+with a marker at the insert point. A section added somewhere else is a **copy** (an insert), so the
+cut copy is now **parts in output order**, which may repeat and need not follow time.
+`pipeline/cuts.py`: `sequence(keeps, inserts, duration)` places each insert `(start, end, at)` at its
+source time `at` (a keep with `at` inside is split; `at` inside a cut goes before the next keep; `at`
+within `MIN_KEEP_SEC` of a keep edge does not split; same `at` keeps list order; too-short or
+out-of-range inserts are dropped); `placed(parts)` gives each part's output offset; `shift_time`
+(first occurrence), `shift_range` (every occurrence) and `shift_transcript` (words of a repeated part
+appear again; a segment crossing a cut still merges when parts follow in time, so the old output is
+unchanged) walk the parts; `subject_track.shift_track` maps points per part. `cut_filter` already
+concatenated parts in any order. Inserts live in the same `--cuts` JSON (`{"cuts", "inserts"}`,
+`read_inserts`), and a file with inserts and no cuts is accepted. Tests: 6 in `tests/test_cuts.py`,
+1 in `tests/test_subject_track.py`; 706 pass (the old cut tests unchanged).
+Measured on Rhino, `--full --aspect 4:5 --layout center --transition hard --no-captions` with cut
+12.98-39.21 and a hook 40-44 at 0, into a scratch `full_edit_4x5` deleted afterwards: 17 s; parts
+after frame snapping `[40.04, 44.00] [0, 13.01] [39.25, 55.68]`; copy and render 33.408 s video and
+33.408 s audio; frames of the copy against the source (160x90 grey, mean |diff|): copy 1.0 s = source
+41.0 s 0.3 (against source 1.0 s 50.0), copy 3.5 = 43.5 2.3 (66.9), copy 5.0 = 1.0 5.6 (46.2), copy
+18.48 = 40.71 2.2 (61.4), copy 30.0 = 52.23 3.6 (73.1); the transcript opens on the hook's "between
+the black and the white..." and "On John Hume's" follows at 5.42 s. The source MD5 is unchanged; the
+`edit/` cut-copy cache now holds this test's copy and is rebuilt by the next edit export (it is keyed
+on the parts). Next: the sidecar (step 2), the UI (3), preview vs render (4).
+**Real "Add", step 2 of 4: the sidecar (2026-10-29).** `manage.clean_inserts` checks
+`[{start, end, at}]` (numbers, start / at >= 0, at least `INSERT_MIN_SEC` 0.1 s, at most
+`MAX_INSERTS` 200; a bad one is `ValueError` -> 400, not dropped quietly) and keeps list order, which
+`cuts.sequence` uses for inserts at the same `at`. `edit.inserts` sits beside `cuts` / `splits` in
+`project.json`; `read_cuts` always returns `inserts` (an invalid hand-edited list reads as `[]`), and
+`write_cuts(..., inserts=None)` keeps the saved ones, like `splits`. `PUT /projects/{name}/cuts` and
+`JobRequest` take `inserts`; `start_job` pops it (it is not a flag), accepts inserts with no cuts,
+writes `edit/cuts.json` as `{"cuts", "inserts"}` and points `--cuts` at it (so the job reports into
+`full_edit*`); a job that sends no `inserts` renders none, while `project.json` keeps what was saved.
+The transcript download follows the inserts too (`TranscriptExportRequest.inserts` ->
+`editor.transcript_text(..., inserts)` -> `cuts.sequence`). Tests: 3 new in `tests/test_cuts_api.py`
+and 1 in `tests/test_transcript_export.py`; 5 old asserts that compared the whole `read_cuts` dict or
+`cuts.json` now include `"inserts": []`; 710 pass.
+Measured through a test sidecar on port 8775 with a throwaway project (`zz-insert-test`, a copy of the
+Rhino video and its transcript), `POST /jobs` with cut 12.98-39.21 and a hook 40-44 at 0, 4:5, hard,
+no captions: `done` in 13.1 s, `cuts.json` and `project.json` hold the insert, 1080x1350, 33.408 s
+video / 33.408 s audio, frames as in step 1 (copy 1.0 s = source 41.0 s, diff 0.3 against 50.0).
+The test folder, the copy and its database rows were removed; the sidecar stopped; the source MD5
+unchanged. Seen on the way: Rhino's own `project.json` already held `edit.inserts` (1.46-10.42 at
+5.034 and at 0, written 01:23 on 2026-10-29) that none of this code wrote; it was left untouched, and
+it is why the real test used a separate project.
+**Real "Add", step 3 of 4: the UI (2026-10-29).** `cutList.ts` gained the pipeline's ordering in the
+browser: `Insert`, `Part`, `keepRanges` (= `keep_ranges`), `sequence` (= `cuts.sequence`; the six
+Python cases give the same parts, checked with `node --experimental-strip-types`), `keepPartAt` and
+`outputSeconds`. **ExtendDialog** has a "Place at" choice -- Its own place (restore; disabled when the
+section is not cut) / Start (hook) / Playhead <time> / End; with nothing chosen it is "own" for a cut
+section and "start" otherwise; the footer says what Add does ("Copies 0:01.460-0:10.420 (9.0 s) to the
+start -- this section will play twice"), and Add is no longer disabled when nothing is cut.
+`onAdd(range, at)`: `at = null` restores (`subtract`), otherwise the editor appends `{start, end, at}`
+to `inserts`. **EditorScreen**: `inserts` is state saved with the cuts (`{cuts, transition, splits,
+inserts}`, the same key order as loaded, so opening still writes nothing) and part of every undo /
+redo snapshot; a gold chip row above the transcript lists each insert ("＋ 0:01.5-0:10.4 -> start
+(hook) ✕", a click seeks to where it plays, ✕ removes it) with the exported length; the timeline
+draws a gold ＋ line at each `at` and its "->" length is `outputSeconds(sequence(...))`. The preview
+now **plays the parts** in a `requestAnimationFrame` loop instead of only skipping cuts: at the end
+of a part it seeks to the next one (into an insert and back), a hook plays first when playback
+starts at 0, a seek re-finds the keep part, and punch-in follows the output part number like
+`cut_filter`. Export and the TXT/SRT download send `inserts`; App sends `{cuts, transition, inserts}`
+when either list is non-empty. A sidecar started before step 2 drops `inserts` (pydantic ignores
+unknown fields) until it is restarted.
+Measured in **Edge** (`channel: 'msedge'` -- Playwright's Chromium has no H.264, so earlier tests
+could not play) on Rhino with `GET /cuts` answered by the test (an insert 40-42 at 3 s), PUTs answered
+and `POST /jobs` 503: opening sends 0 PUTs; playing from 2.0 s every 100 ms read 2.80 2.92 **40.00**
+40.07 ... 41.90 **3.06** 3.19 -- into the insert at 3 s and back; one chip, one marker, "-> 00:57.70"
+(55.70 + 2); with no cuts the dialog offers own place disabled and Start chosen, "will play twice";
+Add -> two chips, two markers, 01:06.71 (= 55.75 + 2 + 8.96), the PUT carried both inserts in order;
+Ctrl+Z -> one, Ctrl+Y -> two, ✕ -> 01:04.71; with a cut word the dialog defaults to own place;
+Export sent `cuts [[5.98, 6.78]]`, the hook and `full: true`; Khmer and English both; no console
+errors; tsc and oxlint clean. Rhino's own `project.json` was not read or written (mtime unchanged)
+and the source MD5 is unchanged; the test servers were stopped.
+**Timeline Snap and Speaker buttons (2026-10-29) -- asked for by the developer** (OpusClip's toolbar:
+Split / Link / Delete / Speaker / Snap; decided: Snap is an on/off toggle, Speaker mutes the preview
+only, Hide timeline and Fit stay). **Snap** (magnet icon, gold while on, after Delete) decides whether
+Split, the ‖ trim handles and the Extend dialog's dragged handles stick to word edges (`snapToWords`)
+or land on the exact time; Alt does the opposite of Snap for one action (it used to mean "exact"
+always). On by default, remembered in localStorage `kcs.timelineSnap` (`'0'` = off, try/catch).
+`EditorScreen.snapped(at, alt)` is the one rule; `ExtendDialog` gets it as `snapTo` and applies it
+only while dragging a handle (− / + and ←/→ stay exact 0.1 s steps). **Speaker** toggles `muted` on
+the preview `<video>`; the export keeps its sound. Measured in Edge against the developer's running
+app (it held 8765 and 5173; `GET /cuts` answered empty, PUTs answered, `POST /jobs` 503): toolbar
+Hide · Split · Link · Delete · Speaker · Snap(on) · Fit; a timeline click to 10.29 s (inside "calf")
++ Split with Snap on -> split 10.42 (the word's nearer edge), Snap off -> a click at 20.15 split at
+20.146; Snap off saved `'0'` and survived a reload; Speaker muted -> `video.muted` true, label
+"Unmute the preview", then false again; the Extend start handle dragged 23 px landed on 4.580 (a word
+edge) with Snap on and 4.738 (not one) with Snap off; no console errors; tsc and oxlint clean. Only
+the test's own Vite was stopped afterwards.
+**Speaker opens a volume popover (2026-10-29) -- asked for by the developer** (OpusClip screenshot: a
+small panel with a white slider and the number). 🔊 now opens `VolumeButton` (in `EditorTimeline`)
+above the button: a 0-100 range (focused on open, ←/→/Home/End work) and the value; it sets the
+**preview's** `video.volume` and `muted` at 0 (the export keeps its sound), the icon shows ✕ / one /
+two waves, the label reads "Preview volume: 24", and the value is remembered in localStorage
+`kcs.previewVolume` (100 removes the key). The volume lives in the popover's own state and
+`EditorScreen.setVolume` writes the video element directly, so dragging does not re-render the
+editor (the Transform drag lesson). It closes on Escape (capture + stopPropagation) or a click
+outside -- in the **capture** phase, because the Transform box stops `pointerdown`, and the first
+version stayed open after a click on the video (measured). It is a `role="dialog"`, so Space in the
+slider does not start playback. Measured in Edge against the developer's running app (`GET /cuts`
+answered empty, PUTs answered): 100 at start; Home -> 0 and `muted`; 24 presses of → -> 24 and
+volume 0.24, saved; Space in the slider did not play; Escape and a click on the video both closed it;
+dragging to the right end -> 100 with the key removed; 2 survived a reload; no console errors; tsc
+and oxlint clean.
+**Resizers without the gold hover (2026-10-29) -- asked for by the developer** ("remove gold and
+button"). The transcript / preview separator (`PanelResizer`) and the timeline's top edge no longer
+turn gold or show the ⇔ / ⇕ knob on hover or drag: the first stays the plain 1 px `line` border, the
+second draws nothing beyond the timeline's own top border; the cursor (col-resize / row-resize) is
+what tells that they drag. Behaviour is unchanged. Measured in Edge against the developer's running
+app while hovering: the vertical one has one child coloured `rgb(38, 44, 56)` (the `line` token) and
+no gold, the horizontal one no children; dragging still resizes (transcript 640 -> 580, timeline 237
+-> 297), double-click resets, the developer's saved sizes put back; no console errors; tsc clean.
+**Timeline blocks, drag-box selection and Link (2026-10-29) -- asked for by the developer** (OpusClip
+screenshot: parts after a split drawn as separate blocks, a drag rectangle selecting two of them;
+decided: Link joins the selected parts into one, parts are drawn as blocks). Each split is now a
+4 px gap in the timeline's own colour (`bg-chrome`) through the layout band and the frame strip, so
+the parts read as blocks; the waveform stays continuous (one sound). The picked part is a white
+outline around its block(s) (was gold). The selection is a time range (`partSel` in `EditorScreen`):
+a click is `[t, t]`, a **drag box** is `[from, to]`, and `cutList.partsSpan` turns it into every part
+it touches (a box ending exactly on a split does not take the next part). Pointer rule on the track:
+with splits, dragging on the band / strip / waveform draws the box (4 px before it counts as a drag)
+and a plain click seeks + picks on release; dragging on the ruler, or anywhere while there are no
+splits, scrubs as before. **Link** (🔗, was disabled "next step") removes the splits inside the
+selection (`splitsInside`) -- one undo step; Delete on a multi-part selection cuts the whole span. The
+"link / unlink audio" meaning of OpusClip's button is not built. Measured in Edge against the
+developer's running app (`GET /cuts` answered with splits 10 / 20 / 35, PUTs answered): 3 gaps; a
+click at 15 s selects 10-20 with Link off; a box from 12 s (started on the band) to 25 s selects
+10-35 with Link on; Link -> PUT `splits [10, 35]`, 2 gaps; Ctrl+Z -> `[10, 20, 35]`; a box 5-22 s ->
+0-35, Delete -> PUT `cuts [[0, 35]]`; a drag on the ruler still scrubs (to 00:29.96) with no box;
+no console errors; tsc and oxlint clean.
+**Timeline zoom no longer resizes the panels (2026-10-29) -- found by the developer.** Zooming past 1x
+made the timeline's scroller grow a 10 px horizontal scrollbar (`overflow-x-auto`), so the timeline
+grew 237 -> 247 px and the preview shrank 602 -> 592 px, and back again at 1x. The scroller is now
+`overflow-x-scroll`, so the scrollbar's room is always there (an empty thin track at 1x). Measured in
+Edge **without** Playwright's default `--hide-scrollbars` (headless draws no scrollbars, which is why
+the first measurement showed nothing -- `ignoreDefaultArgs: ['--hide-scrollbars']` reproduces what
+WebView2 draws): before 237.2 / 247.2 / 247.2 / 237.2 px at 1x / in / in / 1x, after 247.2 at every
+zoom with the preview at 591.8; no console errors; tsc and oxlint clean.
+**Dragging the timeline's edge resizes only the waveform (2026-10-29) -- asked for by the developer**
+("when user drag panel don't resize" the frame strip; chose: thumbnails fixed, waveform grows). The
+frame strip, the selected-block outline, the split gaps and the side "+" blocks are a fixed
+`STRIP_PX` 56 px; the dragged value is now the CSS variable `--wave-size` (renamed from `--strip-h`)
+and only the waveform follows it (86 %, so the default stays 48 px). The drag maths changed with it:
+1 px of mouse = 1 / 0.86 of size (was 1 / 1.86, when strip and waveform grew together), and
+`stripMax` subtracts the fixed strip; the localStorage key `kcs.timelineStrip` is unchanged.
+Measured in Edge with real scrollbars against the developer's running app (`GET /cuts` answered
+with one split, PUTs answered), at 1440x900 and 1100x700: strip 56, split gap 84 (ruler + strip),
+"+" 56 at start, after a 120 px drag up, at the top limit (waveform 172, timeline 371) and the bottom
+limit (waveform 28, timeline 227); double-click back to waveform 48 / timeline 247; no page scroll;
+the developer's saved size put back; no console errors; tsc and oxlint clean.
+**The timeline's height is fixed again (2026-10-29) -- asked for by the developer** ("wave still
+resize"; chose: remove the drag). The drag-to-resize on the timeline's top edge is gone: no
+separator, no `row-resize` cursor, no `--wave-size` variable or `kcs.timelineStrip` reading; the frame
+strip is `STRIP_PX` 56 px and the waveform `h-12` 48 px, the old defaults. (An old saved
+`kcs.timelineStrip` value is simply no longer read.) The transcript / preview `PanelResizer` is
+unchanged. Measured in Edge against the developer's running app: timeline 247 / strip 56 / waveform
+48, only the vertical separator left; a 150 px drag up from the top edge changes nothing (cursor
+`auto` there); the transcript resizer still moves 640 -> 576 (the developer's width put back); no
+console errors; tsc and oxlint clean.
+**Timeline resize = an empty space above the tracks (2026-10-29), planned with the developer first**
+(OpusClip screenshot with the empty area between the ruler and the tracks circled). Decided: dragging
+the timeline's top edge changes only an **empty space** between the ruler and the tracks; the layout
+band, the 56 px frame strip and the 48 px waveform keep their size and sit at the bottom; the space
+starts at `SPACE_DEFAULT` 96 px, like OpusClip's. The edge is a plain separator again (no gold, no
+knob -- cursor ↕ only), 1 px of mouse = 1 px, ↑ / ↓ 8 px, double-click = default; the space is clamped
+to 0 and to keep the timeline under 55 % of the window (`spaceMax` = 0.55 x window - `BASE_PX` 247,
+the measured height at space 0) and remembered in localStorage `kcs.timelineSpace` (the default
+removes the key; the old `kcs.timelineStrip` is not read). The size is the CSS variable `--space-h`,
+written directly while dragging and committed once on release; every overlay that used fixed
+`top-7` / `top-14` (cuts, the selected-block outline, insert markers, split gaps, trim handles) and
+the side "+" blocks now use `28 / 56 px + var(--space-h)`. The space belongs to the track, so a click
+there seeks and a drag there draws the selection box (as in the screenshot); the ruler still scrubs.
+It is reserved for layers (text, B-roll, logo) in Phase 3. Measured in Edge with real scrollbars
+against the developer's running app (`GET /cuts` answered with a cut, two splits and an insert, PUTs
+answered): 1440x900 default space 96 / timeline 343 / preview 496, +60 -> 156 / 403, max 248 / 495,
+min 0 / 247, strip 56 and waveform 48 throughout, the band, split gaps and cut 28 px above the strip
+and the insert, trim handles and "+" level with it at every size; a box started in the empty space
+selected 10-55.75 s; a click there sought to 00:39.80; a ruler drag scrubbed to 00:29.96; a saved 80
+survived a reload; double-click back to 96 with the key removed; hidden timeline 53 px; 1100x700 max
+138 / 385 with no page scroll; 0 PUTs, no console errors; tsc and oxlint clean.
+**The preview kept cropping when the timeline was tall -- found by the developer** (a 16:9 frame
+with the face cut off after dragging the timeline up). The stage was `width: 100%` + `max-h-full`
+for 16:9 (and `height: 100%` + `max-w-full` otherwise): once the box got shorter than 16:9 the
+height was capped but the width stayed 100 %, so the stage was wider than 16:9 and `object-cover`
+cropped the video. The preview box is now a size container (`[container-type:size]`) and the stage
+is `width: min(100cqw, 100cqh x ratio)` / `height: min(100cqh, 100cqw / ratio)`, the largest box of
+the aspect that fits both ways. Measured in Edge with real scrollbars against the developer's
+running app at timeline space min / default / max, for 16:9, 9:16 and 1:1, at 1440x900 and at
+1100x700 with Captions open: every stage at its exact ratio (1.778 / 0.562-0.563 / 1.000), inside
+its box and touching one side; e.g. 1440 16:9 668x376 -> 414x233; no console errors; tsc and oxlint
+clean. Seen on the way: at 1100x700 with Captions open the default 96 px space leaves a 201x113
+16:9 preview (127x71 at the max space), so the default may be too large for small windows.
+**Scrubbing the timeline is smooth on long videos (2026-10-29) -- found by the developer** ("scrub not
+smooth"). Measured first (Edge, 90 mouse moves along the ruler, against the developer's running app):
+on How-AI-agents (35 min, 6,600 words) the 90 moves took **23.7 s** with 104 long tasks of 130-535 ms
+-- every move called `seek` -> `setTime`, which re-rendered the whole editor, the 6,600-word
+transcript included (~140 ms each); the 56 s Rhino video, 70 words, was fine (3.1 s, 1 long task).
+Now a ruler drag (or a drag anywhere while there are no splits) goes through `onScrub`: the timeline
+keeps the time in its own `scrubAt` state (playhead + clock) and `EditorScreen.scrubTo` only sets
+`video.currentTime`, with `onTimeUpdate` ignored while `scrubbing`; on release `onSeek` updates the
+editor once. A one-seek-at-a-time queue (seek again only on `seeked`) was built and measured against a
+seek on every move, three runs each: Rhino 2-4 frames shown vs 11-31, How-AI-agents 9-12 vs 6-11, so
+the browser's own handling of a seek per move was kept and the queue removed. After: How-AI-agents 90
+moves in 2.4-5.4 s, rAF gap p95 **8.4 ms** (was 175), 0-3 long tasks (the one render on release);
+mid-drag the timeline clock and playhead move while the transcript waits, on release the clock reads
+17:46.25 = `video.currentTime` 1066.25 and the spoken word moves to 3594; no console errors; tsc and
+oxlint clean. The frames shown during a fast drag still depend on the source's keyframes (a few per
+second on these files); a smoother picture would need scrubbing thumbnails, not built.
+**Trim handles shrink the block instead of drawing red (2026-10-29), Option A, planned with the
+developer first** (OpusClip screenshots: the yellow ‖ edge moves in and the trimmed part is gone).
+The timeline now shows only the part left after the head / tail trims: `EditorTimeline` takes
+`[head, tail] = trimEdges(cuts)` as its window, `pxPerSecond = content / (tail - head)`, and every
+position goes through `xOf(t) = (t - head) x px/s` / `tOf(x)` (clicks, scrub, marquee) or `box(a, b)`
+(band shots, Tracker OFF, Subject, cuts, the selected outline -- clipped to the window, nothing drawn
+outside it); frames are taken from `head .. tail`, the waveform is `peaks` sliced to it, the ruler
+counts from 0 (time inside the trimmed video), splits outside the window are not drawn and insert
+markers are clamped to its edges. **Cuts in the middle stay red** at their place; the head and tail
+trims are not drawn at all. Dragging a handle inward covers what it will cut with the timeline's own
+colour, so the block and waveform look shorter; on release the trim is one undo step and the block
+slides to 0. Dragging a handle outward past the block (pointer capture, unclamped) brings trimmed
+time back, and a **double-click** on a handle brings the whole trim back. A click on a handle
+without moving no longer commits a trim: the two clicks of a double-click used to commit the same
+edge, which Snap then moved to a word edge (undo restored 49.89 instead of 50, measured). No pipeline
+or sidecar change: trims are still `cuts`. Measured in Edge with real scrollbars against the
+developer's running app (`GET /cuts` answered with trims 0-5 / 50-end and a middle cut 20-25, PUTs
+answered): the block 1196 px for 45 s, the one red band at x 399 width 133 (= 15 s and 5 s at
+26.6 px/s), frames 6.90 .. 48.10 s, handles at 0 and 1184 reading 5 and 50; a click at the block's
+left edge sought to 5.04 s; dragging the start handle in 100 px showed a 107 px cover, then PUT
+`[0, 9.14]` (Snap) and the block slid back to 0 with frames from 10.80 s; dragging it out 60 px ->
+`[0, 7.06]`; double-click on the end handle removed the tail trim; Ctrl+Z restored exactly
+`[50, 55.746]`; no console errors; tsc and oxlint clean.
+**Reorder timeline blocks by dragging, step 1 of 4: the pipeline (2026-10-30), planned with the developer
+first** (OpusClip screenshot: a dashed box of the block's length stays where the block was while it is
+dragged; on release the blocks snap together with no gap; every split part can move). `--cuts` JSON gains
+`order` (`[[start, end], ...]`, blocks in output order, source time; `cuts.read_order`), and
+`cuts.rearrange(keeps, order)` applies it before `sequence`: cut parts stay out, a part `order` does not
+mention goes last, and parts continuing in time are joined, so an unchanged order equals `keeps` exactly.
+`sequence` now finds each insert's piece in time order, so an insert follows its piece when it moves
+(same results as before on sorted keeps). A file with only a real reorder is accepted.
+Found by measuring: Rhino's first frame is at 0.0417 s (`start_time`) and its picture really ends at
+55.6806 s, while `video_seconds` is only the stream's duration. A part starting at 0 had 42 ms of audio
+with no picture, harmless at the end of a video but shifting every later part by a frame once it moves.
+`make_clips` now takes the end as `video_start + video_seconds` and starts no part before the first frame;
+this applies to every `--cuts` render. `snap_to_frames` tolerates 0.02 frame, since 3-decimal rounding could
+push an edge one frame on. Measured on a throwaway copy of Rhino, order `[[30, 55.7], [0, 30]]`, 4:5, hard,
+no captions: 1334 of 1334 frames; copy video 55.639 s / audio 55.615 s, render 55.639 / 55.635; six points
+across both parts match the expected source frame (diff 0.2-0.5, the same constant one-frame index offset in
+both, from FFmpeg's duplicated first frame in the decoded source); "That's" (39.33 s in the source) opens at
+9.30 s and "On" follows at 27.07 s. Tests: 5 in `tests/test_cuts.py`; 715 pass. The test project was removed;
+the source MD5 unchanged. Next: the sidecar (2), the timeline (3), preview vs render (4).
+**Reorder, step 2 of 4: the sidecar (2026-10-30).** `manage.clean_order` checks `[[start, end], ...]` (at
+least 0.1 s, a bad one is 400) and returns `[]` for blocks already in time order, since that changes nothing,
+so "was anything moved" is "is the list non-empty". `edit.order` sits beside `cuts`, `splits` and `inserts` in
+`project.json`; `write_cuts(..., order=None)` keeps the saved one. `PUT /projects/{name}/cuts`, `POST /jobs`
+and the transcript download take `order`; `start_job` pops it (not a flag), writes it into `edit/cuts.json`
+and accepts a job whose only edit is a reorder (a time-order `order` alone is 400, because the pipeline would
+refuse it); like `inserts`, a job that sends no `order` renders none while `project.json` keeps it. Tests: 4 new
+(3 in `test_cuts_api.py`, 1 in `test_transcript_export.py`), 4 old asserts now include `"order": []`; 719 pass.
+Measured through a test sidecar on port 8775 with a throwaway project: `order [[30, 55.7], [0, 30]]`, 4:5, hard,
+no captions, `done` in 24.5 s into `full_edit_4x5` (`edited: true`), 1080x1350, video 55.639 s / audio 55.635 s;
+`/cuts` read it back. The test folder and its database row were removed; the source MD5 unchanged.
+**Reorder, step 3 of 4: the timeline (2026-10-30).** A press on the frame strip now belongs to the block under
+it: dragging moves the block, a plain click seeks and picks on release. This replaces scrubbing on the strip
+(the ruler still scrubs) and marquee from the strip (the band, waveform and empty space still draw it). While
+dragging, a dashed box of the block's length stays in its place, a ghost follows the mouse, and a gold line marks
+the drop; on release the blocks close up with no gap, dropping in place changes nothing, and Escape cancels. All
+of it sits in an `overflow-hidden` layer, because the ghost past the end grew a scrollbar. `order` is state in
+`EditorScreen`, part of every undo snapshot, saved with the cuts and sent by Export and the transcript download.
+`cutList.ts` gained `rearrange` (= `cuts.rearrange`), `blocksOf` and `moveBlock`, and the timeline's output-order
+mode now also runs when `order` is set. HOOK blocks use the same drag (they had their own handlers). `box()` in
+that mode draws inside the part holding its start, since `xOf(end)` may land in another block. **The trim handles
+are hidden once blocks are reordered**, because the ends of the row are no longer the video's start and end.
+Measured in Edge against the developer's running Vite (`GET /cuts` answered by the test, every write answered, no
+job): splits 10 / 25 / 40, dragging 10-25 past the end: slot 322 px wide at its place, ghost following, one drop
+line; a 4 px wobble shows no line; the PUT sent `order [[0,10],[25,40],[40,55.705],[10,25]]`; Ctrl+Z -> `[]`,
+Ctrl+Y -> the same order; a click sought to 29.98 s with no PUT; Escape and dropping in place sent 0 PUTs; no
+splits: a slot as long as the video, ghost, no line, 0 PUTs; a saved order opens with 0 PUTs and 0 trim handles and
+Export sent it with `full`. On How-AI-agents (35 min) 90 moves took 3.1 s, frame gap p95 16.6 ms, one 358 ms frame,
+scroller 1216 / 1216. tsc and oxlint clean, 719 pass. Not done: the preview and the clock still follow source time
+(step 4); the layout band is drawn per shot from the first part it starts in, so it is approximate after a reorder.
+A sidecar started before step 2 ignores `order`, so it is lost on reopening until the app restarts.
+**Reorder, step 4 of 4: preview and clock (2026-10-30).** The clock and playhead count the exported video once
+blocks are reordered or inserts exist (`cutList.outputTime`; while a part plays it wins, since a copied time sits
+in two places), and the total reads the exported length. ⏮ ⏭ and ← → walk the exported video (`sourceAt`) instead
+of jumping across blocks. Opening a reordered project places the video on the first block once, and Play after
+the last block starts from the first again. The play loop itself already walked `parts`, so it only needed
+`order`. Measured in Edge against the developer's Vite (`GET /cuts` answered by the test with
+`order [[8,14],[0,8],[14,55.7]]`, 0 writes): on open source 8.00 s, clock 00:00.00, playhead at the left; while
+playing the source jumped 13.87 -> 0.01 and 8.02 -> 14, and 15 s in read clock 16.49 at source 16.49; from output 7
+(source 1) the skip reached output 12 (source 6). Against a real render of that order (16:9, centre, hard, no
+captions; video 55.639 s / audio 55.639 s): mean frame difference at output 1 / 5 / 7 / 13 s is 19.1 / 14.7 / 10.2 /
+20.0 against 48.1 / 53.5 / 57.4 / 39.8 for the source at the same time, so the order matches. This is not a
+frame-exact check: the same comparison after the moved blocks (20 and 40 s, where render and source show the same
+picture) reads 20.7 and 7.8 against 15.4 and 5.5, so browser frames differ from FFmpeg's by that much anyway. Lip
+sync was not judged by ear. Checked in Edge only, not the desktop window. tsc and oxlint clean, 719 pass (no new
+Python tests; no TS test runner exists). The test project was removed; the source MD5 unchanged.
+**Trim the edges of any block after a reorder (2026-10-30) -- option A, chosen by the developer** after "play across a
+split shows black": Rhino's source really is black at 0.04-0.79 s, and the developer's order put the block starting at
+0 mid-video, at 13.52 s. With blocks reordered, the two row-end trim handles stay hidden and every block gets its own:
+gold on the selected block, invisible until hovered on the others, none under 28 px wide. Dragging in cuts that part
+(`cutList.trimBlock` -> `add`; a cover makes the block look shorter), dragging out restores only cut time
+(`blockEdgeLimit`: within the adjoining cut and the block's `order` range, so it never runs over a neighbour),
+double-click restores it all, a block stays at least 0.5 s, and it is one undo step. Snap applies, and the preview
+seeks to the snapped edge. `outputTime` for a time inside a cut now reads the next kept part's start in time order;
+before, right after a trim, the clock read 00:00.00 instead of 00:13.52 because the seek landed 2 ms before the edge.
+Measured in Edge against the developer's Vite with their order (`GET /cuts` answered, writes answered): 6 handles, no
+row-end handles; 17 px in on the middle block's start -> `cuts [[0, 1.072]]`, `order` unchanged, length 00:54.67, clock
+00:13.52, source 1.07; undo `[]`, redo the same; dragging out -> `[]`; an end with no cut beside it dragged out -> 0
+PUTs; end dragged in -> `[[34.804, 37.228]]`, double-click -> `[]`. A real render of that cut + order on a throwaway
+copy: video 54.596 s / audio 54.596 s, `blackdetect` finds no black at the join, only 54.43-54.55 s, the source's own last 0.125 s.
+tsc and oxlint clean, 719 pass. Edge only, not the desktop window. The test project was removed; the source MD5 unchanged.
+**No waveform after deleting a project and opening it again (2026-10-30) -- found by the developer** (a screenshot beside
+OpusClip's). The waveform comes from `output/<name>/audio.wav`, which went to the Recycle Bin with the project at 18:59.
+Opening the video again should transcribe it, but the effect returned on any `job` of this video, and the app still held
+the earlier `done` job (`70ce48dc`, read from `GET /jobs`), so nothing ran and the editor stayed with no words and no
+wave. Only a `running` job blocks it now; `asked` still limits it to once per opening. Measured in Edge with everything
+mocked: first opening 1 job and no wave; reopened in the same session 2 jobs (before: stuck), wave drawn; opened again
+with the transcript present, no new job and the wave drawn; no page errors. Not run against a real transcribe.
+**Trim handles restyled after OpusClip's (2026-10-30) -- asked for by the developer** ("this || use only video
+thumbnail"). The tall gold bars over the strip and waveform became two white bars (`GripBars`, with a dark shadow so they
+read on a bright frame) on the frame strip only, with no fill. This applies to the row-end handles and the per-block ones.
+Measured in Edge (`GET /cuts` and the waveform answered by the test, writes answered): background transparent, top 762 /
+height 56, equal to the strip's, 2 grips; dragging one 114 px still sent `cuts [[0, 5.56]]`; no page errors.
+**‖ on both ends of every split block (2026-10-30) -- asked for by the developer.** As soon as the timeline has more than
+one block (a split, a reorder or an insert), each kept block shows its two handles all the time and the row-end pair goes
+away; one block keeps the row-end pair. Blocks under 28 px and HOOK blocks have none. Trimming a block's start or end in
+source order is the same `trimBlock`, a cut in the middle of the video. Measured in Edge (writes answered): no split 2 grips;
+splits 10 / 25: 6 grips, opacity 1, at x 122, 325, 337, 646, 658, 1306; 60 px in on the middle block -> `cuts [[10, 13.076]]`,
+`order []`, its start moves to 403; dragging a block from its middle still reorders (`[[13.076,25],[25,55.746],[0,10]]`),
+Ctrl+Z -> `[]`; no page errors. tsc and oxlint clean. Edge only.
+**‖ only on the selection (2026-10-30) -- asked for by the developer** ("when user selected timeline show || first/last"). This
+replaces the always-visible handles of the note above. No handle shows until a click on the timeline selects something: one
+block (no split) gets the row-end pair and now a white frame (`picked`, since `part` is null with no splits); with several
+blocks, the start of the first selected and the end of the last selected. Nothing is rendered unselected, so a drag from a block's
+edge reorders instead of trimming invisibly. Escape deselects. Measured in Edge (writes answered): no splits, splits 10 / 25, and a
+reorder all start with 0 handles; a click gives 2 at that selection's ends (122/1306, 337/646, 444/646); dragging one 40 px sent
+`[[0,2.144]]`, `[[10,12.165]]`, `[[0,2.153]]` (order kept); Escape -> 0; no page errors. tsc and oxlint clean. Edge only.
+**Cuts disappear from the timeline, no red band (2026-10-30) -- asked for by the developer** (a screenshot of the hatched band
+left by dragging ‖). This reverses "cuts in the middle stay red": any cut in the middle now switches the timeline to output mode, so
+it shows only what Export keeps, like a head / tail trim, and the band's code is gone. The clock's total is the exported length. A
+block's bounds are now splits + cut edges (`blockEdges`), so with one cut and no split each side is selectable and Delete removes
+that block; with nothing dividing the video there is still no part, so Delete cannot cut it all. After a trim the selection moves
+onto what remains. Over `MAX_TILES` parts one row of tiles follows export time (100 cuts: 12 images), and the waveform's gaps
+became borders so it stays aligned. A cut block has no Restore on the timeline: drag a neighbour's ‖ out, Ctrl+Z, or the
+transcript. Measured in Edge (writes answered): splits 10 / 25, 80 px in on the middle block: 0 bands during and after,
+`cuts [[10, 14.03]]`, clock total 00:51.72, handles 353 / 595; dragged out -> `[]`, 00:55.75; undo -> the cut back; one cut 20-30 with
+no split: 2 handles on the selected side, 00:45.75; 100 cuts: no page scroll, 00:35.75; no page errors. tsc and oxlint clean. Edge only.
+**The transcript belongs to the timeline, step 1 of 3 (2026-10-30), planned with the developer first; option A.** Words now follow
+the block order, HOOK words appear where the HOOK plays, and cut words disappear like the timeline (the Filter's "Hide deleted
+words" starts on; off, they return struck through before their next kept block, and a click restores them). "Restore all" stays.
+`cutList.transcriptOrder(items, parts, showCut)` gives `display`, indices into `items`, which stay in time order because
+`activeIndex` binary-searches them and a selection is a time range. `Chunk` takes `indices`; flags, marks and fills are built per chunk;
+search and ← → walk `display` (`stepAt` keeps the position, since a HOOK word appears twice). 7000 words / 165 parts: 22 ms, only when
+parts change. Measured in Edge with mocked words (writes answered): order `[10,25],[0,10],[25,55.7]` reads w11 w16 3.00s w21 w1 w6 w26...;
+cut 10-22 hides w11 w16 and the pause and w21, Filter off shows 4 struck; a hook 40-47 reads w41 w46 w1 ... w41 w46 w51; → walks 46, 1, 6
+... 51 and stops at the end; clicking w6 sought to 6 s, → to 26 s; 0 writes on open; no page errors. tsc and oxlint clean. Edge only. Not done:
+both copies of a HOOK word turn gold while it plays (step 2), and selecting a block does not mark its words (step 3).
