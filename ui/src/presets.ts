@@ -2,10 +2,8 @@ import type { JobOptions } from './api'
 import presetPodcast from './assets/figma/preset-podcast.svg'
 import presetSilence from './assets/figma/preset-silence.svg'
 import presetCaption from './assets/figma/preset-caption.svg'
-import presetLong from './assets/figma/preset-long.svg'
 import presetReframe from './assets/figma/preset-reframe.svg'
 import presetEnglish from './assets/figma/preset-english.svg'
-import presetInterview from './assets/figma/preset-interview.svg'
 import presetGaming from './assets/figma/preset-gaming.svg'
 import presetAgency from './assets/figma/preset-agency.svg'
 
@@ -24,22 +22,26 @@ export type Preset = {
 
 export const PRESETS: Preset[] = [
   {
-    id: 'podcast',
-    title: 'Podcast Clips',
-    description: 'Find complete 30–90s moments, add captions and reframe to 9:16.',
+    // Podcast Clips + Interview & Webinar + Long Video → 10 Clips រួមគ្នា (អ្នកអភិវឌ្ឍ 2026-10-23):
+    // ពួកវាខុសគ្នាតែ `--layout` និង `--max-clips` — `auto` ឲ្យ planner វិភាគ shot នីមួយៗ ហើយ
+    // ចំនួន clips (៥ / ១០ / ១៥) ជ្រើសក្នុង dialog
+    id: 'shorts',
+    title: 'Long to Short',
+    description: 'AI reads each shot (faces, people, slides) and picks the layout; the LLM picks the best 5, 10 or 15 moments.',
     icon: presetPodcast,
     ready: true,
     badge: 'READY',
-    options: { max_clips: 5 },
+    options: { max_clips: 5, layout: 'auto' },
   },
   {
+    // លុបភាពស្ងាត់ & អឺ: Speech cleanup របស់ Edit Video ក្នុង dialog — export = `--full --cuts`
     id: 'silence',
     title: 'Silence & Filler Remover',
-    description: 'Cut long pauses and “um / uh” with a preview before applying.',
+    description: 'Cut long pauses and “um / you know”; you review the list before exporting.',
     icon: presetSilence,
-    ready: false,
-    badge: 'PHASE 2',
-    options: {},
+    ready: true,
+    badge: 'READY',
+    options: { full: true },
   },
   {
     id: 'caption',
@@ -51,13 +53,24 @@ export const PRESETS: Preset[] = [
     options: { redo: 'render', caption_words: 4 },
   },
   {
-    id: 'long',
-    title: 'Long Video → 10 Clips',
-    description: 'Rank the best hooks and highlights from any long video.',
-    icon: presetLong,
+    // Auto Subtitles: វីដេអូទាំងមូល + captions (`--full`); dialog ជ្រើស aspect ភាសា និង style
+    id: 'subtitles',
+    title: 'Auto Subtitles',
+    description: 'Captions on the whole video, in its own size or reframed.',
+    icon: presetCaption,
     ready: true,
     badge: 'READY',
-    options: { max_clips: 10 },
+    options: { full: true },
+  },
+  {
+    // Edit Video: editor ដែលផ្អែកលើ transcript (ពាក្យ, pause, preview, timeline) — export = `--full`
+    id: 'editor',
+    title: 'Edit Video',
+    description: 'Transcript-based editor: words, pauses, preview and timeline.',
+    icon: presetReframe,
+    ready: true,
+    badge: 'READY',
+    options: { full: true },
   },
   {
     id: 'reframe',
@@ -78,15 +91,6 @@ export const PRESETS: Preset[] = [
     options: {},
   },
   {
-    id: 'interview',
-    title: 'Interview & Webinar',
-    description: 'Face crop, split screen and whole-frame fit for slides.',
-    icon: presetInterview,
-    ready: true,
-    badge: 'READY',
-    options: { layout: 'fill,split,fit' },
-  },
-  {
     id: 'gaming',
     title: 'Gaming Auto Clipper',
     description: 'Spot wins, funny reactions and hype moments from audio.',
@@ -105,3 +109,11 @@ export const PRESETS: Preset[] = [
     options: {},
   },
 ]
+
+/** flag ដែល preset បន្ថែម ជាអក្សរ: `{ max_clips: 5 }` -> "--max-clips 5".
+ *  ដូចគ្នានឹងអ្វីដែល server/jobs.py ធ្វើ ដូច្នេះអ្វីដែល UI បង្ហាញ = អ្វីដែល job រត់. */
+export function flagsOf(preset: Preset): string {
+  return Object.entries(preset.options)
+    .map(([key, value]) => `--${key.replace(/_/g, '-')} ${value}`)
+    .join(' ')
+}

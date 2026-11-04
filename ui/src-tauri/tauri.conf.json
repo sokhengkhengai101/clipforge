@@ -16,11 +16,13 @@
         "width": 1440,
         "height": 900,
         "minWidth": 1100,
-        "minHeight": 700,
+        "minHeight": 640,
         "resizable": true,
         "fullscreen": false,
         "dragDropEnabled": true,
-        "decorations": false
+        "decorations": false,
+        "shadow": false,
+        "visible": false
       }
     ],
     "security": {

@@ -125,6 +125,11 @@ def copy_plan(items: list[dict], destination: Path) -> dict:
     }
 
 
+def explorer_select(path: Path) -> str:
+    """Command line ដែលបើក Explorer ហើយបន្លិច file — quote តែ path ប៉ុណ្ណោះ."""
+    return f'explorer /select,"{path}"'
+
+
 def reveal(path: Path) -> bool:
     """បើក folder ក្នុង File Explorer (ហើយបន្លិច file បើ path ជា file).
 
@@ -137,7 +142,10 @@ def reveal(path: Path) -> bool:
         if path.is_file():
             # `explorer /select,<path>` ត្រឡប់ exit code 1 ទោះជោគជ័យ ដូច្នេះ
             # យើងប្រើ Popen ហើយមិនពិនិត្យលទ្ធផល. ចំណាំ: គ្មាន space ក្រោយ `,`.
-            subprocess.Popen(["explorer", f"/select,{path}"])
+            # command ជា string មិនមែន list: list ធ្វើឲ្យ Python ដាក់ quote ជុំវិញ
+            # "/select,C:\a b\c.mp4" ទាំងមូលពេល path មាន space ហើយ Explorer មិនយល់
+            # ក៏បើក Documents ជំនួស (ឃើញពិត). Explorer ចង់បាន /select,"C:\a b\c.mp4".
+            subprocess.Popen(explorer_select(path))
         else:
             os.startfile(path)                                  # noqa: S606
     elif sys.platform == "darwin":

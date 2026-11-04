@@ -831,3 +831,24 @@ def test_sidecars_can_be_turned_off(tmp_path, monkeypatch):
     clip = Clip(start=10.0, end=25.0, title="t", hook="h", type="story",
                 score=8.0, reason="r")
     assert C.write_sidecars(clip, transcript, tmp_path / "c.ass") == []
+
+
+def test_auto_follows_the_shot_under_each_cue():
+    """three/four -> លើស្នាម; shot មួយផ្ទាំង -> lower third — តាម shot មិនមែនតាម clip."""
+    from types import SimpleNamespace
+    seg = lambda start, end, kind: SimpleNamespace(start=start, end=end, layout=SimpleNamespace(kind=kind))
+    shots = [seg(0.0, 5.0, "single"), seg(5.0, 10.0, "three"), seg(10.0, 15.0, "four")]
+    assert C.anchor_for(cue_at(1.0, 2.0), 0.0, shots) == "normal"
+    assert C.anchor_for(cue_at(6.0, 7.0), 0.0, shots) == "three"
+    assert C.anchor_for(cue_at(11.0, 12.0), 0.0, shots) == "four"
+
+
+def test_three_and_four_centre_on_their_last_seam():
+    # three = ផ្ទាំងធំ 1280 + ជួរតូចពីក្រោម -> ស្នាម 1280; four = 2x2 -> 960
+    for lines in (1, 2, 3):
+        ys = C.line_positions(lines, "three")
+        assert sum(ys) / len(ys) == pytest.approx(1280)
+        ys = C.line_positions(lines, "four")
+        assert sum(ys) / len(ys) == pytest.approx(960)
+    # shot មួយផ្ទាំងនៅ lower third ដដែល
+    assert C.line_positions(2, "normal") == C.line_positions(2, "single")

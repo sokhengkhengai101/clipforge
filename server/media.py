@@ -17,17 +17,23 @@ KINDS = {
     "ass": ("ass", "text/plain; charset=utf-8"),
     "srt": ("srt", "text/plain; charset=utf-8"),
     "vtt": ("vtt", "text/vtt; charset=utf-8"),
+    # clip_XX_clean.mp4: preview គ្មាន caption សម្រាប់ screen Subtitles (មិនមែនសម្រាប់ export)
+    "clean": ("clean", "video/mp4"),
 }
 
+# អ្វីដែល export ចម្លងបាន — preview គ្មាន caption មិនមែនជាលទ្ធផលសម្រាប់ post ទេ
+EXPORTABLE = ("mp4", "ass", "srt", "vtt")
 
-def clip_file(clips: list[dict], index: int, kind: str) -> tuple[Path, str] | None:
-    """រក file របស់ clip លេខ `index`. `None` បើគ្មាន."""
+
+def clip_file(clips: list[dict], index: int, kind: str, aspect: str | None = None) -> tuple[Path, str] | None:
+    """រក file របស់ clip លេខ `index` (`aspect`: ទំហំក្រៅពី 9:16). `None` បើគ្មាន."""
     if kind not in KINDS:
         return None
     key, media_type = KINDS[kind]
     for clip in clips:
         if clip["index"] == index:
-            path = clip.get("files", {}).get(key)
+            files = clip.get("aspects", {}).get(aspect, {}) if aspect else clip.get("files", {})
+            path = files.get(key)
             if path and Path(path).is_file():
                 return Path(path), media_type
             return None
@@ -43,7 +49,8 @@ def thumbnail(video: Path, at_second: float = 1.0) -> Path | None:
     if not video.is_file():
         return None
     image = video.with_suffix(".jpg")
-    if image.is_file():
+    # វីដេអូ render ម្តងទៀត (ថ្មីជាងរូប) -> ដករូបឡើងវិញ, កុំបង្ហាញរូបចាស់
+    if image.is_file() and image.stat().st_mtime >= video.stat().st_mtime:
         return image
     command = [
         "ffmpeg", "-nostdin", "-y",
@@ -70,8 +77,8 @@ def probe_video(path: Path) -> dict | None:
         return None
     command = [
         "ffprobe", "-v", "error", "-select_streams", "v:0",
-        "-show_entries", "stream=width,height,codec_name,avg_frame_rate,bit_rate",
-        "-show_entries", "format=bit_rate",
+        # stream និង format ក្នុង -show_entries តែមួយ (`:` បំបែក)
+        "-show_entries", "stream=width,height,codec_name,avg_frame_rate,bit_rate:format=bit_rate,duration",
         "-of", "json", str(path),
     ]
     try:
@@ -88,10 +95,33 @@ def probe_video(path: Path) -> dict | None:
         fps = round(int(ratio[0]) / int(ratio[1]), 2)
     # bitrate នៅលើ stream ជួនកាលទទេ (NVENC) — format មានជានិច្ច
     bits = stream.get("bit_rate") or data.get("format", {}).get("bit_rate")
+    duration = data.get("format", {}).get("duration")
     return {
         "width": stream.get("width"),
         "height": stream.get("height"),
         "fps": fps,
         "codec": stream.get("codec_name"),
         "kbps": round(int(bits) / 1000) if bits else None,
+        "seconds": round(float(duration), 2) if duration else None,
     }
+
+
+# វីដេអូដែល Import អាច probe — endpoint មិនអាន file ផ្សេងទៀតទេ
+VIDEO_SUFFIXES = (".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi")
+
+
+def source_frame(path: Path, at: float, width: int = 640) -> bytes | None:
+    """frame មួយជា JPEG ពីវីដេអូដើម — preview របស់ dialog AI Reframe.
+
+    សរសេរទៅ stdout (`image2pipe`) មិនសរសេរ file ក្បែរវីដេអូដើមទេ. `None` បើ FFmpeg បរាជ័យ.
+    """
+    path = Path(path)
+    if not path.is_file():
+        return None
+    command = ["ffmpeg", "-v", "error", "-ss", f"{max(0.0, at):.2f}", "-i", str(path),
+               "-frames:v", "1", "-vf", f"scale={width}:-2", "-f", "image2pipe", "-vcodec", "mjpeg", "-"]
+    try:
+        done = subprocess.run(command, capture_output=True, timeout=20, check=True)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return done.stdout or None

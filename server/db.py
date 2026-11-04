@@ -186,3 +186,18 @@ def project_clips(name: str, path: Path | None = None) -> list[dict]:
         item["files"] = json.loads(item["files"]) if item["files"] else {}
         clips.append(item)
     return clips
+
+
+def delete_project(name: str, path: Path | None = None) -> int:
+    """លុប project មួយ និង job + clip របស់វាពី database. ត្រឡប់ចំនួន project ដែលបានលុប (0/1).
+
+    ប្រវត្តិ job បាត់ជាមួយ — folder output ទៅ Recycle Bin ហើយអាចយកមកវិញ តែ database មិនអាចទេ.
+    """
+    with connect(path) as connection:
+        row = connection.execute("SELECT id FROM project WHERE name = ?", (name,)).fetchone()
+        if row is None:
+            return 0
+        connection.execute("DELETE FROM clip WHERE project_id = ?", (row["id"],))
+        connection.execute("DELETE FROM job WHERE project_id = ?", (row["id"],))
+        connection.execute("DELETE FROM project WHERE id = ?", (row["id"],))
+    return 1

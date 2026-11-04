@@ -112,14 +112,143 @@ body {
   @apply bg-bg-app font-sans text-text-primary;
 }
 
-/* Launch bar ភ្លឺមួយភ្លែតពេលវីដេអូថ្មីត្រូវបានជ្រើស (drop, samples, ឬ path) —
-   ទាញភ្នែកទៅប៊ូតុង Start. `to` គ្មាន background ដូច្នេះវាត្រឡប់ទៅពណ៌ពិតរបស់ធាតុ. */
-@keyframes arrive {
-  from {
-    background-color: var(--color-accent-soft);
-    box-shadow: inset 0 2px 0 0 var(--color-accent);
-  }
+/* App ងងឹតទាំងមូល: `color-scheme: dark` ប្រាប់ WebView2 ឲ្យគូរ control ដើមរបស់វា
+   (scrollbar, select dropdown) ជាពណ៌ងងឹត — បើគ្មានវា scrollbar របស់ Windows ភ្លឺ
+   ស/ប្រផេះ 15px លើ UI ងងឹត (វាស់ក្នុង app: color-scheme "normal", bar 15px).
+   scrollbar ស្តើង ពណ៌ raised-3 ដូចធាតុស្ងប់ៗផ្សេងទៀតក្នុង design. */
+:root {
+  color-scheme: dark;
 }
-@utility animate-arrive {
-  animation: arrive 1.4s ease-out;
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-raised-3) transparent;
 }
+
+/* <input type="color">: Chromium ដាក់ padding 4px និងគែមប្រផេះជ្រុងការ៉េ ជុំវិញពណ៌ ដូច្នេះពណ៌មិនពេញប្រអប់
+   (រកឃើញដោយអ្នកអភិវឌ្ឍ: "color not full"). ពណ៌ពេញទាំងអស់ ហើយយករាងរបស់ input (មូល ឬ rounded). */
+input[type='color'] {
+  overflow: hidden;
+}
+/* slider ដៃពីរ: input range ពីរត្រួតគ្នា — មានតែដៃទេដែលចុចបាន ដូច្នេះ input ខាងលើមិនបាំងខាងក្រោម */
+.range-thumb {
+  appearance: none;
+  pointer-events: none;
+  background: transparent;
+}
+.range-thumb::-webkit-slider-thumb {
+  appearance: none;
+  pointer-events: auto;
+  width: 24px;
+  height: 24px;
+  cursor: grab;
+  border: 2px solid #6b7280;
+  border-radius: 50%;
+  background: #0b0d11;
+}
+.range-thumb:active::-webkit-slider-thumb {
+  cursor: grabbing;
+}
+.range-thumb:focus-visible::-webkit-slider-thumb {
+  outline: 2px solid var(--color-gold);
+  outline-offset: 2px;
+}
+
+input[type='color']::-webkit-color-swatch-wrapper {
+  padding: 0;
+  border-radius: inherit;
+}
+input[type='color']::-webkit-color-swatch {
+  border: 0;
+  border-radius: inherit;
+}
+
+/* Safe zone លើ preview (Subtitles.html): ឆ្នូតក្រហមថ្លា — តំបន់ដែល UI របស់ platform បាំង */
+@utility safe-band {
+  background: repeating-linear-gradient(135deg, rgb(240 82 82 / 0.28) 0 6px, rgb(240 82 82 / 0.12) 6px 12px);
+  z-index: 2;
+}
+
+/* Caption animation ក្នុង preview (ផ្ទាំង Motion) — ដូច `captions.intro_tags`: 160 ms */
+@keyframes caption-bounce {
+  0% { transform: scale(0.7); }
+  55% { transform: scale(1.12); }
+  100% { transform: scale(1); }
+}
+@keyframes caption-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes caption-slide {
+  from { transform: translateY(var(--cap-rise)); opacity: 0.5; }
+  to { transform: translateY(0); opacity: 1; }
+}
+/* libass \t និង \move ផ្លាស់ទីដោយ linear (វាស់: ease-out ធ្វើឲ្យ bounce ធំជាង render 3%) */
+.caption-bounce { animation: caption-bounce 160ms linear; }
+.caption-fade { animation: caption-fade 160ms linear; }
+.caption-slide { animation: caption-slide 160ms linear; }
+
+/* ចលនាលេចថ្មី (caption_fx.INTRO_MS) — --cap-px / --cap-shift / --cap-drop មកពី lineMotion() */
+@keyframes caption-slide-left {
+  from { transform: translateX(var(--cap-shift)); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+@keyframes caption-blur-in {
+  from { filter: blur(calc(var(--cap-px) * 20)); opacity: 0; }
+  to { filter: blur(0); opacity: 1; }
+}
+/* ទីតាំង linear (\move), ភាពស្រអាប់ accel 0.5 = √t (លឿនដើម): 25% -> 0.5, 50% -> 0.71, 75% -> 0.87 */
+@keyframes caption-soft-landing {
+  0% { transform: translateY(calc(-1 * var(--cap-drop))); opacity: 0; }
+  25% { transform: translateY(calc(-0.75 * var(--cap-drop))); opacity: 0.5; }
+  50% { transform: translateY(calc(-0.5 * var(--cap-drop))); opacity: 0.71; }
+  75% { transform: translateY(calc(-0.25 * var(--cap-drop))); opacity: 0.87; }
+  100% { transform: none; opacity: 1; }
+}
+/* ខ្សែកោងពិតរបស់ libass សម្រាប់ \t(0,250,0.6,...): វាស់ពី frames ដែល render (ទទឹងដកគ្រោង 8 px ដែលមិនពង្រីក)
+ * ព្រោះ t^0.6 តាមរូបមន្ត ខុសពី frames (preview តូចជាង render 16% នៅ 120 ms). */
+@keyframes caption-grow {
+  0% { transform: scale(0); }
+  8% { transform: scale(0.28); }
+  20% { transform: scale(0.475); }
+  32% { transform: scale(0.626); }
+  48% { transform: scale(0.752); }
+  72% { transform: scale(0.87); }
+  88% { transform: scale(0.976); }
+  100% { transform: scale(1); }
+}
+.caption-slide-left { animation: caption-slide-left 200ms linear; }
+.caption-blur-in { animation: caption-blur-in 220ms linear; }
+.caption-soft-landing { animation: caption-soft-landing 260ms linear; }
+.caption-grow { animation: caption-grow 250ms linear; }
+
+/* ពាក្យកំពុងនិយាយ: seamless bounce = 115% ក្នុង 70 ms រួចត្រឡប់វិញនៅ 170 ms */
+@keyframes caption-word-bounce {
+  0% { transform: scale(1); }
+  41% { transform: scale(1.15); }
+  100% { transform: scale(1); }
+}
+.caption-word-bounce { animation: caption-word-bounce 170ms linear; }
+
+/* ពេញមួយ cue (caption_fx.hold_tags) */
+@keyframes caption-breathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+}
+/* មុំដដែលនឹង QUAKE_ANGLES, 70 ms ម្តង (6 x 70 = 420 ms) */
+@keyframes caption-quake {
+  0% { transform: rotate(-0.8deg); }
+  16.67% { transform: rotate(1.4deg); }
+  33.33% { transform: rotate(-1.1deg); }
+  50% { transform: rotate(0.8deg); }
+  66.67% { transform: rotate(-1.4deg); }
+  83.33% { transform: rotate(1.1deg); }
+  100% { transform: rotate(-0.8deg); }
+}
+@keyframes caption-glitch {
+  from { transform: scale(1); }
+  to { transform: scale(1.18); }
+}
+.caption-breathe { animation: caption-breathe 1400ms linear infinite; }
+.caption-quake { animation: caption-quake 420ms linear infinite; }
+/* duration = រយៈពេល cue (lineMotion ដាក់ inline) */
+.caption-glitch { animation: caption-glitch 1s linear forwards; }

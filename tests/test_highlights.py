@@ -298,7 +298,7 @@ def test_find_highlights_survives_some_chunk_failures(monkeypatch):
 
     def flaky(*args, **kwargs):
         calls["n"] += 1
-        if calls["n"] == 1:
+        if calls["n"] == 2:     # ទី 1 = ស្គាល់ genre, ទី 2 = chunk ដំបូង
             raise L.LLMError("timeout សាកល្បង")
         return fake_llm_response()
 

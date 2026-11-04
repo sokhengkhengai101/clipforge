@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Callable
 
 import config
-from pipeline.audio import FFmpegError, probe_duration, require_ffmpeg
+from pipeline.audio import probe_duration, require_ffmpeg
 from pipeline.highlights import Clip
 from pipeline.reframe import Box, Layout, Segment, panel_inner, panel_rects
 
@@ -91,9 +91,84 @@ def build_filter(crop: tuple[int, int, int, int], ass_filename: str | None,
     return ",".join(parts)
 
 
+FIT_IMAGE_FILE = ".fit_background.png"   # រូប background ក្នុង folder render (cwd របស់ FFmpeg)
+FIT_MASK_FILE = ".fit_mask.png"          # alpha ជ្រុងមូលរបស់វីដេអូកណ្តាល
+
+
+def fit_blur_filter(strength: int | None = None) -> str:
+    """`boxblur` តាមកម្លាំង 0-100 (33 = `boxblur=20:5` ដើម); 0 = គ្មាន blur ("")."""
+    strength = config.FIT_BLUR_STRENGTH if strength is None else strength
+    radius = round(max(0, min(100, strength)) * 0.6)
+    return f"boxblur={radius}:5" if radius > 0 else ""
+
+
+def fit_background(source: str, label: str, out_width: int, out_height: int) -> str:
+    """ផ្ទៃខាងក្រោយរបស់ Fit ពី `[source]` (ច្បាប់ចម្លងវីដេអូ) ទៅ `[label]`.
+
+    blur = វីដេអូ scale ឲ្យ**គ្រប** រួច crop និង blur; color = វីដេអូដដែលលាបពណ៌ពេញ (រក្សាពេល
+    របស់ shot); image = រូបតែមួយលើផ្ទៃនោះ (`overlay` ធ្វើ frame ចុងក្រោយម្តងទៀតរហូត).
+    """
+    cover = (f"scale={out_width}:{out_height}:force_original_aspect_ratio=increase,"
+             f"crop={out_width}:{out_height}")
+    kind = config.FIT_BACKGROUND
+    if kind == "color":
+        colour = "#%02x%02x%02x" % background_rgb(config.FIT_COLOR)
+        return (f"[{source}]scale={out_width}:{out_height},"
+                f"drawbox=x=0:y=0:w=iw:h=ih:color={colour}:t=fill[{label}];")
+    if kind == "image" and config.FIT_IMAGE:
+        return (f"movie={FIT_IMAGE_FILE},{cover},format=yuv420p[{label}i];"
+                f"[{source}]scale={out_width}:{out_height}[{label}b];"
+                f"[{label}b][{label}i]overlay=0:0[{label}];")
+    blur = fit_blur_filter()
+    return f"[{source}]{cover}{',' + blur if blur else ''}[{label}];"
+
+
+def fit_foreground_size(source_w: int, source_h: int, out_width: int, out_height: int) -> tuple[int, int]:
+    """ទំហំវីដេអូកណ្តាលក្នុង Fit ពេលមាន spacing: ដាក់ឲ្យ**ចូល**ក្នុងផ្ទៃដែលនៅសល់ (លេខគូ).
+
+    ឧ. 1280x720 ចូល 1080x1920 ជាមួយ spacing 10% -> ផ្ទៃ 864x1536 -> 864x486.
+    """
+    room = 1 - 2 * max(0, min(20, config.FIT_SPACING)) / 100
+    scale = min(out_width * room / source_w, out_height * room / source_h)
+    return int(source_w * scale) // 2 * 2, int(source_h * scale) // 2 * 2
+
+
+def fit_mask(size: tuple[int, int], path: Path, radius: int | None = None) -> Path | None:
+    """PNG ប្រផេះ ទំហំ `size`: ស = ឃើញ, ខ្មៅ = ជ្រុងដែលកាត់ចេញ (alpha របស់វីដេអូកណ្តាល)."""
+    radius = config.FIT_RADIUS if radius is None else radius
+    width, height = size
+    r = min(radius, width // 2, height // 2)
+    if r <= 0:
+        return None
+
+    import numpy as np
+
+    ys, xs = np.ogrid[0:height, 0:width]
+    alpha = np.full((height, width), 255, dtype=np.uint8)
+    for cx, cy in ((r, r), (width - r - 1, r), (r, height - r - 1), (width - r - 1, height - r - 1)):
+        near_x = (xs < r) if cx == r else (xs > width - r - 1)
+        near_y = (ys < r) if cy == r else (ys > height - r - 1)
+        outside = (xs - cx) ** 2 + (ys - cy) ** 2 > r * r
+        alpha[near_x & near_y & outside] = 0
+    path.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+         "-f", "rawvideo", "-pix_fmt", "gray", "-s", f"{width}x{height}", "-i", "-",
+         "-frames:v", "1", str(path)],
+        input=alpha.tobytes(), check=True,
+    )
+    return path
+
+
+def fit_styled() -> bool:
+    """Fit ត្រូវការទំហំគណនារួច (spacing ឬជ្រុងមូល) ឬទេ."""
+    return config.FIT_SPACING > 0 or config.FIT_RADIUS > 0
+
+
 def layout_chain(layout: Layout, index: int, source_label: str, out_label: str,
                  suffix: str = "", out_width: int | None = None,
-                 out_height: int | None = None, mask_label: str | None = None) -> str:
+                 out_height: int | None = None, mask_label: str | None = None,
+                 fit_size: tuple[int, int] | None = None) -> str:
     """ផ្នែក filtergraph ដែលបម្លែង `[source_label]` ទៅ `[out_label]` តាម layout.
 
     Split ត្រូវការ `split` (ចម្លង stream ជាពីរ) រួច crop ខុសគ្នា រួច `vstack`
@@ -144,23 +219,69 @@ def layout_chain(layout: Layout, index: int, source_label: str, out_label: str,
         return ";".join(parts)
 
     if layout.kind == "fit":
-        # រូបពេញនៅកណ្តាល + ច្បាប់ចម្លងព្រិលជាផ្ទៃខាងក្រោយ (slide មិនត្រូវកាត់)។
-        # ផ្ទៃខាងក្រោយ scale ឲ្យ **គ្រប** រួច crop — បើ scale ត្រង់ រូបនឹងលាតខុស។
+        # រូបពេញនៅកណ្តាល + ផ្ទៃខាងក្រោយ (blur / ពណ៌ / រូប) — slide មិនត្រូវកាត់។
+        background = fit_background(f"f{index}", f"bg{index}", out_width, out_height)
+        if fit_size is None:
+            foreground = f"[g{index}]scale={out_width}:-2:flags=lanczos[fg{index}];"
+        else:
+            # spacing / ជ្រុងមូល: ទំហំគណនារួច (ត្រូវគ្នានឹង mask) ហើយ alpha ពី mask
+            fg_w, fg_h = fit_size
+            foreground = f"[g{index}]scale={fg_w}:{fg_h}:flags=lanczos"
+            if config.FIT_RADIUS > 0:
+                foreground += (f",format=yuva420p[r{index}];movie={FIT_MASK_FILE},format=gray[a{index}];"
+                               f"[r{index}][a{index}]alphamerge")
+            foreground += f"[fg{index}];"
         return (
             f"[{source_label}]split=2[f{index}][g{index}];"
-            f"[f{index}]scale={out_width}:{out_height}:"
-            f"force_original_aspect_ratio=increase,"
-            f"crop={out_width}:{out_height},{config.FIT_BLUR}[bg{index}];"
-            f"[g{index}]scale={out_width}:-2:flags=lanczos[fg{index}];"
+            f"{background}"
+            f"{foreground}"
             f"[bg{index}][fg{index}]overlay=(W-w)/2:(H-h)/2,"
+            f"setsar=1{suffix}[{out_label}]"
+        )
+
+    if layout.kind == "custom" and layout.place and layout.box:
+        # Transform ដោយដៃ: crop -> scale -> overlay នៅ (x, y) លើ background របស់ Fit (ដាក់ក្រៅ
+        # អេក្រង់បាន: overlay កាត់ផ្នែកដែលចេញក្រៅ); ជ្រុងមូលដូច Fit (mask ទំហំ fg)
+        fg_w, fg_h, left, top = layout.place
+        background = fit_background(f"f{index}", f"bg{index}", out_width, out_height)
+        foreground = f"[g{index}]{layout.box.as_filter()},scale={fg_w}:{fg_h}:flags=lanczos"
+        if config.FIT_RADIUS > 0:
+            foreground += (f",format=yuva420p[r{index}];movie={FIT_MASK_FILE},format=gray[a{index}];"
+                           f"[r{index}][a{index}]alphamerge")
+        return (
+            f"[{source_label}]split=2[f{index}][g{index}];"
+            f"{background}"
+            f"{foreground}[fg{index}];"
+            f"[bg{index}][fg{index}]overlay={left}:{top},"
             f"setsar=1{suffix}[{out_label}]"
         )
 
     box = layout.box
     if box is None:
         raise RenderError(f"layout '{layout.kind}' គ្មានប្រអប់ crop")
+    if box.x_expr:
+        return (f"[{source_label}]{moving_crop(box, out_width, out_height)},"
+                f"setsar=1{suffix}[{out_label}]")
     return (f"[{source_label}]{box.as_filter()},"
             f"scale={out_width}:{out_height}:flags=lanczos,setsar=1{suffix}[{out_label}]")
+
+
+def moving_crop(box: Box, out_width: int, out_height: int) -> str:
+    """Crop ដែលរំកិល: **scale មុន រួច crop** ដើម្បីឲ្យការរំកិលរលូន.
+
+    `crop` លើ yuv420p រំកិលបានតែ 2 pixel គត់ៗ។ បើ crop លើរូបដើម (720p) រួចពង្រីក 2.67x
+    ការរំកិល 12 px/s ក្លាយជា "នៅនឹង 3 frame រួចលោត 4.8 px" (វាស់លើរូបនឹង) — ញ័រ។
+    Scale រូបទាំងមូលទៅកម្ពស់ output មុន ធ្វើឲ្យជំហាននោះនៅលើ pixel output វិញ: រំកិលរាល់
+    frame។ ថ្លៃជាង (scale រូបទាំងមូល) ប៉ុន្តែតែ shot ដែលរំកិលប៉ុណ្ណោះ។
+    """
+    k = out_height / box.h                       # កត្តាពង្រីក ឧ. 1920/720 = 2.667
+    # +1 មុន trunc: 720*2.6666 អាចចេញ 1919.9999 ហើយ trunc ធ្វើឲ្យខ្វះ 2 px
+    scale = (f"scale=trunc((iw*{k:.6f}+1)/2)*2:trunc((ih*{k:.6f}+1)/2)*2"
+             f":flags=lanczos")
+    # crop ខ្លួនវាកាត់ x ឲ្យនៅក្នុងរូបជានិច្ច ដូច្នេះមិនបាច់ clamp ទៀតទេ។
+    # `exact=1` = រំកិលម្តង 1 px (មិនបង្គត់ទៅលេខគូ): រូបនឹងនៅនឹងតែ 0/47 frame ជំនួស 15/47
+    return (f"{scale},crop={out_width}:{out_height}:"
+            f"x='({box.x_expr})*{k:.6f}':y={round(box.y * k)}:exact=1")
 
 
 def sharpen_suffix() -> str:
@@ -175,11 +296,18 @@ def sharpen_suffix() -> str:
 
 def build_layout_filter(layout: Layout, ass_filename: str | None = None,
                         out_width: int | None = None, out_height: int | None = None,
-                        mask_label: str | None = None) -> str:
-    """filtergraph សម្រាប់ layout តែមួយ (clip ដែលមិនមានការកាត់ camera)."""
+                        mask_label: str | None = None,
+                        fit_size: tuple[int, int] | None = None, motion: str = "") -> str:
+    """filtergraph សម្រាប់ layout តែមួយ (clip ដែលមិនមានការកាត់ camera).
+
+    `motion` (filter `perspective` ពី `pipeline.motion`) ដាក់ក្រោយ layout និងមុន caption.
+    """
     burn = f",ass={ass_filename}" if ass_filename else ""
+    if motion:
+        chain = layout_chain(layout, 0, "0:v", "lm", "", out_width, out_height, mask_label, fit_size)
+        return f"{chain};[lm]{motion}{sharpen_suffix()}{burn}[v]"
     return layout_chain(layout, 0, "0:v", "v", sharpen_suffix() + burn,
-                        out_width, out_height, mask_label)
+                        out_width, out_height, mask_label, fit_size)
 
 
 def mask_kinds(segments: list[Segment]) -> list[str]:
@@ -194,11 +322,27 @@ def mask_kinds(segments: list[Segment]) -> list[str]:
     return seen
 
 
+TRIM_EARLY_SEC = 0.001   # តិចជាង frame មួយឆ្ងាយ (24 fps = 42 ms)
+
+
+def trim_time(seconds: float) -> float:
+    """ពេលសម្រាប់ `trim`: មុនការកាត់ 1 ms ដើម្បីឲ្យ frame ដំបូងនៃ shot ថ្មីចូល shot ថ្មី.
+
+    ការកាត់ camera ធ្លាក់ចំ pts របស់ frame (ឧ. frame 152 = 6.339667 s)។ `trim` ទុក frame
+    ដែល pts >= start។ ពីមុនយើងសរសេរ `6.340` (បង្គត់ 3 ខ្ទង់ឡើងលើ) -> frame 152 នៅជាប់ shot
+    មុន ហើយបង្ហាញជាមួយ crop ចាស់ ១ frame — លោតពេលប្តូរ shot (វាស់: 7 ក្នុង 12 ការកាត់)។
+    Start និង end ថយដូចគ្នា ដូច្នេះ shot តៗគ្នានៅភ្ជាប់គ្នាបេះបិទ គ្មាន frame បាត់។
+    """
+    return max(0.0, seconds - TRIM_EARLY_SEC)
+
+
 def build_segments_filter(segments: list[Segment], clip_start: float,
                           ass_filename: str | None = None,
                           out_width: int | None = None,
                           out_height: int | None = None,
-                          masks: dict[str, int] | None = None) -> str:
+                          masks: dict[str, int] | None = None,
+                          fit_size: tuple[int, int] | None = None,
+                          motions: list[str] | None = None) -> str:
     """filtergraph តែមួយដែលដោះស្រាយ shot ទាំងអស់ក្នុង clip — encode តែម្តង.
 
     **ហេតុអ្វីមិន render ដាច់ៗរួច concat?** យើងបានសាកវិធីនោះ ហើយរាល់កន្លែងភ្ជាប់
@@ -215,7 +359,8 @@ def build_segments_filter(segments: list[Segment], clip_start: float,
     if len(segments) == 1:
         label = f"{masks[segments[0].layout.kind]}:v" if segments[0].layout.kind in masks else None
         return build_layout_filter(segments[0].layout, ass_filename,
-                                   out_width, out_height, label)
+                                   out_width, out_height, label, fit_size,
+                                   motions[0] if motions else "")
 
     count = len(segments)
     parts = ["[0:v]split=" + str(count) + "".join(f"[s{i}]" for i in range(count))]
@@ -235,17 +380,20 @@ def build_segments_filter(segments: list[Segment], clip_start: float,
             mask_labels[kind] = labels
 
     for index, segment in enumerate(segments):
-        start = max(0.0, segment.start - clip_start)
-        end = max(start, segment.end - clip_start)
+        start = trim_time(segment.start - clip_start)
+        end = max(start, trim_time(segment.end - clip_start))
         parts.append(
-            f"[s{index}]trim=start={start:.3f}:end={end:.3f},setpts=PTS-STARTPTS[p{index}]"
+            f"[s{index}]trim=start={start:.6f}:end={end:.6f},setpts=PTS-STARTPTS[p{index}]"
         )
         label = None
         if segment.layout.panels and segment.layout.kind in mask_labels:
             label = mask_labels[segment.layout.kind].pop(0)
-        parts.append(layout_chain(segment.layout, index, f"p{index}", f"v{index}",
+        motion = motions[index] if motions else ""
+        parts.append(layout_chain(segment.layout, index, f"p{index}", f"m{index}" if motion else f"v{index}",
                                   out_width=out_width, out_height=out_height,
-                                  mask_label=label))
+                                  mask_label=label, fit_size=fit_size))
+        if motion:
+            parts.append(f"[m{index}]{motion}[v{index}]")
 
     burn = f",ass={ass_filename}" if ass_filename else ""
     joined = "".join(f"[v{i}]" for i in range(count))
@@ -320,9 +468,14 @@ def corner_mask(kind: str, path: Path, radius: int | None = None) -> Path | None
 
 
 def _encode_args(crf: int, preset: str) -> list[str]:
-    _, video = encoder_args()
+    name, video = encoder_args()
+    # keyframe តាមពេល (មិនមែនតាមចំនួន frame) ដូច្នេះដូចគ្នាទាំង 24, 29.97 ឬ 60 fps.
+    # NVENC: `-forced-idr 1` ធ្វើឲ្យ keyframe ទាំងនោះជា IDR — decoder ចាប់ផ្តើមពីវាបានដោយមិនពឹង frame មុន.
+    keyframes = ["-force_key_frames", f"expr:gte(t,n_forced*{config.KEYFRAME_SEC})"]
+    if name == "nvenc":
+        keyframes += ["-forced-idr", "1"]
     return [
-        *video, "-pix_fmt", "yuv420p",
+        *video, *keyframes, "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", config.AUDIO_BITRATE,
         "-movflags", "+faststart",      # metadata នៅដើម file -> ចាប់ផ្តើមលេងលឿន
     ]
@@ -342,7 +495,8 @@ FILTER_INLINE_LIMIT = 8000
 
 
 def render_segments(video_path: Path, clip: Clip, segments: list[Segment],
-                    out_path: Path, ass_filename: str | None = None) -> Path:
+                    out_path: Path, ass_filename: str | None = None,
+                    motion_cues=None) -> Path:
     """Render clip ទាំងមូល (shot ច្រើន) ដោយ FFmpeg **តែម្តង**."""
     require_ffmpeg("ffmpeg")
     out_path = Path(out_path)
@@ -357,7 +511,41 @@ def render_segments(video_path: Path, clip: Clip, segments: list[Segment],
             masks[kind] = len(mask_files) + 1      # [0:v] ជា video ដើម
             mask_files.append(path)
 
-    graph = build_segments_filter(segments, clip.start, ass_filename, masks=masks)
+    # Fit: រូប background និង mask ជ្រុងមូល ជា file ក្នុង folder render (`movie=` អានពី cwd)
+    extra_files: list[Path] = []
+    fit_size = None
+    if any(segment.layout.kind in ("fit", "custom") for segment in segments):
+        if config.FIT_BACKGROUND == "image" and config.FIT_IMAGE:
+            image = out_path.parent / FIT_IMAGE_FILE
+            # PNG ជានិច្ច: FFmpeg បម្លែង jpg/webp ម្តង — ឈ្មោះ file ថេរ គ្មានតួពិសេស
+            subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                            "-i", str(Path(config.FIT_IMAGE).resolve()), "-frames:v", "1", str(image)],
+                           check=True)
+            extra_files.append(image)
+        custom = next((s.layout.place for s in segments if s.layout.kind == "custom"), None)
+        if custom is not None:
+            # Transform: mask ជ្រុងមូលទំហំវីដេអូដែលដាក់ដោយដៃ (fit_size មិនប្រើ)
+            mask = fit_mask(custom[:2], out_path.parent / FIT_MASK_FILE)
+            if mask is not None:
+                extra_files.append(mask)
+        elif fit_styled():
+            fit_size = fit_foreground_size(*probe_dimensions(video_path),
+                                           config.OUT_WIDTH, config.OUT_HEIGHT)
+            mask = fit_mask(fit_size, out_path.parent / FIT_MASK_FILE)
+            if mask is not None:
+                extra_files.append(mask)
+
+    # Motion: filter perspective មួយក្នុងមួយ shot (ពេលធៀបនឹងដើម clip)
+    from pipeline import motion
+    motions = None
+    if motion.enabled():
+        from pipeline.cuts import frame_rate
+        fps = frame_rate(video_path)
+        motions = [motion.motion_filter(s.start - clip.start, s.end - clip.start, motion_cues, fps,
+                                        config.OUT_WIDTH, config.OUT_HEIGHT) for s in segments]
+
+    graph = build_segments_filter(segments, clip.start, ass_filename, masks=masks,
+                                  fit_size=fit_size, motions=motions)
 
     # filtergraph វែង -> សរសេរទៅ file រួចឲ្យ FFmpeg អានពីទីនោះ
     script = None
@@ -385,7 +573,7 @@ def render_segments(video_path: Path, clip: Clip, segments: list[Segment],
     finally:
         if script is not None:
             script.unlink(missing_ok=True)
-        for path in mask_files:
+        for path in mask_files + extra_files:
             path.unlink(missing_ok=True)
     return out_path
 
@@ -398,6 +586,7 @@ def render_clip(
     *,
     segments: list[Segment] | None = None,
     force: bool = False,
+    motion_cues=None,
 ) -> Path:
     """Render clip មួយទៅ MP4. ត្រឡប់ path។
 
@@ -440,7 +629,7 @@ def render_clip(
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     render_segments(video_path, clip, segments, out_path,
-                    ass_filename=ass_path.name if ass_path else None)
+                    ass_filename=ass_path.name if ass_path else None, motion_cues=motion_cues)
 
     if not out_path.exists() or out_path.stat().st_size == 0:
         raise RenderError(f"FFmpeg រត់ចប់ តែ {out_path.name} ទទេ/គ្មាន។")
@@ -456,8 +645,14 @@ def render_all(
     force: bool = False,
     plans: list[list[Segment]] | None = None,
     on_progress: Callable[[int, int, Clip], None] | None = None,
+    suffix: str = "",
+    motion_cues: list | None = None,
 ) -> list[Path]:
-    """Render គ្រប់ clip ទៅ `out_dir/clip_01.mp4` ...។"""
+    """Render គ្រប់ clip ទៅ `out_dir/clip_01.mp4` ...។
+
+    `suffix="_clean"` -> `clip_01_clean.mp4` (preview គ្មាន caption របស់ screen Subtitles)
+    ដូច្នេះ `clip_01.mp4` ដែលមាន caption មិនត្រូវបានប៉ះ។
+    """
     out_dir = Path(out_dir)
     results: list[Path] = []
 
@@ -468,9 +663,10 @@ def render_all(
         if ass_paths is not None and index <= len(ass_paths):
             ass_path = ass_paths[index - 1]
         segments = plans[index - 1] if plans is not None and index <= len(plans) else None
+        cues = motion_cues[index - 1] if motion_cues and index <= len(motion_cues) else None
         results.append(render_clip(
-            video_path, clip, out_dir / f"clip_{index:02d}.mp4", ass_path,
-            segments=segments, force=force,
+            video_path, clip, out_dir / f"clip_{index:02d}{suffix}.mp4", ass_path,
+            segments=segments, force=force, motion_cues=cues,
         ))
 
     return results

@@ -1,5 +1,7 @@
 import { useEffect, useId, type ReactNode } from 'react'
 import { CloseIcon } from './icons'
+import { focusRing } from './styles'
+import { useT } from '../i18n'
 
 /** Dialog (SignInModal.html): ផ្ទៃ `card`, radius 18, padding 28, ពីលើ scrim
  *  `rgba(5,7,10,0.74)`, ប៊ូតុងបិទ 40×40 នៅជ្រុងស្តាំខាងលើ.
@@ -9,12 +11,17 @@ export function Dialog({
   onClose,
   width = 440,
   children,
+  footer,
 }: {
   title: ReactNode
   onClose: () => void
   width?: number // design: 440 (sign-in) ... ធំជាងសម្រាប់ export
   children: ReactNode
+  // ជួរខាងក្រោមដែល**មិន**រំកិល (ប៊ូតុងចាប់ផ្តើម) — នៅក្រៅផ្ទៃ scroll ព្រោះ `sticky` ក្នុងផ្ទៃដែលមាន
+  // padding អណ្តែតខ្ពស់ពីបាត (Chromium វាស់ពីគែម content)
+  footer?: ReactNode
 }) {
+  const t = useT()
   const titleId = useId()
 
   useEffect(() => {
@@ -33,20 +40,25 @@ export function Dialog({
         aria-modal="true"
         aria-labelledby={titleId}
         style={{ maxWidth: width }}
-        className="relative flex w-full flex-col gap-4.5 rounded-dialog bg-card p-7 font-kantumruy text-text shadow-[0_24px_60px_rgba(0,0,0,0.5)]"
+        // ប៊ូតុងបិទនៅ**ក្រៅ**ផ្ទៃដែលរំកិល: dialog ខ្ពស់ (AI Reframe ~850 px) រំកិលបាន ប៉ុន្តែ
+        // ការរំកិលមិនយកប៊ូតុងបិទចេញពីអេក្រង់ទេ (រកឃើញដោយអ្នកអភិវឌ្ឍ)
+        className="relative flex max-h-[calc(100vh-48px)] w-full flex-col overflow-hidden rounded-dialog bg-card font-kantumruy text-text shadow-[0_24px_60px_rgba(0,0,0,0.5)]"
       >
         <button
           type="button"
-          aria-label="បិទ"
+          aria-label={t('បិទ', 'Close')}
           onClick={onClose}
-          className="absolute top-3 right-3 inline-flex size-10 cursor-pointer items-center justify-center rounded-button border-0 bg-transparent text-text-2 outline-none hover:bg-field focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-gold"
+          className={`absolute top-3 right-3 z-10 inline-flex size-10 cursor-pointer items-center justify-center rounded-button border-0 bg-card text-text-2 hover:bg-field ${focusRing}`}
         >
           <CloseIcon size={14} weight={1.5} />
         </button>
-        <h2 id={titleId} className="pr-10 type-dialog">
-          {title}
-        </h2>
-        {children}
+        <div className="flex min-h-0 flex-col gap-4.5 overflow-y-auto p-7">
+          <h2 id={titleId} className="pr-10 type-dialog">
+            {title}
+          </h2>
+          {children}
+        </div>
+        {footer && <div className="shrink-0 border-t border-line px-7 py-4">{footer}</div>}
       </div>
     </div>
   )

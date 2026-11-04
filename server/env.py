@@ -117,6 +117,7 @@ def onnx_models() -> list[dict]:
         ("face detect", config.FACE_MODEL_PATH, config.FACE_MODEL_URL),
         ("face match", config.FACE_RECOGNITION_MODEL_PATH, config.FACE_RECOGNITION_MODEL_URL),
         ("subject", config.SUBJECT_MODEL_PATH, config.SUBJECT_MODEL_URL),
+        ("tracker", config.TRACKER_MODEL_PATH, config.TRACKER_MODEL_URL),
     ]
     items = []
     for label, path, url in wanted:
