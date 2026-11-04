@@ -13,13 +13,13 @@ export function MotionPanel({
   onChange,
   transition,
   onTransition,
-  cutCount,
+  joinCount,
 }: {
   motion: Motion
   onChange: (patch: Partial<Motion>) => void
   transition: Transition
   onTransition: (value: Transition) => void
-  cutCount: number
+  joinCount: number
 }) {
   const t = useT()
   return (
@@ -68,30 +68,78 @@ export function MotionPanel({
       </Section>
 
 
-      <Section
-        title="Transition"
-        hint={cutCount ? t(`នៅកន្លែងកាត់ ${cutCount} កន្លែង`, `at ${cutCount} cuts`) : t('ប្រើពេលអ្នកកាត់ពាក្យ ឬ pause (មិនទាន់មានការកាត់)', 'used where you cut words or pauses (no cuts yet)')}
-      >
-        <Segmented
-          label="Transition"
-          size="sm"
-          value={transition}
-          onChange={onTransition}
-          options={[
-            { value: 'punch', label: 'Zoom punch-in' },
-            { value: 'hard', label: 'Hard cut' },
-          ]}
-        />
-      </Section>
+      <TransitionSection transition={transition} onTransition={onTransition} joinCount={joinCount} />
       <p className="m-0 type-hint text-text-4">{t('Preview ប្រហាក់ប្រហែល — Export render ពិតលើវីដេអូទាំងមូល', 'An approximate preview — Export renders the real thing over the whole video')}</p>
     </div>
   )
 }
 
-function Section({ title, hint, children }: { title: string; hint: string; children: React.ReactNode }) {
+/** ផ្ទាំង Transition: បើកពីប៊ូតុងនៅចន្លោះប្លុកលើ timeline. `continuous` = ប្លុកទាំងពីរបន្តពីគ្នាតាមពេល
+ *  (Split ប៉ុណ្ណោះ): pipeline ភ្ជាប់វាវិញ ដូច្នេះគ្មាន transition នៅទីនោះទេ. */
+export function TransitionPanel({
+  transition,
+  onTransition,
+  joinCount,
+  continuous,
+  onClose,
+}: {
+  transition: Transition
+  onTransition: (value: Transition) => void
+  joinCount: number
+  continuous: boolean
+  onClose: () => void
+}) {
+  const t = useT()
+  return (
+    <div className="flex flex-col gap-5">
+      <div className="flex items-center justify-between">
+        <span className="type-label font-semibold">Transition</span>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label={t('បិទ', 'Close')}
+          className={`flex size-7 cursor-pointer items-center justify-center rounded-field border-0 bg-transparent text-text-3 hover:bg-field hover:text-text ${focusRing}`}
+        >
+          ✕
+        </button>
+      </div>
+      <TransitionSection transition={transition} onTransition={onTransition} joinCount={joinCount} heading={false} />
+      {continuous && (
+        <p className="m-0 type-hint text-warn">
+          {t('ប្លុកទាំងពីរនេះបន្តពីគ្នាតាមពេល ដូច្នេះគ្មាន transition នៅទីនេះទេ — កាត់ ឬប្តូរលំដាប់ប្លុកជាមុនសិន', 'These two blocks continue in time, so there is no transition here — trim or reorder a block first')}
+        </p>
+      )}
+    </div>
+  )
+}
+
+/** Transition មួយសម្រាប់វីដេអូទាំងមូល (`--transition`): មិនទាន់ជ្រើសដាច់ដោយឡែកតាមកន្លែងភ្ជាប់ទេ. */
+function TransitionSection({ transition, onTransition, joinCount, heading = true }: { transition: Transition; onTransition: (value: Transition) => void; joinCount: number; heading?: boolean }) {
+  const t = useT()
+  return (
+    <Section
+      title="Transition"
+      heading={heading}
+      hint={joinCount ? t(`ប្រើលើកន្លែងភ្ជាប់ទាំង ${joinCount} ក្នុងវីដេអូ`, joinCount === 1 ? 'applies to the 1 join in the video' : `applies to all ${joinCount} joins in the video`) : t('ប្រើពេលអ្នកកាត់ ឬប្តូរលំដាប់ប្លុក (មិនទាន់មានកន្លែងភ្ជាប់)', 'used where you trim or reorder blocks (no joins yet)')}
+    >
+      <Segmented
+        label="Transition"
+        size="sm"
+        value={transition}
+        onChange={onTransition}
+        options={[
+          { value: 'punch', label: 'Zoom punch-in' },
+          { value: 'hard', label: 'Hard cut' },
+        ]}
+      />
+    </Section>
+  )
+}
+
+function Section({ title, hint, heading = true, children }: { title: string; hint: string; heading?: boolean; children: React.ReactNode }) {
   return (
     <section aria-label={title} className="flex flex-col gap-2">
-      <span className="type-body font-semibold">{title}</span>
+      {heading && <span className="type-body font-semibold">{title}</span>}
       {children}
       <span className="type-hint text-text-4">{hint}</span>
     </section>

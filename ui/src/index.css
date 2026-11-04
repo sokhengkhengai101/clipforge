@@ -129,6 +129,30 @@ body {
 input[type='color'] {
   overflow: hidden;
 }
+/* slider ដៃពីរ: input range ពីរត្រួតគ្នា — មានតែដៃទេដែលចុចបាន ដូច្នេះ input ខាងលើមិនបាំងខាងក្រោម */
+.range-thumb {
+  appearance: none;
+  pointer-events: none;
+  background: transparent;
+}
+.range-thumb::-webkit-slider-thumb {
+  appearance: none;
+  pointer-events: auto;
+  width: 24px;
+  height: 24px;
+  cursor: grab;
+  border: 2px solid #6b7280;
+  border-radius: 50%;
+  background: #0b0d11;
+}
+.range-thumb:active::-webkit-slider-thumb {
+  cursor: grabbing;
+}
+.range-thumb:focus-visible::-webkit-slider-thumb {
+  outline: 2px solid var(--color-gold);
+  outline-offset: 2px;
+}
+
 input[type='color']::-webkit-color-swatch-wrapper {
   padding: 0;
   border-radius: inherit;

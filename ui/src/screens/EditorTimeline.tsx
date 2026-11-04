@@ -1,16 +1,23 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type PointerEvent, type ReactNode } from 'react'
 import { api, sourceFrameUrl, type ReframeShot } from '../api'
-import { blockEdgeLimit, blocksOf, keepRanges, moveBlock, outputSeconds, outputTime, sequence, sourceAt, trimEdges, type Cut, type Insert } from '../cutList'
+import { outputTime, partAtOutput, sourceAt } from '../cutList'
+import { asParts, edgeLimit, trimClip, type Clip } from '../clipList'
 import { focusRing } from '../kit/styles'
 import { kindOf } from './layoutKinds'
 import { useT } from '../i18n'
 
 const TILE_PX = 100 // ទទឹងរូបតូចមួយលើ timeline (រូប OpusClip)
+const TILE_ZOOMED_PX = 50 // zoom ចូល: រូបមួយគ្រប់ពេលខ្លីជាង ដូច្នេះវាជិតនឹង preview ត្រង់ playhead
+const MAX_BLOCK_TILES = 200 // ក្នុងប្លុកមួយ — loading=lazy ដករូបតែអ្វីដែលជិតឃើញ
 const MAX_TILES = 60 // FFmpeg ដករូបម្តងមួយ — កំណត់ចំនួន ដើម្បីកុំឲ្យ sidecar រវល់ពេក
-const ZOOMS = [1, 1.5, 2, 3, 4, 6, 8]
+const ZOOMS = [0.1, 0.25, 0.5, 1, 1.5, 2, 3, 4, 6, 8] // 1 = Fit (ពេញទទឹង); តូចជាង 1 = ប្លុកខ្លីជាង timeline (រូប OpusClip)
+const ADD_CLIP_PX = 80 // = w-20 នៃប៊ូតុង +
+const ADD_CLIP_GAP = 12
+const JOIN_MIN_PX = 28 // ប្លុកតូចជាងនេះ: គ្មានប៊ូតុង transition (= ទំហំអប្បបរមានៃ ‖)
 const TRIM_SIDES = ['start', 'end'] as const
 // Trim handle (រូប OpusClip): ‖ ពណ៌សលើជួររូបប៉ុណ្ណោះ, មិនលើ waveform; គ្មានផ្ទៃ ដូច្នេះរូបនៅតែឃើញ
-const TRIM_HANDLE = 'absolute top-[calc(56px+var(--space-h))] z-[2] flex h-14 w-3 cursor-ew-resize touch-none items-center justify-center'
+const TRIM_HANDLE = 'absolute top-[calc(56px+var(--space-h))] z-[2] flex h-14 w-5 cursor-ew-resize touch-none items-center justify-center'
+const TRIM_HANDLE_PX = 20 // = w-5: ‖ នៅកណ្តាល ដូច្នេះឃ្លាតពីគែមប្លុក ~6 px (រូប OpusClip)
 const EDGE_PX = 10 // ចន្លោះឆ្វេង/ស្តាំក្នុង scroller: ក្បាល playhead នៅ 0 s មិនត្រូវកាត់ពាក់កណ្តាល
 
 // កម្ពស់ថេររបស់ជួររូបតូច (px); waveform = h-12 (48 px). ពេលអូសគែមលើរបស់ timeline ទាំងពីរនេះមិនប្តូរទេ —
@@ -73,7 +80,7 @@ function label(seconds: number): string {
  *
  *  ពិតទាំងអស់: រូបតូចពី `/probe/frame` (frame ពិតនៃវីដេអូដើម), waveform ពី `audio.wav`
  *  (`/projects/{name}/waveform`), ជួរ layout ពី `layout.json` នៃ reframe ចុងក្រោយ (បើធ្លាប់ធ្វើ).
- *  ចុច ឬអូសលើ timeline = វីដេអូលោត; zoom 1-8x; playhead តាមពេលចាក់. */
+ *  ចុច ឬអូសលើ timeline = វីដេអូលោត; zoom 0.1-8x (1x = Fit); playhead តាមពេលចាក់. */
 export function EditorTimeline({
   project,
   videoPath,
@@ -81,30 +88,25 @@ export function EditorTimeline({
   time,
   playing,
   audioReady,
-  cuts = [],
-  inserts = [],
-  order = [],
+  clips,
   playingPart = -1,
   noTrack = [],
   subjects = [],
-  splits = [],
-  part = null,
-  picked = false,
-  partCut = false,
-  onPick,
-  onPickRange,
+  selected = null,
+  onSelect,
   linkable = false,
   onLink,
+  canSplit = false,
   onSplit,
+  deletable = false,
   onTogglePart,
-  onTrim,
   snap = true,
   onSnap,
   initialVolume = 100,
   onVolume,
-  onMoveInsert,
   onMoveBlock,
   onTrimBlock,
+  onAddTransition,
   onSeek,
   onScrub,
   onTogglePlay,
@@ -115,31 +117,26 @@ export function EditorTimeline({
   time: number
   playing: boolean
   audioReady: boolean // transcript មានហើយ = audio.wav មាន (waveform)
-  cuts?: [number, number][] // ចន្លោះដែលលុប — ឆ្នូតក្រហមពីលើជួរ
-  inserts?: Insert[] // ផ្នែកដែលបន្ថែម — សញ្ញា ＋ gold នៅពេល `at`
-  order?: Cut[] // ប្លុកតាមលំដាប់ដែលអូស; [] = លំដាប់ពេល
+  clips: Clip[] // ផ្នែកនៃវីដេអូដើមតាមលំដាប់ចេញ — ប្លុកនីមួយៗលើ timeline
   playingPart?: number // part ដែលកំពុងចាក់ (លំដាប់ចេញ); -1 = មិនចាក់
   noTrack?: [number, number][] // scene ដែលបិទ tracking — ស៊ុមដាច់ៗលើជួរ layout
   subjects?: [number, number][] // scene ដែលតាមប្រធានបទដោយដៃ — ស៊ុម gold
-  splits?: number[] // ចំណុច Split (បន្ទាត់ស)
-  part?: Cut | null // ផ្នែកដែលជ្រើស (ស៊ុម gold)
-  picked?: boolean // ចុចជ្រើសលើ timeline រួច (វីដេអូគ្មាន split ក៏ជ្រើសបាន) -> បង្ហាញ ‖
-  partCut?: boolean // ផ្នែកនោះលុបរួចហើយ -> ប៊ូតុង "ស្តារ"
-  onPick?: (seconds: number) => void // ចុចលើ timeline = ជ្រើសផ្នែកនៅពេលនោះ
-  onPickRange?: (from: number, to: number) => void // អូសចតុកោណ = ជ្រើសផ្នែកទាំងអស់ដែលវាប៉ះ
-  linkable?: boolean // ការជ្រើសមានផ្នែកច្រើន -> Link អាចភ្ជាប់វា
+  selected?: [number, number] | null // clip ដែលជ្រើស [ទីមួយ, ចុងក្រោយ] ក្នុងបញ្ជី (ស៊ុមស + ‖)
+  onSelect?: (range: [number, number] | null) => void // ចុច = មួយ; អូសចតុកោណ = ច្រើន
+  linkable?: boolean // clip ដែលជ្រើសបន្តពីគ្នា -> Link អាចភ្ជាប់វា
   onLink?: () => void
+  canSplit?: boolean
   onSplit?: (exact: boolean) => void
+  deletable?: boolean
   onTogglePart?: () => void
-  onTrim?: (side: 'start' | 'end', seconds: number, alt: boolean) => void // alt = ផ្ទុយពី Snap
   snap?: boolean // ប៊ូតុងមេដែក: Split / trim ជាប់គែមពាក្យ
   onSnap?: () => void
   initialVolume?: number // ប៊ូតុង Speaker: កម្រិតសំឡេង preview 0-100 ពេលបើក editor
   onVolume?: (volume: number) => void
-  onMoveInsert?: (insertIdx: number, newAt: number) => void // drag ប្លុក HOOK ទៅទីតាំងថ្មី
-  onMoveBlock?: (order: Cut[]) => void // drag ប្លុកធម្មតា = លំដាប់ថ្មី
-  onTrimBlock?: (block: Cut, side: 'start' | 'end', seconds: number, alt: boolean) => void // អូសគែមប្លុក (ក្រោយប្តូរលំដាប់)
-  onSeek: (seconds: number) => void
+  onMoveBlock?: (from: number, gap: number) => void // អូសប្លុក: ទៅចន្លោះ `gap` (0 = មុនប្លុកទី 0)
+  onTrimBlock?: (index: number, side: 'start' | 'end', seconds: number, alt: boolean) => void // អូសគែមប្លុក
+  onAddTransition?: (index: number) => void // ចុចប៊ូតុងនៅចន្លោះប្លុក: index = ប្លុកដែលចាប់ផ្តើមនៅទីនោះ
+  onSeek: (seconds: number, clip?: number) => void // clip = ប្លុកណា (ពេលដើមមួយអាចនៅពីរប្លុក)
   onScrub?: (seconds: number) => void // ពេលកំពុងអូស: តែវីដេអូ seek (គ្មាន setTime របស់ editor); លែង = onSeek
   onTogglePlay: () => void
 }) {
@@ -198,22 +195,26 @@ export function EditorTimeline({
   }, [project])
 
   const total = Math.max(1, duration)
-  const [head, tail] = trimEdges(cuts, total)
-  const span = Math.max(0.5, tail - head)
-  const content = Math.max(width, width * zoom)
+  // ខ្នាត px/s ថេរ: កាត់ ឬពង្រីកប្លុកមិនប្តូរវាទេ, ប្តូរតែ zoom ឬ Fit (Fit = ប្រវែងបច្ចុប្បន្នពេញទទឹង)
+  const [fitSeconds, setFitSeconds] = useState<number | null>(null)
+  const scaleSeconds = Math.max(0.5, fitSeconds ?? total)
 
-  // Output-order mode: when inserts, a dragged order or a cut in the middle exist the timeline shows
-  // only what Export keeps, in export order (អ្វីដែលកាត់បាត់ពី timeline). xOf / tOf map source time ↔ output px.
-  const outParts = useMemo(
-    () => (inserts.length > 0 || order.length > 0 || keepRanges(cuts, total).length > 1 ? sequence(cuts, inserts, total, order) : null),
-    [inserts, cuts, total, order],
-  )
-  const outSeconds = outParts ? outParts.reduce((s, p) => s + (p.end - p.start), 0) : span
-  const pxPerSecond = content / Math.max(0.5, outParts ? outSeconds : span)
+  // Timeline បង្ហាញតែអ្វីដែល Export ចេញ, តាមលំដាប់ចេញ: clip នីមួយៗ = ប្លុកមួយ. xOf / tOf: ពេលក្នុងវីដេអូដើម ↔ px
+  // អូស || ចេញ: ប្លុកធំឡើងភ្លាម ហើយរុញប្លុកក្រោយៗ (មិនត្រួតលើគ្នា)
+  const [edgeDrag, setEdgeDrag] = useState<{ index: number; side: 'start' | 'end'; at: number } | null>(null)
+  const edgeOut = edgeDrag !== null && clips[edgeDrag.index] !== undefined && (edgeDrag.side === 'start' ? edgeDrag.at < clips[edgeDrag.index][0] : edgeDrag.at > clips[edgeDrag.index][1])
+  const liveClips = useMemo(() => (edgeOut && edgeDrag ? trimClip(clips, edgeDrag.index, edgeDrag.side, edgeDrag.at) : clips), [clips, edgeOut, edgeDrag])
+  const outParts = useMemo(() => asParts(liveClips), [liveClips])
+  const outSeconds = outParts.reduce((s, p) => s + (p.end - p.start), 0)
+  const baseSeconds = clips.reduce((sum, clip) => sum + (clip[1] - clip[0]), 0)
+  const pxPerSecond = (width * zoom) / scaleSeconds
+  const grownPx = (outSeconds - baseSeconds) * pxPerSecond
+  const rowWidth = outSeconds * pxPerSecond // ជួរ band / រូប / waveform ប្រវែងស្មើប្លុក
+  const liveContent = Math.max(width, rowWidth) // ផ្ទៃ timeline មិនតូចជាងទិដ្ឋភាព: ruler បន្តហួសចុងវីដេអូ
+  const addClipInside = rowWidth + ADD_CLIP_GAP + ADD_CLIP_PX <= width // មានកន្លែង: + នៅជាប់ប្លុក
 
   // Pre-compute each part's output x offset (only rebuilt when parts or pxPerSecond change)
   const partOffsets = useMemo(() => {
-    if (!outParts) return []
     let px = 0
     return outParts.map(p => {
       const entry = { start: p.start, end: p.end, insert: p.insert, outX: px }
@@ -224,53 +225,35 @@ export function EditorTimeline({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [outParts, pxPerSecond])
 
-  const xOf = outParts
-    ? (sourceTime: number): number => {
-        for (const p of partOffsets) {
-          if (sourceTime >= p.start && sourceTime < p.end)
-            return p.outX + (sourceTime - p.start) * pxPerSecond
-        }
-        const last = partOffsets[partOffsets.length - 1]
-        return last ? last.outX + (last.end - last.start) * pxPerSecond : 0
-      }
-    : (seconds: number) => (seconds - head) * pxPerSecond
-  const tOf = outParts
-    ? (x: number): number => {
-        for (const p of partOffsets) {
-          const blockW = (p.end - p.start) * pxPerSecond
-          if (x < p.outX + blockW) return p.start + (x - p.outX) / pxPerSecond
-        }
-        return total
-      }
-    : (x: number) => Math.max(head, Math.min(tail, head + x / pxPerSecond))
-  // ចន្លោះ [a, b] -> {left, width}; in source mode clamp to view [head,tail]; in output mode use xOf directly
-  const box = (a: number, b: number, min = 2) => {
-    if (outParts) {
-      // ប្លុកមិនតាមលំដាប់ពេលទេ: គូរក្នុង part ដែលមាន `a` (xOf(b) អាចនៅប្លុកផ្សេងទាំងស្រុង)
-      const inPart = partOffsets.find((p) => a >= p.start - 0.001 && a < p.end)
-      if (!inPart || b - a <= 0.001) return null
-      return { left: xOf(a), width: Math.max(min, (Math.min(b, inPart.end) - a) * pxPerSecond) }
+  const xOf = (sourceTime: number): number => {
+    for (const p of partOffsets) {
+      if (sourceTime >= p.start && sourceTime < p.end) return p.outX + (sourceTime - p.start) * pxPerSecond
     }
-    const from = Math.max(a, head)
-    const to = Math.min(b, tail)
-    if (to - from <= 0.001) return null
-    const l = xOf(from)
-    const r = xOf(to)
-    return r - l > 0 ? { left: l, width: Math.max(min, r - l) } : null
+    const last = partOffsets[partOffsets.length - 1]
+    return last ? last.outX + (last.end - last.start) * pxPerSecond : 0
   }
-  const tiles = Math.min(MAX_TILES, Math.max(1, Math.round(content / TILE_PX)))
+  // px លើ timeline -> ពេល និងប្លុក (ហួសចុង = ចុងប្លុកចុងក្រោយ មិនមែនចុងវីដេអូដើមទេ: ប្លុកចុងក្រោយអាចជាផ្នែកដើមវីដេអូ)
+  const placeOf = (x: number) => partAtOutput(outParts, x / pxPerSecond)
+  // ចន្លោះ [a, b] -> {left, width}: គូរក្នុង part ដែលមាន `a` (xOf(b) អាចនៅប្លុកផ្សេងទាំងស្រុង)
+  const box = (a: number, b: number, min = 2) => {
+    const inPart = partOffsets.find((p) => a >= p.start - 0.001 && a < p.end)
+    if (!inPart || b - a <= 0.001) return null
+    return { left: xOf(a), width: Math.max(min, (Math.min(b, inPart.end) - a) * pxPerSecond) }
+  }
+  const stillParts = useMemo(() => asParts(clips), [clips]) // រូបមិនប្តូរពេលកំពុងអូស: រូបថ្មីនីមួយៗ = FFmpeg ម្តង
+  const tiles = Math.min(MAX_TILES, Math.max(1, Math.round(rowWidth / TILE_PX)))
   const { labelEvery, dotEvery } = rulerSteps(pxPerSecond)
   // ពេល scrub: playhead និងម៉ោងនៅក្នុង timeline ផ្ទាល់ (state តូច) — editor មិន render រាល់ចលនា
   // (វីដេអូ 35 នាទី: render transcript 6600 ពាក្យ ~140 ms រាល់ចលនា = ញាក់); លែង = onSeek ម្តង
+  // ជាពេលក្នុងវីដេអូ Export មិនមែនវីដេអូដើម: ពេលដើមមួយអាចនៅពីរកន្លែង ហើយ playhead ត្រូវនៅកន្លែងដែលកំពុងអូស
   const [scrubAt, setScrubAt] = useState<number | null>(null)
-  const shown = scrubAt ?? time
   // output mode: ម៉ោង និង playhead រាប់តាមវីដេអូដែល Export (ពេលមួយអាចនៅពីរកន្លែង: part ដែលកំពុងចាក់ឈ្នះ)
-  const shownOut = outParts ? outputTime(outParts, shown, playingPart) : shown
-  const playheadX = outParts ? shownOut * pxPerSecond : xOf(Math.max(head, Math.min(shown, tail)))
+  const shownOut = scrubAt ?? outputTime(outParts, time, playingPart)
+  const playheadX = shownOut * pxPerSecond
   // ⏮ ⏭ និងព្រួញ: ដើរតាមវីដេអូដែល Export មិនមែនលោតទៅប្លុកផ្សេង
   const stepBy = (delta: number) => {
-    if (!outParts) return onSeek(Math.max(0, Math.min(total, time + delta)))
-    onSeek(sourceAt(outParts, Math.max(0, Math.min(outSeconds - 0.05, shownOut + delta))))
+    const place = partAtOutput(outParts, Math.max(0, Math.min(outSeconds - 0.05, shownOut + delta)))
+    onSeek(place.time, place.index)
   }
 
   // ពេលចាក់: រក្សា playhead ក្នុងទិដ្ឋភាព (រំកិលម្តងមួយទំព័រ ដូច editor វីដេអូទូទៅ)
@@ -283,15 +266,13 @@ export function EditorTimeline({
   }, [playheadX, playing])
 
   // ចុច ឬអូស = seek (pointer capture: អូសចេញក្រៅ timeline ក៏នៅតែតាម)
-  const secondsAt = (event: PointerEvent<HTMLElement>, box: HTMLElement) => {
-    return tOf(event.clientX - box.getBoundingClientRect().left)
-  }
   // អូស scrub: ទីតាំងនៅ timeline + វីដេអូ seek (គ្មាន onScrub = seek ពេញលេញដូចមុន)
   const scrubTo = (event: PointerEvent<HTMLDivElement>) => {
-    const at = secondsAt(event, event.currentTarget)
-    if (!onScrub) return onSeek(at)
-    setScrubAt(at)
-    onScrub(at)
+    const x = event.clientX - event.currentTarget.getBoundingClientRect().left
+    const place = placeOf(x)
+    if (!onScrub) return onSeek(place.time, place.index)
+    setScrubAt(Math.max(0, Math.min(outSeconds, x / pxPerSecond)))
+    onScrub(place.time)
   }
 
   // ---- ចតុកោណជ្រើស (marquee): មាន split ហើយ អូសលើ strip / band / waveform = ជ្រើសផ្នែក;
@@ -303,19 +284,22 @@ export function EditorTimeline({
   // បន្ទាត់ gold = កន្លែងទម្លាក់; លែង = ប្លុកឆក់ជាប់គ្នា (គ្មានចន្លោះ) ----
   const blocks = useMemo(() => {
     let px = 0
-    return blocksOf(outParts ?? sequence(cuts, [], total), splits).map((block) => {
+    return outParts.map((block) => {
       const w = (block.end - block.start) * pxPerSecond
-      const x = outParts ? px : (block.start - head) * pxPerSecond
+      const x = px
       px += w
       return { ...block, x, w }
     })
-  }, [outParts, cuts, total, splits, pxPerSecond, head])
+  }, [outParts, pxPerSecond])
+  const isSelectedX = (x: number) => {
+    if (!selected || !blocks[selected[1]]) return false
+    return x >= blocks[selected[0]].x - 0.5 && x < blocks[selected[1]].x + blocks[selected[1]].w - 0.5
+  }
   const [dragBlock, setDragBlock] = useState<{ from: number; x: number; grab: number; gap: number } | null>(null)
-  // ប្លុកដែលនៅក្នុងការជ្រើស (ចុចមួយ ឬចតុកោណ): ‖ នៅគែមទីមួយ និងគែមចុងក្រោយប៉ុណ្ណោះ
-  const inSelection = (block: { start: number; end: number }) =>
-    part !== null && part[0] <= block.start + 0.001 && part[1] >= block.end - 0.001
-  const firstSelected = blocks.findIndex(inSelection)
-  const lastSelected = blocks.findLastIndex(inSelection)
+  const selectAt = (x: number) => {
+    const at = blockAt(x)
+    onSelect?.(at >= 0 ? [at, at] : null)
+  }
   const blockAt = (x: number) => blocks.findIndex((block) => x >= block.x && x < block.x + block.w)
   // ចន្លោះដែល mouse នៅ: 0 = មុនប្លុក 0, blocks.length = ក្រោយប្លុកចុង (ប្លុកដែលកំពុងអូសមិនរាប់)
   const gapAt = (x: number, from: number) => {
@@ -324,14 +308,7 @@ export function EditorTimeline({
   }
   const isNewPlace = (from: number, gap: number) => gap !== from && gap !== from + 1
   const dropBlock = (from: number, gap: number) => {
-    if (!isNewPlace(from, gap)) return // លែងនៅកន្លែងដើម = ត្រឡប់មកវិញ
-    const block = blocks[from]
-    if (block.insert === null) onMoveBlock?.(moveBlock(blocks, from, gap))
-    else {
-      // ផ្នែកបន្ថែមចូលមុនប្លុករក្សាបន្ទាប់ (`cuts.sequence`); គ្មានប្លុកបន្ទាប់ = ចុងវីដេអូ
-      const next = blocks.slice(gap).find((item, at) => item.insert === null && at + gap !== from)
-      onMoveInsert?.(block.insert, next ? next.start : total)
-    }
+    if (isNewPlace(from, gap)) onMoveBlock?.(from, gap) // លែងនៅកន្លែងដើម = ត្រឡប់មកវិញ
   }
   // Escape = បោះបង់ការអូស (ប្លុកត្រឡប់ទៅកន្លែងដើម)
   const dragging = dragBlock !== null
@@ -346,27 +323,34 @@ export function EditorTimeline({
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
   }, [dragging])
-  // ---- អូសគែមប្លុក (ក្រោយប្តូរលំដាប់): គែមដើម / ចុងរបស់ប្លុកនីមួយៗ ជំនួស trim handle ទាំងពីរ. អូសចូល = កាត់,
-  // អូសចេញ = ស្តារ; ប្លុករួញពេលលែង (ការកាត់មួយ = undo មួយជំហាន); ចុចពីរដង = ស្តារទាំងអស់ ----
-  const [edgeDrag, setEdgeDrag] = useState<{ index: number; side: 'start' | 'end'; at: number } | null>(null)
+  // ---- អូសគែមប្លុក: អូសចូល = កាត់; អូសចេញ = យកផ្នែកដែលកាត់មកវិញ រហូតដល់ clip ជិតបំផុតតាមពេល (`edgeLimit`),
+  // គ្មានអ្វីចាក់ពីរដងទេ; ប្លុកប្តូរទំហំពេលលែង (= undo មួយជំហាន); ចុចពីរដង = ទៅដល់ដែននោះភ្លាម ----
+  const edgeGrabX = useRef(0)
+  // អូសគែមចុងហួសទិដ្ឋភាព: scroller រំកិលតាម ឲ្យ || នៅតែឃើញ
+  const edgeEndX = edgeOut && edgeDrag?.side === 'end' ? blocks[edgeDrag.index].x + blocks[edgeDrag.index].w : null
+  useEffect(() => {
+    const box = scroller.current
+    if (!box || edgeEndX === null) return
+    const past = edgeEndX + EDGE_PX + 40 - (box.scrollLeft + box.clientWidth)
+    if (past > 0) box.scrollLeft += past
+  }, [edgeEndX])
   const MIN_BLOCK_SEC = 0.5
   const edgeHandle = (index: number, side: 'start' | 'end') => {
-    const block = blocks[index]
-    const range: Cut = [block.start, block.end]
-    const limit = blockEdgeLimit(cuts, order, range, side)
-    const edge = side === 'start' ? block.start : block.end
+    const limit = edgeLimit(clips, index, side, total)
+    const [clipStart, clipEnd] = clips[index]
+    const edge = side === 'start' ? clipStart : clipEnd // គែមមុនអូស: `blocks` ប្រែតាមការអូសរួចហើយ
     return {
       onPointerDown: (event: PointerEvent<HTMLSpanElement>) => {
         event.stopPropagation()
         event.currentTarget.setPointerCapture(event.pointerId)
+        edgeGrabX.current = event.clientX // រាប់ពីកន្លែងចុច: ចុចកណ្តាល || គែមមិនលោតមក mouse
         setEdgeDrag({ index, side, at: edge })
       },
       onPointerMove: (event: PointerEvent<HTMLSpanElement>) => {
         event.stopPropagation()
-        if (edgeDrag?.index !== index || edgeDrag.side !== side || !track.current) return
-        const x = event.clientX - track.current.getBoundingClientRect().left
-        const raw = side === 'start' ? block.start + (x - block.x) / pxPerSecond : block.end + (x - block.x - block.w) / pxPerSecond
-        const at = side === 'start' ? Math.max(limit, Math.min(raw, block.end - MIN_BLOCK_SEC)) : Math.min(limit, Math.max(raw, block.start + MIN_BLOCK_SEC))
+        if (edgeDrag?.index !== index || edgeDrag.side !== side) return
+        const raw = edge + (event.clientX - edgeGrabX.current) / pxPerSecond
+        const at = side === 'start' ? Math.max(limit, Math.min(raw, clipEnd - MIN_BLOCK_SEC)) : Math.min(limit, Math.max(raw, clipStart + MIN_BLOCK_SEC))
         setEdgeDrag({ index, side, at })
         onScrub?.(at) // preview បង្ហាញ frame ត្រង់គែមថ្មី
       },
@@ -375,11 +359,11 @@ export function EditorTimeline({
         const at = edgeDrag?.at
         setEdgeDrag(null)
         if (at === undefined || Math.abs(at - edge) <= 0.001) return // ចុចដោយមិនអូស មិនមែនការកាត់ទេ
-        onTrimBlock?.(range, side, at, event.altKey) // editor seek ទៅគែមថ្មី (ក្រោយ Snap)
+        onTrimBlock?.(index, side, at, event.altKey) // editor seek ទៅគែមថ្មី (ក្រោយ Snap)
       },
       onDoubleClick: (event: MouseEvent<HTMLSpanElement>) => {
         event.stopPropagation()
-        if (Math.abs(limit - edge) > 0.001) onTrimBlock?.(range, side, limit, true)
+        if (Math.abs(limit - edge) > 0.001) onTrimBlock?.(index, side, limit, true)
       },
     }
   }
@@ -388,49 +372,10 @@ export function EditorTimeline({
     const box = event.currentTarget.getBoundingClientRect()
     return { x: event.clientX - box.left, y: event.clientY - box.top }
   }
-  const secondsOfX = tOf
   const track = useRef<HTMLDivElement>(null)
 
-  // Trim handle: អូស = គែមប្លុកតាម mouse ហើយផ្នែកដែលនឹងកាត់ត្រូវបិទបាំង (រួញ, មិនមែនក្រហម);
-  // លែង = ការកាត់មួយ (undo មួយជំហាន) ហើយប្លុករុញទៅ 0. អូសចេញក្រៅប្លុក = យកផ្នែកដែល trim មកវិញ;
-  // ចុចពីរដងលើ handle = យកវាមកវិញទាំងអស់
-  const [drag, setDrag] = useState<{ side: 'start' | 'end'; at: number } | null>(null)
-  const handle = (side: 'start' | 'end') => ({
-    onPointerDown: (event: PointerEvent<HTMLSpanElement>) => {
-      event.stopPropagation() // កុំឲ្យ timeline seek
-      event.currentTarget.setPointerCapture(event.pointerId)
-      setDrag({ side, at: side === 'start' ? head : tail })
-    },
-    onPointerMove: (event: PointerEvent<HTMLSpanElement>) => {
-      event.stopPropagation() // timeline មិន seek ដោយខ្លួនឯងទេ — handle seek ទៅទីតាំងរបស់វា
-      if (!drag || !track.current) return
-      // មិនកាត់ត្រឹមទិដ្ឋភាពទេ: អូសទៅឆ្វេងនៃ 0 (ឬស្តាំនៃចុង) = យកផ្នែកដែល trim មកវិញ
-      const x = event.clientX - track.current.getBoundingClientRect().left
-      const raw = Math.max(0, Math.min(total, head + x / pxPerSecond))
-      // handle ដើមមិនអាចឆ្លងហួស handle ចុង (ទុកយ៉ាងហោចណាស់ 0.5 s)
-      const at = side === 'start' ? Math.min(raw, tail - 0.5) : Math.max(raw, head + 0.5)
-      setDrag({ side, at })
-      onSeek(at) // preview បង្ហាញ frame ត្រង់កន្លែងដែលកំពុងកាត់
-    },
-    onPointerUp: (event: PointerEvent<HTMLSpanElement>) => {
-      // ចុចដោយមិនអូស (ឧ. ចុចពីរដង) មិនមែនការ trim ទេ — បើមិនដូច្នោះ Snap រំកិលគែមទៅពាក្យដោយមិនចង់
-      if (drag && Math.abs(drag.at - (side === 'start' ? head : tail)) > 0.001) onTrim?.(side, drag.at, event.altKey)
-      setDrag(null)
-    },
-    onDoubleClick: () => onTrim?.(side, side === 'start' ? 0 : total, true),
-  })
-  // ទីតាំង handle: ធម្មតា = គែមប្លុក (0 / content); ពេលអូស = តាម mouse (អាចចេញក្រៅប្លុកបន្តិច)
-  const headX = drag?.side === 'start' ? Math.max(-EDGE_PX, xOf(drag.at)) : 0
-  const tailX = drag?.side === 'end' ? Math.min(content + EDGE_PX, xOf(drag.at)) : content
-
-  // peaks ក្នុងទិដ្ឋភាព — in source mode: head..tail slice; in output mode: per-part (computed inline)
-  const shownPeaks = outParts ? [] : peaks.slice(Math.floor((head / total) * peaks.length), Math.ceil((tail / total) * peaks.length))
-  // timeSpan for the ruler: in output mode count output seconds, in source mode use source span
-  const timeSpan = outParts ? outSeconds : span
+  const timeSpan = liveContent / pxPerSecond // ruler គូរពេញផ្ទៃ ទោះហួសចុងវីដេអូ
   const zoomAt = ZOOMS.indexOf(zoom)
-  // ប្រវែងវីដេអូដែល Export: ផ្នែករក្សា + ផ្នែកដែលបន្ថែម (ដូច pipeline `sequence`)
-  const edited = cuts.length > 0 || inserts.length > 0 || order.length > 0
-  const outLength = edited ? outputSeconds(sequence(cuts, inserts, duration, order)) : duration
   return (
     <section
       ref={section}
@@ -493,46 +438,39 @@ export function EditorTimeline({
             <>
               <ToolIcon
                 label={t('Split នៅ playhead (S) · Alt = ផ្ទុយពី Snap', 'Split at the playhead (S) · Alt = the opposite of Snap')}
-                disabled={
-                  time <= head ||
-                  time >= tail ||
-                  // playhead ជិតចំណុច split ដែលមានស្រាប់ (MIN_CUT = 0.05 s)
-                  !!splits?.some((s) => Math.abs(s - time) < 0.05)
-                }
+                disabled={!canSplit}
                 onClick={(event) => onSplit(event.altKey)}
               >
                 <SplitIcon />
               </ToolIcon>
-              {/* ភ្ជាប់ / ផ្ដាច់ audio ពី video — មិនទាន់មានក្នុង pipeline */}
-              {/* Link: ភ្ជាប់ផ្នែកដែលជ្រើស (អូសចតុកោណលើផ្នែកច្រើន) ជាផ្នែកតែមួយ = ដក split ខាងក្នុង */}
-              {/* Link: enable ពេល split មាន + ផ្នែកច្រើនជ្រើស */}
+              {/* Link: ភ្ជាប់ clip ដែលជ្រើស ហើយបន្តពីគ្នា ជាមួយ (ដក Split) */}
               <ToolIcon
                 label={
                   linkable
                     ? t('ភ្ជាប់ផ្នែកដែលជ្រើសជាផ្នែកតែមួយ', 'Link the selected parts into one')
-                    : !splits?.length
+                    : blocks.length < 2
                       ? t('Split ជាមុនសិន ដើម្បីបង្កើតផ្នែក', 'Split first to create parts')
                       : t('អូសចតុកោណលើផ្នែកច្រើន ដើម្បីភ្ជាប់វា', 'Drag a box over several parts to link them')
                 }
-                disabled={!linkable || !splits?.length}
+                disabled={!linkable}
                 onClick={onLink}
               >
                 <LinkIcon />
               </ToolIcon>
-              {/* Delete: enable ពេល split មាន + ផ្នែកត្រូវបានជ្រើស */}
+              {/* Delete: clip ដែលជ្រើស (វីដេអូត្រូវមានអ្វីមួយនៅសល់) */}
               <ToolIcon
                 label={
-                  part
-                    ? `${partCut ? t('ស្តារផ្នែក', 'Restore part') : t('លុបផ្នែក', 'Delete part')} ${part[0].toFixed(2)}–${part[1].toFixed(2)} s (Delete)`
-                    : !splits?.length
+                  deletable
+                    ? `${t('លុបផ្នែក', 'Delete part')} (Delete)`
+                    : blocks.length < 2
                       ? t('Split ជាមុនសិន រួចចុចលើផ្នែកមួយ · ឬអូស ‖ ដើម/ចុង ដើម្បីកាត់', 'Split first, then click a part · or drag ‖ at the start / end to trim')
                       : t('ចុចលើផ្នែកមួយក្នុង timeline ជាមុនសិន', 'Click a part of the timeline first')
                 }
-                disabled={!part || !splits?.length}
+                disabled={!deletable}
                 onClick={onTogglePart}
-                tone={part && splits?.length ? (partCut ? 'text-ok' : 'text-danger') : undefined}
+                tone={deletable ? 'text-danger' : undefined}
               >
-                {partCut ? <span className="text-[15px] leading-none">↺</span> : <TrashIcon />}
+                <TrashIcon />
               </ToolIcon>
             </>
           )}
@@ -553,9 +491,16 @@ export function EditorTimeline({
               <SnapIcon />
             </ToolIcon>
           )}
-          {/* Fit = zoom 1x: ឃើញវីដេអូទាំងមូល (ភ្លឺពេលកំពុង 1x) */}
+          {/* Fit: ប្រវែងបច្ចុប្បន្នពេញទទឹង (ភ្លឺពេលវាពេញទទឹងពិត) */}
           {!hidden && (
-            <ToolIcon label={t('Fit · បង្ហាញវីដេអូទាំងមូល', 'Fit · show the whole video')} pressed={zoom === 1} onClick={() => setZoom(1)}>
+            <ToolIcon
+              label={t('Fit · បង្ហាញវីដេអូទាំងមូល', 'Fit · show the whole video')}
+              pressed={zoom === 1 && Math.abs(scaleSeconds - outSeconds) < 0.05}
+              onClick={() => {
+                setZoom(1)
+                setFitSeconds(outSeconds)
+              }}
+            >
               <FitIcon />
             </ToolIcon>
           )}
@@ -574,10 +519,7 @@ export function EditorTimeline({
           <span className="ml-3 type-body font-semibold whitespace-nowrap tabular-nums">
             <span className="inline-block text-right" style={{ minWidth: `${stamp(duration).length}ch` }}>{stamp(shownOut)}</span>
             {' '}<span className="mx-1 font-normal text-text-4">/</span>
-            <span className="font-normal text-text-3">{stamp(outParts ? outLength : duration)}</span>
-            {edited && !outParts && (
-              <span className={`ml-2 font-normal ${outLength < duration ? 'text-danger' : 'text-gold'}`}>→ {stamp(outLength)}</span>
-            )}
+            <span className="font-normal text-text-3">{stamp(outSeconds)}</span>
           </span>
         </div>
 
@@ -637,11 +579,11 @@ export function EditorTimeline({
                 press.current = { x, y, scrub: false, moved: false, block }
                 return
               }
-              const scrub = y < RULER_PX || !splits.length || !onPickRange
+              const scrub = y < RULER_PX || blocks.length < 2
               press.current = { x, y, scrub, moved: false, block: null }
               if (!scrub) return // ចាំមើលថាអូស (ចតុកោណ) ឬចុច (seek) — ពេលលែង
               scrubTo(event)
-              onPick?.(secondsAt(event, event.currentTarget)) // ជ្រើសផ្នែកនៅពេលចុច (មិនមែនពេលអូស)
+              selectAt(x) // ជ្រើសផ្នែកនៅពេលចុច (មិនមែនពេលអូស)
             }}
             onPointerMove={(event) => {
               const start = press.current
@@ -662,7 +604,8 @@ export function EditorTimeline({
               if (!start) return
               if (start.scrub) {
                 // លែង scrub: editor ទទួលពេលចុងក្រោយម្តង (transcript, caption, ...)
-                if (scrubAt !== null) onSeek(secondsAt(event, event.currentTarget))
+                const place = placeOf(event.clientX - event.currentTarget.getBoundingClientRect().left)
+                if (scrubAt !== null) onSeek(place.time, place.index)
                 setScrubAt(null)
                 return
               }
@@ -672,14 +615,19 @@ export function EditorTimeline({
                 setDragBlock(null)
               } else if (start.moved) {
                 setMarquee(null)
-                onPickRange?.(secondsOfX(Math.min(start.x, x)), secondsOfX(Math.max(start.x, x)))
+                const from = blockAt(Math.max(0, Math.min(start.x, x)))
+                const to = blockAt(Math.min(rowWidth - 1, Math.max(start.x, x)))
+                onSelect?.(from >= 0 && to >= from ? [from, to] : null)
               } else {
-                onSeek(secondsOfX(x))
-                onPick?.(secondsOfX(x))
+                const place = placeOf(x)
+                onSeek(place.time, place.index)
+                selectAt(x)
               }
             }}
-            className={`relative cursor-pointer select-none ${focusRing}`}
-            style={{ width: content }}
+            // គ្មាន focusRing (អ្នកអភិវឌ្ឍ): គែមទាំងពីរមើលទៅដូច marker; keyboard ឃើញ playhead និងម៉ោងរំកិលជំនួស
+            className="relative cursor-pointer outline-none select-none"
+            // អូសគែមដើមចេញ: ប្លុកមុនៗរុញទៅឆ្វេង ដូច្នេះ || នៅជាមួយ mouse
+            style={{ width: liveContent, transform: edgeOut && edgeDrag?.side === 'start' ? `translateX(${-grownPx}px)` : undefined }}
           >
             {/* បន្ទាត់វាស់: លេខនៅចំណុចធំ, ចំណុចតូចនៅចន្លោះ */}
             <div className="relative h-7 text-[12px] text-text-3">
@@ -702,17 +650,27 @@ export function EditorTimeline({
             <div aria-hidden="true" data-space className="h-(--space-h)" />
 
             {/* ជួរ layout: shot ពី reframe ចុងក្រោយ, បើគ្មាន = វីដេអូដើម */}
-            <div className="relative mb-1 h-6 overflow-hidden rounded-[6px] bg-raised-2">
+            <div className="relative mb-1 h-6 overflow-hidden rounded-[6px] bg-raised" style={{ width: rowWidth }}>
+              {/* ប្លុកដែលជ្រើសភ្លឺជាងគេ (រូប OpusClip); ស្លាកក្នុងវាដិតជាង */}
+              {selected && blocks[selected[1]] && (
+                <span
+                  data-band-selected
+                  aria-hidden="true"
+                  className="absolute top-0 h-full bg-raised-3"
+                  style={{ left: blocks[selected[0]].x, width: blocks[selected[1]].x + blocks[selected[1]].w - blocks[selected[0]].x }}
+                />
+              )}
               {shots.length ? (
                 shots.map((shot) => {
                   const kind = kindOf(shot.kind)
                   const at = box(shot.start, shot.end)
                   if (!at) return null
+                  const lit = isSelectedX(at.left)
                   return (
                     <span
                       key={shot.start}
                       title={`${t(kind.label, kind.en)}: ${shot.start.toFixed(1)}-${shot.end.toFixed(1)} s`}
-                      className="absolute top-0 flex h-full items-center overflow-hidden border-r border-chrome px-2 text-[11px] font-semibold whitespace-nowrap text-text"
+                      className={`absolute top-0 flex h-full items-center overflow-hidden border-r border-chrome px-2 text-[11px] whitespace-nowrap ${lit ? 'font-bold text-text' : 'font-medium text-text-3'}`}
                       style={at}
                     >
                       {t(kind.label, kind.en)}
@@ -720,7 +678,16 @@ export function EditorTimeline({
                   )
                 })
               ) : (
-                <span className="flex h-full items-center px-2 text-[11px] font-semibold text-text-2">{t('Original · មិនទាន់ reframe', 'Original · not reframed')}</span>
+                // មិនទាន់ reframe: ស្លាកមួយក្នុងមួយប្លុក
+                blocks.map((block, idx) => (
+                  <span
+                    key={idx}
+                    className={`absolute top-0 flex h-full items-center overflow-hidden px-2 text-[11px] whitespace-nowrap ${isSelectedX(block.x) ? 'font-bold text-text' : 'font-medium text-text-3'}`}
+                    style={{ left: block.x, width: block.w }}
+                  >
+                    {t('Original · មិនទាន់ reframe', 'Original · not reframed')}
+                  </span>
+                ))
               )}
               {noTrack.map(([start, end]) => box(start, end) && (
                 <span
@@ -745,8 +712,8 @@ export function EditorTimeline({
             </div>
 
             {/* រូបតូច: output mode = ប្លុក parts; source mode = continuous strip */}
-            {outParts ? (
-              <div className="relative flex h-14 overflow-hidden rounded-[8px] border border-text-4">
+            <>
+              <div className="relative flex h-14 overflow-hidden rounded-[8px]" style={{ width: rowWidth }}>
                 {/* ផ្នែកច្រើនជាង MAX_TILES (ឧ. Speech cleanup): រូបមួយជួរតាមពេល Export — មិនមែនរូបក្នុងផ្នែកនីមួយៗ
                     ព្រោះ FFmpeg ដករូបម្តងមួយ */}
                 {partOffsets.length > MAX_TILES && (
@@ -754,7 +721,7 @@ export function EditorTimeline({
                     {Array.from({ length: tiles }, (_, at) => (
                       <img
                         key={`${tiles}-${at}`}
-                        src={sourceFrameUrl(videoPath, sourceAt(outParts, ((at + 0.5) / tiles) * outSeconds))}
+                        src={sourceFrameUrl(videoPath, sourceAt(stillParts, ((at + 0.5) / tiles) * baseSeconds))}
                         alt=""
                         loading="lazy"
                         draggable={false}
@@ -766,13 +733,16 @@ export function EditorTimeline({
                 {partOffsets.map((p, idx) => {
                   const blockW = Math.max(2, (p.end - p.start) * pxPerSecond)
                   const isInsert = p.insert !== null
-                  const blockTiles = partOffsets.length > MAX_TILES ? 0 : Math.min(MAX_TILES, Math.max(1, Math.round(blockW / TILE_PX)))
+                  // ប្លុកដែលកំពុងអូសចេញ: រក្សារូបចាស់ ផ្នែកថ្មីនៅទទេ រហូតដល់លែង
+                  const held = edgeOut && edgeDrag?.index === idx ? clips[idx] : null
+                  const [tileStart, tileEnd] = held ?? [p.start, p.end]
+                  const tilesW = Math.max(2, (tileEnd - tileStart) * pxPerSecond)
+                  const blockTiles = partOffsets.length > MAX_TILES ? 0 : Math.min(MAX_BLOCK_TILES, Math.max(1, Math.round(tilesW / (zoom > 1 ? TILE_ZOOMED_PX : TILE_PX))))
                   return (
                     <div
                       key={idx}
                       className={`relative shrink-0 overflow-hidden ${blockTiles ? 'bg-raised-2' : ''}
-                        ${isInsert ? 'ring-2 ring-inset ring-gold' : ''}
-                        ${idx > 0 ? 'border-l-2 border-chrome' : ''}`}
+                        ${isInsert ? 'ring-2 ring-inset ring-gold' : ''}`}
                       style={{ width: blockW }}
                     >
                       {isInsert && (
@@ -780,10 +750,12 @@ export function EditorTimeline({
                           HOOK
                         </div>
                       )}
-                      <div className={`flex h-full ${onMoveBlock ? 'cursor-grab active:cursor-grabbing' : ''}`}>
+                      <div
+                        className={`flex h-full ${onMoveBlock ? 'cursor-grab active:cursor-grabbing' : ''}`}
+                        style={held ? { width: tilesW, marginLeft: edgeDrag?.side === 'start' ? blockW - tilesW : 0 } : undefined}
+                      >
                         {Array.from({ length: blockTiles }, (_, ti) => {
-                          const tileTime = p.start + ((ti + 0.5) / blockTiles) * (p.end - p.start)
-                          const dimmed = part != null && (tileTime < part[0] || tileTime > part[1])
+                          const tileTime = tileStart + ((ti + 0.5) / blockTiles) * (tileEnd - tileStart)
                           return (
                             <img
                               key={`${blockTiles}-${ti}`}
@@ -791,7 +763,7 @@ export function EditorTimeline({
                               alt=""
                               loading="lazy"
                               draggable={false}
-                              className={`h-full min-w-0 flex-1 object-cover transition-opacity duration-150 ${dimmed ? 'opacity-40' : (isInsert ? 'opacity-85' : 'opacity-100')}`}
+                              className={`h-full min-w-0 flex-1 object-cover ${isInsert ? 'opacity-85' : ''}`}
                             />
                           )
                         })}
@@ -800,28 +772,11 @@ export function EditorTimeline({
                   )
                 })}
               </div>
-            ) : (
-              <div className={`flex h-14 overflow-hidden rounded-[8px] border border-text-4 bg-raised-2 ${onMoveBlock ? 'cursor-grab active:cursor-grabbing' : ''}`}>
-                {Array.from({ length: tiles }, (_, at) => {
-                  const tileTime = head + ((at + 0.5) / tiles) * span
-                  const dimmed = part != null && (tileTime < part[0] || tileTime > part[1])
-                  return (
-                    <img
-                      key={`${tiles}-${at}`}
-                      src={sourceFrameUrl(videoPath, tileTime)}
-                      alt=""
-                      loading="lazy"
-                      draggable={false}
-                      className={`h-full min-w-0 flex-1 object-cover transition-opacity duration-150 ${dimmed ? 'opacity-40' : 'opacity-100'}`}
-                    />
-                  )
-                })}
-              </div>
-            )}
+            </>
 
-            {/* waveform: output mode = per-part segments; source mode = continuous */}
-            {outParts ? (
-              <div className="mt-3 flex h-12">
+            {/* waveform: panel តែមួយ (រូប OpusClip); ចំណុចភ្ជាប់ប្លុកជាស្នាមតូចលើ និងក្រោមប៉ុណ្ណោះ */}
+            <>
+              <div className="mt-3 flex h-12 overflow-hidden rounded-[8px]" style={{ width: rowWidth }}>
                 {partOffsets.map((p, idx) => {
                   const blockW = Math.max(2, (p.end - p.start) * pxPerSecond)
                   const isInsert = p.insert !== null
@@ -831,9 +786,15 @@ export function EditorTimeline({
                   return (
                     <div
                       key={idx}
-                      className={`relative shrink-0 rounded-[8px] px-0.5 ${isInsert ? 'bg-gold/15' : 'bg-raised'} ${idx > 0 ? 'border-l-2 border-chrome' : ''}`}
+                      className={`relative shrink-0 ${isInsert ? 'bg-gold/15' : 'bg-raised'}`}
                       style={{ width: blockW }}
                     >
+                      {idx > 0 && (
+                        <>
+                          <span data-wave-notch aria-hidden="true" className="absolute top-0 -left-px h-1.5 w-0.5 bg-chrome" />
+                          <span data-wave-notch aria-hidden="true" className="absolute bottom-0 -left-px h-1.5 w-0.5 bg-chrome" />
+                        </>
+                      )}
                       {blockPeaks.length > 0 && (
                         <svg viewBox={`0 0 ${blockPeaks.length} 100`} preserveAspectRatio="none" className="size-full" aria-hidden="true">
                           <path
@@ -848,37 +809,23 @@ export function EditorTimeline({
                   )
                 })}
               </div>
-            ) : (
-              <div className="mt-3 h-12 rounded-[8px] bg-raised px-1">
-                {shownPeaks.length > 0 && (
-                  <svg viewBox={`0 0 ${shownPeaks.length} 100`} preserveAspectRatio="none" className="size-full" aria-hidden="true">
-                    <path
-                      d={shownPeaks.map((peak, at) => `M${at + 0.5} ${50 - peak * 46}V${50 + peak * 46}`).join('')}
-                      stroke="currentColor"
-                      strokeWidth="0.6"
-                      className="text-text-3"
-                    />
-                  </svg>
-                )}
-              </div>
-            )}
+            </>
 
             {/* ចន្លោះដែលលុបមិនគូរទេ: វាបាត់ពី timeline (output mode) ដូច trim */}
 
-            {/* ផ្នែកដែលជ្រើស: ស៊ុមសជុំវិញប្លុក (រូប OpusClip) — ផ្នែកច្រើន = ស៊ុមមួយលើប្លុកទាំងនោះ */}
-            {/* គ្មាន split: ប្លុកតែមួយ — ស៊ុមសជុំវិញវាពេលជ្រើស */}
-            {picked && !part && blocks.length === 1 && (
-              <span
-                aria-hidden="true"
-                className="pointer-events-none absolute top-[calc(56px+var(--space-h))] z-[2] h-14 rounded-[8px] border-2 border-white"
-                style={{ left: blocks[0].x, width: blocks[0].w }}
-              />
+            {/* zoom out មានកន្លែង: + នៅជាប់ប្លុកចុងក្រោយ (រូប OpusClip) */}
+            {addClipInside && (
+              <div data-add-inside className="absolute top-0" style={{ left: rowWidth + ADD_CLIP_GAP }} onPointerDown={(event) => event.stopPropagation()}>
+                <AddClip label={t('បន្ថែមវីដេអូក្រោយ clip នេះ — ជំហានបន្ទាប់', 'Add a video after this clip — next step')} />
+              </div>
             )}
-            {part && (
+
+            {/* ផ្នែកដែលជ្រើស: ស៊ុមសជុំវិញប្លុក (រូប OpusClip) — ផ្នែកច្រើន = ស៊ុមមួយលើប្លុកទាំងនោះ */}
+            {selected && blocks[selected[1]] && (
               <span
-                aria-label={`${t('ផ្នែកដែលជ្រើស', 'Selected part')} ${part[0].toFixed(2)}–${part[1].toFixed(2)} s`}
+                aria-label={t('ផ្នែកដែលជ្រើស', 'Selected part')}
                 className="pointer-events-none absolute top-[calc(56px+var(--space-h))] z-[2] h-14 rounded-[8px] border-2 border-white"
-                style={box(part[0], part[1], 4) ?? { display: 'none' }}
+                style={{ left: blocks[selected[0]].x, width: blocks[selected[1]].x + blocks[selected[1]].w - blocks[selected[0]].x }}
               />
             )}
             {/* ចតុកោណជ្រើស ពេលកំពុងអូស */}
@@ -895,29 +842,14 @@ export function EditorTimeline({
               />
             )}
 
-            {/* ផ្នែកដែលបន្ថែម: source mode = gold ＋ line at `at`; output mode = shown as HOOK block above */}
-            {!outParts && inserts.map((item, index) => (
-              <span
-                key={`in${index}`}
-                data-insert={item.at}
-                title={`＋ ${stamp(item.start)}–${stamp(item.end)} ${t('ចាក់នៅទីនេះ', 'plays here')}`}
-                className="pointer-events-none absolute top-[calc(56px+var(--space-h))] bottom-0 w-0.5 -translate-x-1/2 bg-gold"
-                style={{ left: xOf(Math.max(head, Math.min(item.at, tail))) }}
-              >
-                <span className="absolute -top-2.5 left-1/2 flex size-4 -translate-x-1/2 items-center justify-center rounded-full bg-gold text-[11px] leading-none font-bold text-on-gold">
-                  ＋
-                </span>
-              </span>
-            ))}
-            {/* Split = ចន្លោះ 4 px ពណ៌ផ្ទៃ timeline កាត់ band និងរូប -> ផ្នែកនីមួយៗជាប្លុកដាច់ (រូប OpusClip);
-                waveform នៅជាប់គ្នា ព្រោះសំឡេងនៅតែមួយ */}
-            {splits.filter((at) => at > head && at < tail).map((at) => (
+            {/* Split = ចន្លោះ 2 px ពណ៌ផ្ទៃ timeline កាត់ band និងរូប -> ផ្នែកនីមួយៗជាប្លុកដាច់ (រូប OpusClip) */}
+            {blocks.slice(1).map((block, at) => (
               <span
                 key={at}
-                data-split={at}
+                data-split={block.start}
                 aria-hidden="true"
-                className="pointer-events-none absolute top-[calc(28px+var(--space-h))] z-[1] w-1 -translate-x-1/2 rounded-full bg-chrome"
-                style={{ left: xOf(at), height: RULER_PX + STRIP_PX }}
+                className="pointer-events-none absolute top-[calc(28px+var(--space-h))] z-[1] w-0.5 -translate-x-1/2 bg-chrome"
+                style={{ left: block.x, height: RULER_PX + STRIP_PX }}
               />
             ))}
 
@@ -957,27 +889,30 @@ export function EditorTimeline({
               )
             })()}
 
-            {/* ពេលអូស handle ចូល: បិទបាំងផ្នែកដែលនឹងត្រូវ trim (ពណ៌ផ្ទៃ timeline) — ប្លុក និង waveform មើលទៅរួញ */}
-            {drag && (drag.side === 'start' ? headX > 0 : tailX < content) && (
-              <span
-                aria-hidden="true"
-                className="pointer-events-none absolute top-[calc(28px+var(--space-h))] bottom-0 z-[1] bg-chrome"
-                style={drag.side === 'start' ? { left: -1, width: headX + 1 } : { left: tailX, width: content - tailX + 1 }}
-              />
-            )}
-
             {/* Trim handles: ដើម និងចុងនៃផ្នែកដែលនៅសល់; អូស = កាត់ពីដើម / ដល់ចុង */}
             {/* ប្លុកច្រើន: ‖ តែលើប្លុកដែលជ្រើស — គែមដើមនៃប្លុកទីមួយ និងគែមចុងនៃប្លុកចុងក្រោយក្នុងការជ្រើស.
                 មិនជ្រើស = គ្មាន handle ដូច្នេះអូសពីគែមប្លុក គឺប្តូរលំដាប់ មិនមែនកាត់ដោយមើលមិនឃើញ */}
-            {onTrimBlock && blocks.length > 1 && blocks.flatMap((block, index) => {
-              if (block.insert !== null || block.w < 28 || !inSelection(block)) return []
-              const sides = TRIM_SIDES.filter((side) => index === (side === 'start' ? firstSelected : lastSelected))
+            {onTrimBlock && selected && blocks.flatMap((block, index) => {
+              if (block.w < 28) return []
+              const sides = TRIM_SIDES.filter((side) => index === (side === 'start' ? selected[0] : selected[1]))
               return sides.map((side) => {
                 const moving = edgeDrag?.index === index && edgeDrag.side === side ? edgeDrag.at : null
-                const shift = moving === null ? 0 : (moving - (side === 'start' ? block.start : block.end)) * pxPerSecond
-                const left = (side === 'start' ? block.x : block.x + block.w - 12) + shift
+                // shift = អូសចូលប៉ុណ្ណោះ (បិទបាំង); អូសចេញ ប្លុកធំឡើងពិត ហើយ handle នៅគែមរបស់វា
+                const inward = moving !== null && (side === 'start' ? moving > clips[index][0] : moving < clips[index][1])
+                const shift = inward ? (moving - (side === 'start' ? clips[index][0] : clips[index][1])) * pxPerSecond : 0
+                // អូសចេញហួសចុងជួរ: handle នៅក្នុងទិដ្ឋភាព
+                const left = Math.max(-EDGE_PX, Math.min(liveContent + EDGE_PX - TRIM_HANDLE_PX, (side === 'start' ? block.x : block.x + block.w - TRIM_HANDLE_PX) + shift))
+                // cursor ប្រាប់ទិសដែលអូសបាន: ដល់ដែន `edgeLimit` = ពង្រីកលែងបាន, ដល់ប្រវែងខ្លីបំផុត = កាត់លែងបាន
+                const edge = moving ?? (side === 'start' ? clips[index][0] : clips[index][1])
+                const outLimit = edgeLimit(clips, index, side, total)
+                const atOutLimit = side === 'start' ? edge <= outLimit + 0.001 : edge >= outLimit - 0.001
+                const blockSeconds = side === 'start' ? clips[index][1] - edge : edge - clips[index][0]
+                const atShortest = blockSeconds <= MIN_BLOCK_SEC + 0.001
+                const canLeft = side === 'start' ? !atOutLimit : !atShortest
+                const canRight = side === 'start' ? !atShortest : !atOutLimit
+                const cursor = canLeft && canRight ? 'ew-resize' : canLeft ? 'w-resize' : canRight ? 'e-resize' : 'not-allowed'
                 return (
-                  <span key={`${block.start}-${side}`}>
+                  <span key={`${index}-${side}`}>
                     {/* ផ្នែកដែលនឹងត្រូវកាត់: បិទបាំង មើលទៅប្លុករួញ */}
                     {moving !== null && (side === 'start' ? shift > 0 : shift < 0) && (
                       <span
@@ -994,10 +929,10 @@ export function EditorTimeline({
                       aria-valuemin={0}
                       aria-valuemax={Math.round(total)}
                       aria-valuenow={Math.round(moving ?? (side === 'start' ? block.start : block.end))}
-                      title={t('អូស = កាត់ · ចុចពីរដង = យកផ្នែកដែលកាត់មកវិញ', 'Drag = trim · double-click = bring the trimmed part back')}
+                      title={t('អូសចូល = កាត់ · អូសចេញ = ពង្រីក · ចុចពីរដង = យកផ្នែកដែលកាត់មកវិញ', 'Drag in = trim · drag out = extend · double-click = bring the trimmed part back')}
                       {...edgeHandle(index, side)}
                       className={TRIM_HANDLE}
-                      style={{ left }}
+                      style={{ left, cursor }}
                     >
                       <GripBars />
                       {moving !== null && (
@@ -1011,29 +946,30 @@ export function EditorTimeline({
               })
             })}
 
-            {/* ប្លុកតែមួយ: ‖ ពីរនៅចុងជួរ ពេលជ្រើសវា */}
-            {onTrim && picked && blocks.length === 1 &&
-              TRIM_SIDES.map((side) => (
-                <span
-                  key={side}
-                  role="slider"
-                  aria-label={side === 'start' ? t('Trim ដើម', 'Trim start') : t('Trim ចុង', 'Trim end')}
-                  aria-valuemin={0}
-                  aria-valuemax={Math.round(total)}
-                  aria-valuenow={Math.round(drag?.side === side ? drag.at : side === 'start' ? head : tail)}
-                  title={t('អូស = trim · ចុចពីរដង = យកផ្នែកដែល trim មកវិញ', 'Drag = trim · double-click = bring the trimmed part back')}
-                  {...handle(side)}
-                  className={`${TRIM_HANDLE} ${side === 'start' ? '' : '-translate-x-full'}`}
-                  style={{ left: side === 'start' ? headX : tailX }}
-                >
-                  <GripBars />
-                  {drag?.side === side && (
-                    <span className="absolute -top-6 rounded-[4px] bg-black/80 px-1.5 py-0.5 text-[11px] whitespace-nowrap text-text tabular-nums">
-                      {drag.at.toFixed(2)} s
-                    </span>
-                  )}
+            {/* Hover ចន្លោះប្លុក = ប៊ូតុង Add transition. ប្លុកតូចពេក (zoom out, Speech cleanup) គ្មានកន្លែងទេ.
+                ក្រោយ ‖ ក្នុង DOM: ឈរលើ 6 px ខាងក្រៅរបស់វា តែ grip នៅតែចាប់បាន */}
+            {onAddTransition && !dragBlock && !edgeDrag && blocks.slice(1).map((block, at) => block.w < JOIN_MIN_PX || blocks[at].w < JOIN_MIN_PX ? null : (
+              <button
+                key={at}
+                type="button"
+                data-add-transition={at + 1}
+                aria-label={t('បន្ថែម transition', 'Add transition')}
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={() => onAddTransition(at + 1)}
+                className="group absolute top-[calc(56px+var(--space-h))] z-[3] h-14 w-3 -translate-x-1/2 cursor-pointer border-0 bg-transparent p-0 outline-none"
+                style={{ left: block.x }}
+              >
+                <span className="absolute top-1/2 left-1/2 hidden size-7 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-line bg-chrome text-text shadow-[0_2px_8px_rgba(0,0,0,0.6)] group-hover:flex group-focus-visible:flex group-focus-visible:border-gold hover:text-gold">
+                  <TransitionIcon />
                 </span>
-              ))}
+                <span
+                  role="tooltip"
+                  className="pointer-events-none absolute bottom-[calc(50%+18px)] left-1/2 hidden -translate-x-1/2 rounded-[4px] bg-black/90 px-2 py-1 text-[12px] whitespace-nowrap text-text group-hover:block group-focus-visible:block"
+                >
+                  {t('បន្ថែម transition', 'Add transition')}
+                </span>
+              </button>
+            ))}
 
             {/* playhead: បន្ទាត់ស ដែលមានក្បាលមូលនៅលើបន្ទាត់វាស់ (អូសបាន — track ចាប់ pointer) */}
             <span aria-hidden="true" className="pointer-events-none absolute top-0 bottom-0 z-[2] w-px -translate-x-1/2 bg-white" style={{ left: playheadX }}>
@@ -1041,7 +977,10 @@ export function EditorTimeline({
             </span>
           </div>
           </div>
-          <AddClip label={t('បន្ថែមវីដេអូក្រោយ clip នេះ — ជំហានបន្ទាប់', 'Add a video after this clip — next step')} />
+          {/* invisible មិនមែនដកចេញ: ទុកកន្លែងដដែល ដូច្នេះទទឹង timeline មិនប្តូរពេល zoom */}
+          <div className={`shrink-0 ${addClipInside ? 'invisible' : ''}`}>
+            <AddClip label={t('បន្ថែមវីដេអូក្រោយ clip នេះ — ជំហានបន្ទាប់', 'Add a video after this clip — next step')} />
+          </div>
         </div>
 
         </>
@@ -1210,6 +1149,14 @@ function SpeakerIcon({ volume }: { volume: number }) {
 }
 
 /** មេដែកដូចរូប OpusClip: ពាក់កណ្តាលពីរ ហើយបន្ទាត់ចំកណ្តាល. */
+function TransitionIcon() {
+  return (
+    <svg {...ICON} width={16} height={16}>
+      <path d="M3 4.5v9l6-4.5-6-4.5ZM15 4.5v9L9 9l6-4.5Z" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
 function SnapIcon() {
   return (
     <svg {...ICON}>

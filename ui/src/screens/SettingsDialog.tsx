@@ -33,6 +33,7 @@ export function SettingsDialog({
   onCaptionStyle,
   onSaveDefaults,
   onOpenModels,
+  initialTab = 'general',
   onClose,
 }: {
   health: Health | null
@@ -47,6 +48,7 @@ export function SettingsDialog({
   onCaptionStyle: (style: CaptionStyle) => void
   onSaveDefaults: (next: { pack?: PackChoice; maxClips?: number; captionStyle?: CaptionStyle }) => void
   onOpenModels: () => void // បិទ dialog រួចបើកទំព័រ Models ចាស់
+  initialTab?: Tab
   onClose: () => void
 }) {
   const t = useT()
@@ -79,7 +81,7 @@ export function SettingsDialog({
   const current = presetOf(draft.captionStyle)
   const soon = t('មិនទាន់មាន', 'Not available yet')
 
-  const [tab, setTab] = useState<Tab>('general')
+  const [tab, setTab] = useState<Tab>(initialTab)
   const tabs: { value: Tab; label: string }[] = [
     { value: 'general', label: t('ទូទៅ', 'General') },
     { value: 'processing', label: t('Processing', 'Processing') },

@@ -87,6 +87,7 @@ export type Clip = {
   grades: Grades | null
   reason: string
   files: Record<string, string>
+  aspects?: Record<string, Record<string, string>> // ទំហំក្រៅពី 9:16 ដែល render រួច
   rating?: 'like' | 'dislike' | null // ♡ / 👎 លើ Review (project.json)
 }
 
@@ -104,12 +105,15 @@ export type JobOptions = {
   no_captions?: boolean
   clean_only?: boolean // render តែ clip_XX_clean.mp4 (preview)
   aspect?: string
+  only_clip?: number       // render តែ clip នេះ (ប៊ូតុងទំហំលើ Review)
+  timeframe?: string       // "start,end" ឬ "all": ចន្លោះដែល AI រក clip (ជាមួយ full: ចន្លោះដែល render)
   layout?: string
   model?: string            // Ollama model (model pack)
   whisper_model?: string    // small / medium / large-v3 (model pack)
   language?: string         // auto / en / fr ... (Auto Subtitles)
   transcribe_only?: boolean // Edit Video: audio + transcribe ប៉ុណ្ណោះ
-  cuts?: [number, number][] // Edit Video: ចន្លោះដែលត្រូវកាត់
+  cuts?: [number, number][] // Silence dialog: ចន្លោះដែលត្រូវកាត់
+  timeline?: [number, number][] // Edit Video: បញ្ជី clip [in, out] តាមលំដាប់ចេញ
   inserts?: { start: number; end: number; at: number }[] // + Extend a clip: ផ្នែកដែលចម្លងទៅដាក់នៅ `at`
   order?: [number, number][] // ប្លុកតាមលំដាប់ដែលអូសលើ timeline
   transition?: 'punch' | 'hard'
@@ -272,6 +276,8 @@ export type CutsAnswer = {
   order?: [number, number][] // ដូចគ្នា
 }
 
+export type TimelineAnswer = { name: string; clips: [number, number][]; transition: 'punch' | 'hard' }
+
 export type CleanupSuggestion = { start: number; end: number; reason: 'pause' | 'filler'; text: string }
 
 export type CleanupAnswer = {
@@ -353,6 +359,10 @@ export const api = {
   // Edit Video: ពាក្យ + pause (ready=false = មិនទាន់ transcribe) និង waveform
   words: (name: string) => send<EditorWords>(`/projects/${encodeURIComponent(name)}/words`),
   // cut list ដែល editor រក្សាទុក (project.json) និង Speech cleanup (pause + filler ដែលស្នើ)
+  // បញ្ជី clip របស់ Edit Video ([] = វីដេអូទាំងមូល)
+  timeline: (name: string) => send<TimelineAnswer>(`/projects/${encodeURIComponent(name)}/timeline`),
+  saveTimeline: (name: string, body: { clips: [number, number][]; transition: string }) =>
+    send<TimelineAnswer>(`/projects/${encodeURIComponent(name)}/timeline`, 'PUT', body),
   cuts: (name: string) => send<CutsAnswer>(`/projects/${encodeURIComponent(name)}/cuts`),
   saveCuts: (
     name: string,
@@ -419,7 +429,7 @@ export const api = {
 
   exportClips: (
     name: string,
-    body: { destination?: string; clips?: number[]; kinds: string[] },
+    body: { destination?: string; clips?: number[]; kinds: string[]; aspect?: string },
   ) => send<ExportResult>(`/projects/${encodeURIComponent(name)}/export`, 'POST', body),
 
   /** បើក folder ក្នុង File Explorer. */
@@ -427,7 +437,7 @@ export const api = {
   // ⬇ transcript ក្នុង Edit Video -> folder Export (មិនសរសេរពីលើ); ពាក្យក្នុង cuts ត្រូវដក
   exportTranscript: (
     name: string,
-    body: { format: 'txt' | 'srt'; cuts: [number, number][]; inserts?: { start: number; end: number; at: number }[]; order?: [number, number][] },
+    body: { format: 'txt' | 'srt'; clips: [number, number][] },
   ) =>
     send<{ name: string; path: string; bytes: number; format: string }>(
       `/projects/${encodeURIComponent(name)}/transcript/export`,
@@ -435,13 +445,16 @@ export const api = {
       body,
     ),
   // ♡ / 👎 — null = លុប; រក្សាទុកក្នុង output/<name>/project.json
+  // ប៊ូតុង Duplicate លើ Review: ចម្លង clip + ទំហំទាំងអស់ (គ្មាន render)
+  duplicateClip: (name: string, index: number) =>
+    send<{ index: number }>(`/projects/${encodeURIComponent(name)}/clips/${index}/duplicate`, 'POST'),
   rateClip: (name: string, index: number, rating: 'like' | 'dislike' | null) =>
     send<{ index: number; rating: string | null }>(`/projects/${encodeURIComponent(name)}/clips/${index}/rating`, 'PUT', { rating }),
 }
 
 /** URL របស់ file មួយក្នុង clip — `<video src>` និង `<img src>` ប្រើវាផ្ទាល់. */
-export function clipFileUrl(project: string, index: number, kind: string): string {
-  return `${API_BASE}/projects/${encodeURIComponent(project)}/clips/${index}/file?kind=${kind}`
+export function clipFileUrl(project: string, index: number, kind: string, aspect?: string): string {
+  return `${API_BASE}/projects/${encodeURIComponent(project)}/clips/${index}/file?kind=${kind}${aspect ? `&aspect=${encodeURIComponent(aspect)}` : ''}`
 }
 
 /** file របស់លទ្ធផល reframe: `<folder>/clip_01.<kind>` ដែល folder = full, full_1x1 ... */
@@ -469,8 +482,8 @@ export function sourceFrameUrl(path: string, at: number): string {
   return `${API_BASE}/probe/frame?path=${encodeURIComponent(path)}&at=${at.toFixed(1)}`
 }
 
-export function clipThumbUrl(project: string, index: number): string {
-  return `${API_BASE}/projects/${encodeURIComponent(project)}/clips/${index}/thumb`
+export function clipThumbUrl(project: string, index: number, aspect?: string): string {
+  return `${API_BASE}/projects/${encodeURIComponent(project)}/clips/${index}/thumb${aspect ? `?aspect=${encodeURIComponent(aspect)}` : ''}`
 }
 
 /** URL របស់ WebSocket. `location.host` = 5173, ហើយ proxy បញ្ជូនបន្តទៅ 8765. */

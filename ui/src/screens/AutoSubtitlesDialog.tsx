@@ -5,6 +5,7 @@ import { Chip } from '../kit/controls'
 import { Dialog } from '../kit/Dialog'
 import { focusRing } from '../kit/styles'
 import { clock, khmerNumber } from './khmer'
+import { LANGUAGES } from './languages'
 import { PresetCard } from './PresetCard'
 import type { ReframeSettings } from './ReframeSetup'
 import { Illustration, Source } from './VideoPicker'
@@ -22,15 +23,6 @@ export type SubtitleSettings = {
 
 const RATIO: Record<Aspect, number> = { '9:16': 9 / 16, '1:1': 1, '16:9': 16 / 9, '4:5': 4 / 5 }
 const ASPECTS: Aspect[] = ['9:16', '1:1', '16:9', '4:5'] // លំដាប់ដូចរូប OpusClip
-
-/** ភាសាដូច `config.WHISPER_LANGUAGES` — តែអក្សរ Latin, ព្រោះ caption ដុតដោយ Montserrat
- *  ដែលគ្មានអក្សរខ្មែរ ចិន ថៃ... (ខ្មែរ = Phase 2 ជាមួយ font Battambang). */
-const LANGUAGES: [string, string][] = [
-  ['en', 'English'], ['fr', 'French'], ['es', 'Spanish'], ['de', 'German'], ['pt', 'Portuguese'],
-  ['it', 'Italian'], ['nl', 'Dutch'], ['id', 'Indonesian'], ['vi', 'Vietnamese'], ['pl', 'Polish'],
-  ['sv', 'Swedish'], ['da', 'Danish'], ['fi', 'Finnish'], ['cs', 'Czech'], ['hr', 'Croatian'],
-  ['et', 'Estonian'], ['tr', 'Turkish'], ['ms', 'Malay'], ['tl', 'Tagalog'], ['ro', 'Romanian'],
-]
 
 /** ល្បឿនដែលបានវាស់: interview 47 នាទី `--full` = 15½ នាទីលើ GPU (ដូច AI Reframe). */
 const MEASURED_RATIO = 15.5 / 47

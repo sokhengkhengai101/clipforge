@@ -13,6 +13,7 @@ export type RunPlan = {
   llm: string // qwen2.5:7b-instruct ...
   clips: number // --max-clips
   full?: boolean // --full (Auto Subtitles / AI Reframe): វីដេអូទាំងមូលជា file មួយ
+  aiSeconds?: number // --timeframe: វិនាទីដែល AI អាន ឬ render (គ្មាន = វីដេអូទាំងមូល)
 }
 
 /** វិនាទីដែលជំហាននីមួយៗប៉ាន់ថាត្រូវការ (មិនរាប់ cache). */
@@ -32,19 +33,20 @@ export function stepSeconds(plan: RunPlan): Record<string, number> {
   if (plan.full) {
     // វីដេអូទាំងមូល: highlights/boundaries = skipped (sidecar រាយការណ៍); render រួមការវិភាគ shot
     // វាស់: interview 47 នាទី = plan 4.5 នាទី + render 10:17 (~19 s/នាទី វីដេអូ); Rhino 0:55 = 13-37 s
+    const rendered = plan.aiSeconds !== undefined ? plan.aiSeconds / 60 : minutes // --timeframe: render តែចន្លោះ
     return {
       audio: 3 + 0.1 * minutes,
       transcribe: 15 + transcribePerMinute * minutes,
       highlights: 0,
       boundaries: 0,
-      captions: 4 + 0.2 * minutes,
-      render: 15 + 19 * minutes,
+      captions: 4 + 0.2 * rendered,
+      render: 15 + 19 * rendered,
     }
   }
   return {
     audio: 3 + 0.1 * minutes,
     transcribe: 15 + transcribePerMinute * minutes,
-    highlights: 60 + highlightsPerMinute * minutes,
+    highlights: 60 + highlightsPerMinute * (plan.aiSeconds !== undefined ? plan.aiSeconds / 60 : minutes),
     boundaries: 12,
     captions: 4 * plan.clips,
     render: 30 + 8 * plan.clips,
@@ -93,6 +95,18 @@ export function estimateRun(plan: RunPlan, progress: Progress, inStep: number): 
   const overdue = inStep > currentCost
   const remaining = overdue ? null : Math.max(0, total - finished - inStep)
   return { percent, remaining, step: current, measured: false }
+}
+
+/** % របស់ `--transcribe-only` ក្នុង dialog Edit Video. Whisper ប្រាប់វឌ្ឍនភាពតែក្រោយ batch ទីមួយចប់:
+ *  វាស់ 0% អស់ 51 s លើវីដេអូ 35 នាទី (ដក audio + ផ្ទុក model + VAD), ហើយវីដេអូ 30 s លោតពី 0 ទៅ 100.
+ *  មុន `f` មកដល់ = ប៉ាន់ពីនាឡិកា (ឈប់នៅ 95% នៃការរៀបចំ); ពេល `f` មក = ផ្នែករៀបចំ + f × ផ្នែក Whisper,
+ *  ដូច្នេះ % មិនធ្លាក់ចុះទេ. */
+export const TRANSCRIBE_START_SEC = 50
+export function transcribePercent(plan: RunPlan, elapsed: number, f: number): number {
+  const body = Math.max(1, stepSeconds(plan).transcribe - 15) // 15 = ការផ្ទុក model ក្នុងការប៉ាន់ចាស់
+  const total = TRANSCRIBE_START_SEC + body
+  if (f > 0) return Math.min(100, Math.floor(((TRANSCRIBE_START_SEC + f * body) / total) * 100))
+  return Math.floor((Math.min(elapsed, TRANSCRIBE_START_SEC * 0.95) / total) * 100)
 }
 
 /** 540 -> "~៩ នាទី", 40 -> "<១ នាទី" (ជាលេខខ្មែរ). */

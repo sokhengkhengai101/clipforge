@@ -10,7 +10,7 @@ import { clock, khmerNumber, relativeDay } from './khmer'
 type Tab = 'all' | 'clips' | 'reframe' | 'unfinished'
 
 /** សកម្មភាពក្នុងម៉ឺនុយ "⋯" របស់ project — App ជាអ្នកធ្វើវា. */
-export type ProjectAction = 'review' | 'reframe-result' | 'new-clips' | 'reframe' | 'folder' | 'video' | 'cancel'
+export type ProjectAction = 'review' | 'reframe-result' | 'edit' | 'new-clips' | 'reframe' | 'folder' | 'video' | 'cancel'
 
 /** project ដែល job របស់វាកំពុងរត់ — កាតរបស់វាបង្ហាញ % + ETA (ប៉ាន់ស្មាន, `eta.ts`). */
 export type Running = { name: string; estimate: RunEstimate | null }
@@ -391,6 +391,7 @@ function ProjectMenu({
     : [
     { action: 'review', label: 'មើល clips', show: project.clips > 0 },
     { action: 'reframe-result', label: 'លទ្ធផល Reframe', show: project.reframes > 0 },
+    { action: 'edit', label: 'Edit Video', show: Boolean(project.video) && project.seconds != null },
     { action: 'new-clips', label: 'បង្កើត clips ថ្មី', show: Boolean(project.video) },
     { action: 'reframe', label: 'Reframe វីដេអូនេះ', show: Boolean(project.video) },
     { action: 'folder', label: 'បើក folder output', show: Boolean(project.folder) },

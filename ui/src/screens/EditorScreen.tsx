@@ -19,32 +19,30 @@ import { CleanupPanel } from './CleanupPanel'
 import { ExtendDialog } from './ExtendDialog'
 import { BackgroundMenu, FitBackdrop, TrackerMenu } from './LookMenus'
 import { SubjectTrackDialog } from './SubjectTrackDialog'
-import { MotionPanel } from './MotionPanel'
+import { MotionPanel, TransitionPanel } from './MotionPanel'
 import { CaptionPanel } from './CaptionPanel'
 import { captionTextStyle, emScaleOf, lineMotion, underLayers, useCaptionFonts, useMotionClock, wordColour, wordMotion } from '../captionLook'
 import { pathAt, trackAt } from '../subjectPath'
+import { displayPosition, isCut, keepPartAt, partOfPosition, removedSeconds, snapToWords, transcriptOrder, type Cut } from '../cutList'
 import {
-  add,
-  addSplit,
-  isCut,
-  isPartCut,
-  keepRanges,
-  keepPartAt,
-  transcriptOrder,
-  normalize,
-  outputSeconds,
-  partsSpan,
-  removedSeconds,
-  sequence,
-  snapToWords,
-  splitsInside,
-  subtract,
-  trimBlock,
-  trimEdges,
-  trimTo,
-  type Cut,
-  type Insert,
-} from '../cutList'
+  asParts,
+  canLink,
+  clipsOrWhole,
+  clipsToSave,
+  continues,
+  cutRanges,
+  holes,
+  insertCopy,
+  isEdited,
+  joinNumber,
+  linkClips,
+  moveClip,
+  restoreRange,
+  splitClip,
+  edgeLimit,
+  trimClip,
+  type Clip,
+} from '../clipList'
 import type { ReframeSettings } from './ReframeSetup'
 import { ASPECTS, nearestAspect, RATIO, type Aspect } from './aspects'
 
@@ -80,6 +78,8 @@ export function EditorScreen({
   project,
   video,
   initialStyle,
+  initialAspect,
+  initialPanel,
   job,
   busy,
   onTranscribe,
@@ -89,18 +89,18 @@ export function EditorScreen({
   project: string
   video: Video
   initialStyle: CaptionStyle
+  initialAspect?: Aspect // ជ្រើសពីម៉ឺនុយទំហំលើ Review
+  initialPanel?: 'motion' // Auto zoom លើ Review
   job: JobStatus | null // job --transcribe-only របស់វីដេអូនេះ (null = គ្មាន)
   busy: boolean // job ផ្សេងកំពុងរត់ (GPU តែមួយ)
   onTranscribe: () => void
   onExport: (
     settings: ReframeSettings,
     style: CaptionStyle,
-    cuts: Cut[],
+    clips: Clip[] | null, // null = គ្មានការកែ (render វីដេអូទាំងមូល)
     transition: 'punch' | 'hard',
     look: Look,
     motion: Motion,
-    inserts: Insert[],
-    order: Cut[],
   ) => void
   onBack: () => void
 }) {
@@ -144,7 +144,7 @@ export function EditorScreen({
   const sourceRatio = format?.width && format?.height ? format.width / format.height : 16 / 9
   const own = nearestAspect(sourceRatio)
 
-  const [aspectChoice, setAspectChoice] = useState<Aspect | null>(null)
+  const [aspectChoice, setAspectChoice] = useState<Aspect | null>(initialAspect ?? null)
   const aspect = aspectChoice ?? own
   const [layout, setLayout] = useState<LayoutChoice>('auto')
   // Global layout settings: layout ដែល AI អាចប្រើពេល Auto
@@ -152,7 +152,8 @@ export function EditorScreen({
   const [cropOpen, setCropOpen] = useState(false)
   const [style, setStyle] = useState<CaptionStyle>(initialStyle)
   // ផ្ទាំងខាងស្តាំ: Captions ឬ Speech cleanup (មួយម្តង)
-  const [panel, setPanel] = useState<'captions' | 'cleanup' | 'motion' | null>(null)
+  const [panel, setPanel] = useState<'captions' | 'cleanup' | 'motion' | 'transition' | null>(initialPanel ?? null)
+  const [transitionAt, setTransitionAt] = useState(0) // clip ដែលចាប់ផ្តើមនៅកន្លែងភ្ជាប់ដែលបានចុច
   const [search, setSearch] = useState('')
   // Speech cleanup បិទពេលចុចខាងក្រៅវា. លើកលែង: ប៊ូតុង Speech cleanup (`data-cleanup-toggle`) និងជួរឧបករណ៍
   // ខាងស្តាំ — ប៊ូតុងទាំងនោះបិទ/បើកដោយខ្លួនឯង; បើមិនលើកលែង ចុចម្តងនឹងបិទ រួចបើកវិញភ្លាម — និង dialog.
@@ -186,7 +187,16 @@ export function EditorScreen({
   const [time, setTime] = useState(0)
   const [length, setLength] = useState(0)
   const [playing, setPlaying] = useState(false)
-  const seek = (seconds: number) => {
+  // clip ដែល playhead នៅ (លំដាប់ចេញ): ពេលដើមមួយអាចនៅពីរ clip, ដូច្នេះ `time` តែមួយមិនគ្រប់គ្រាន់. -1 = រកតាមពេល.
+  // ref: loop ចាក់ (rAF) អានវាដោយមិន restart; state: ម៉ោង និង zoom punch-in
+  const [outPart, setOutPart] = useState(-1)
+  const outRef = useRef(-1)
+  const markPart = (clip: number) => {
+    outRef.current = clip
+    setOutPart(clip)
+  }
+  const seek = (seconds: number, clip = -1) => {
+    markPart(clip)
     scrubbing.current = false
     if (player.current) player.current.currentTime = seconds
     setTime(seconds)
@@ -204,15 +214,13 @@ export function EditorScreen({
   const active = activeIndex(items, time)
 
   // ---- cut list (ជំហាន ២): undo = បញ្ជីចាស់ៗ, redo = បញ្ជីដែល undo ----
-  // splits = ចំណុច Split លើ timeline (ចែកជាផ្នែកដើម្បីជ្រើសលុប). undo/redo រក្សាទាំងពីរជាមួយគ្នា.
-  const [cuts, setCuts] = useState<Cut[]>([])
-  const [splits, setSplits] = useState<number[]>([])
-  // inserts = ផ្នែកដែលចម្លងទៅដាក់នៅ `at` (Extend a clip -> Add); ជាផ្នែកមួយនៃ undo/redo ដូច cuts
-  const [inserts, setInserts] = useState<Insert[]>([])
-  // order = ប្លុកតាមលំដាប់ដែលអូសលើ timeline; [] = លំដាប់ពេល. ជាផ្នែកមួយនៃ undo/redo ដែរ
-  const [order, setOrder] = useState<Cut[]>([])
-  const [past, setPast] = useState<Snapshot[]>([])
-  const [future, setFuture] = useState<Snapshot[]>([])
+  // saved = បញ្ជី clip ដែលរក្សាទុក ([] = វីដេអូទាំងមូល); undo / redo រក្សាបញ្ជីនេះ
+  const duration = length || words?.duration || 0
+  const [saved, setSaved] = useState<Clip[]>([])
+  const clips = useMemo(() => clipsOrWhole(saved, duration), [saved, duration])
+  const cuts = useMemo(() => holes(clips, duration), [clips, duration]) // ចន្លោះដែលកាត់ (ពាក្យឆូត, ប្រវែងកាត់)
+  const [past, setPast] = useState<Clip[][]>([])
+  const [future, setFuture] = useState<Clip[][]>([])
   const [transition, setTransition] = useState<'punch' | 'hard'>('punch')
   const [cutsLoaded, setCutsLoaded] = useState(false)
 
@@ -252,19 +260,14 @@ export function EditorScreen({
   useEffect(() => {
     let stale = false
     api
-      .cuts(project)
+      .timeline(project)
       .then((answer) => {
         if (stale) return
-        // លំដាប់ key ដូច body ពេល save ({cuts, transition, splits, inserts, order}) — JSON ត្រូវដូចបេះបិទទើបមិនផ្ញើ
+        // លំដាប់ key ដូច body ពេល save ({clips, transition}) — JSON ត្រូវដូចបេះបិទទើបមិនផ្ញើ
         const transition: 'punch' | 'hard' = answer.transition === 'hard' ? 'hard' : 'punch'
-        const inserts = (answer.inserts ?? []).map(({ start, end, at }) => ({ start, end, at }))
-        const loaded = { cuts: normalize(answer.cuts), transition, splits: answer.splits ?? [], inserts, order: answer.order ?? [] }
-        remember('cuts', JSON.stringify(loaded))
-        setCuts(loaded.cuts)
-        setSplits(loaded.splits)
-        setInserts(loaded.inserts)
-        setOrder(loaded.order)
-        setTransition(loaded.transition)
+        remember('cuts', JSON.stringify({ clips: answer.clips, transition }))
+        setSaved(answer.clips)
+        setTransition(transition)
         setCutsLoaded(true)
       })
       .catch(() => !stale && setCutsLoaded(true))
@@ -275,35 +278,31 @@ export function EditorScreen({
   // រក្សាទុកក្នុង project.json (0.6 s ក្រោយការប្តូរចុងក្រោយ) — បើកម្តងទៀត ការលុបនៅដដែល
   useEffect(() => {
     if (!cutsLoaded) return
-    const body = { cuts, transition, splits, inserts, order }
-    const timer = window.setTimeout(() => save.current('cuts', JSON.stringify(body), () => api.saveCuts(project, body)), 600)
+    const body = { clips: saved, transition }
+    const timer = window.setTimeout(() => save.current('cuts', JSON.stringify(body), () => api.saveTimeline(project, body)), 600)
     return () => window.clearTimeout(timer)
-  }, [cuts, splits, inserts, order, transition, cutsLoaded, project, retry])
-  const change = (next: Cut[], nextSplits: number[] = splits, nextInserts: Insert[] = inserts, nextOrder: Cut[] = order) => {
-    setPast((list) => [...list, { cuts, splits, inserts, order }].slice(-100))
+  }, [saved, transition, cutsLoaded, project, retry])
+  const change = (next: Clip[]) => {
+    markPart(-1) // លេខ clip ប្តូរ
+    setPast((list) => [...list, saved].slice(-100))
     setFuture([])
-    setCuts(next)
-    setSplits(nextSplits)
-    setInserts(nextInserts)
-    setOrder(nextOrder)
-  }
-  const restore = (snapshot: Snapshot) => {
-    setCuts(snapshot.cuts)
-    setSplits(snapshot.splits)
-    setInserts(snapshot.inserts)
-    setOrder(snapshot.order)
+    setSaved(clipsToSave(next, duration))
   }
   const undo = () => {
     if (!past.length) return
-    setFuture((list) => [{ cuts, splits, inserts, order }, ...list])
-    restore(past[past.length - 1])
+    setFuture((list) => [saved, ...list])
+    markPart(-1)
+    setSaved(past[past.length - 1])
     setPast((list) => list.slice(0, -1))
+    setBlockSel(null)
   }
   const redo = () => {
     if (!future.length) return
-    setPast((list) => [...list, { cuts, splits, inserts, order }])
-    restore(future[0])
+    setPast((list) => [...list, saved])
+    markPart(-1)
+    setSaved(future[0])
     setFuture((list) => list.slice(1))
+    setBlockSel(null)
   }
 
   // ---- Background / Tracker (look): រក្សាទុកក្នុង project.json ដូច cuts ----
@@ -399,7 +398,7 @@ export function EditorScreen({
   const downloadTranscript = (format: 'txt' | 'srt') => {
     setSavedFile(null)
     api
-      .exportTranscript(project, { format, cuts, inserts, order })
+      .exportTranscript(project, { format, clips: isEdited(clips, duration) ? clips : [] })
       .then((answer) => setSavedFile({ path: answer.path }))
       .catch((error: Error) => setSavedFile({ path: '', error: error.message }))
   }
@@ -486,79 +485,8 @@ export function EditorScreen({
     }
   }, [video.path])
 
-  // ការជ្រើស: [index ដំបូង, index ចុងក្រោយ] ក្នុង items (Shift+ចុច ពង្រីក)
-  const [selection, setSelection] = useState<[number, number] | null>(null)
-  const picked = selection ? ([Math.min(...selection), Math.max(...selection)] as const) : null
-  const onItem = (index: number, shift: boolean) => {
-    const item = items[index]
-    if (isCut(cuts, item.start, item.end)) {
-      // ចុចលើអ្វីដែលបានលុប = ស្តារវាវិញ
-      change(subtract(cuts, [item.start, item.end]))
-      setSelection(null)
-      return
-    }
-    setSelection(shift && selection ? [selection[0], index] : [index, index])
-    seek(item.start)
-  }
-  const deleteSelection = () => {
-    if (!picked) return
-    change(add(cuts, [items[picked[0]].start, items[picked[1]].end]))
-    setSelection(null)
-  }
-
-  // ---- timeline: Split / ជ្រើសផ្នែក / លុប-ស្តារ / Trim ----
-  const duration = length || words?.duration || 0
-  const spoken = useMemo(() => items.filter((item) => 'word' in item), [items])
-  // ផ្នែកដែលជ្រើស: ចន្លោះពេល [a, b] (ចុច = a = b; ចតុកោណអូស = ពីណាដល់ណា) -> ផ្នែកទាំងអស់ដែលវាប៉ះ,
-  // គណនាឡើងវិញពេល split ប្តូរ. ផ្នែកច្រើន = Delete លុបទាំងអស់, Link ភ្ជាប់ជាផ្នែកតែមួយ
-  const [partSel, setPartSel] = useState<[number, number] | null>(null)
-  // ព្រំប្លុក = split + គែមការកាត់ (timeline បង្ហាញតែផ្នែករក្សា). គ្មានអ្វីចែក = គ្មាន "ផ្នែក" — Delete មិនលុបវីដេអូទាំងមូល
-  const blockEdges = keepRanges(cuts, duration).length > 1 ? [...splits, ...cuts.flat()] : splits
-  const part = partSel !== null && blockEdges.length ? partsSpan(blockEdges, duration, partSel[0], partSel[1]) : null
-  const partCut = part ? isPartCut(cuts, part) : false
-  const linkable = part !== null && splitsInside(splits, part).length > 0
-  // Link: ដក split ដែលនៅខាងក្នុងការជ្រើស -> ផ្នែកដែលជ្រើសក្លាយជាមួយ (undo មួយជំហាន)
-  const linkParts = () => {
-    if (!part || !linkable) return
-    const inside = splitsInside(splits, part)
-    change(cuts, splits.filter((at) => !inside.includes(at)))
-  }
-  // Snap (ប៊ូតុងមេដែកលើ timeline): បើក = Split / trim ‖ / handles ក្នុង Extend ជាប់គែមពាក្យ (snapToWords),
-  // បិទ = ចំណុចពិត. Alt ធ្វើផ្ទុយពី Snap សម្រាប់សកម្មភាពមួយ. ចងចាំលើកុំព្យូទ័រនេះ.
-  const [snap, setSnap] = useState<boolean>(loadSnap)
-  const snapped = (at: number, alt: boolean) => (snap !== alt ? snapToWords(at, spoken) : at)
-  // Speaker: កម្រិតសំឡេង preview 0-100 ប៉ុណ្ណោះ — វីដេអូដែល Export មិនប្តូរទេ. មិនមែន state: ផ្ទាំង 🔊
-  // កំណត់ video.volume ផ្ទាល់ (អូស slider មិន render editor ទាំងមូល); ចងចាំលើកុំព្យូទ័រនេះ
-  const [initialVolume] = useState(loadVolume)
-  const setVolume = (volume: number) => {
-    applyVolume(player.current, volume)
-    saveVolume(volume)
-  }
-  useEffect(() => applyVolume(player.current, initialVolume), [initialVolume])
-  // Split នៅ playhead (Snap = ចេញពីកណ្តាលពាក្យ; Alt = ផ្ទុយ)
-  const splitHere = (alt: boolean) => {
-    if (!duration) return
-    const [head, tail] = trimEdges(cuts, duration)
-    // disable Split ពេល playhead នៅដើម ឬចុងនៃ timeline
-    if (time <= head || time >= tail) return
-    const at = snapped(time, alt)
-    const next = addSplit(splits, duration, at)
-    if (next !== splits) {
-      change(cuts, next)
-      setPartSel([at, at])
-    }
-  }
-  // ផ្នែកដែលជ្រើស: លុប (បន្ថែមទៅ cuts) ឬស្តារ បើលុបរួចហើយ
-  const togglePart = () => {
-    if (!part) return
-    change(partCut ? subtract(cuts, part) : add(cuts, part))
-  }
-  const trim = (side: 'start' | 'end', at: number, alt: boolean) => change(trimTo(cuts, duration, side, snapped(at, alt)))
-
-  // keyboard: Space = ចាក់/ផ្អាក, Delete/Backspace លុប (ពាក្យដែលជ្រើស, បើគ្មាន = ផ្នែក timeline),
-  // S = Split (Alt+S = ចំណុចពិត), Ctrl+Z undo, Ctrl+Y / Ctrl+Shift+Z redo, Escape ដកការជ្រើស
-  const parts = useMemo(() => sequence(cuts, inserts, duration, order), [cuts, inserts, duration, order])
-  const edited = cuts.length > 0 || inserts.length > 0 || order.length > 0
+  const parts = useMemo(() => asParts(clips), [clips])
+  const edited = isEdited(clips, duration)
   // transcript ជារបស់ timeline: ពាក្យតាមលំដាប់ប្លុក, ពាក្យដែលកាត់បាត់ (Filter បង្ហាញវាវិញ). `display` = index ក្នុង items
   const display = useMemo(
     () => (edited && duration > 0 ? transcriptOrder(items, parts, !view.hideCut) : items.map((_, index) => index)),
@@ -586,6 +514,76 @@ export function EditorScreen({
   const [hitCursor, setHitCursor] = useState({ needle: '', at: -1 })
   const hitAt = hitCursor.needle === needle && hitCursor.at < hits ? hitCursor.at : -1
   const currentHit = hitAt >= 0 ? hitList[hitAt] : -1
+  // ការជ្រើស: [index ដំបូង, index ចុងក្រោយ] ក្នុង items (Shift+ចុច ពង្រីក)
+  const [selection, setSelection] = useState<[number, number] | null>(null)
+  // ពាក្យដែលជ្រើស = ពីណាដល់ណាក្នុង **transcript** (លំដាប់ timeline), មិនមែនតាមពេលទេ: ជ្រើសឆ្លងប្លុកមិនប៉ះពាក្យក្នុងប្លុកផ្សេង
+  const picked = useMemo(() => {
+    if (!selection) return null
+    const a = display.indexOf(selection[0])
+    const b = display.indexOf(selection[1])
+    if (a < 0 || b < 0) return null
+    return display.slice(Math.min(a, b), Math.max(a, b) + 1)
+  }, [selection, display])
+  const onItem = (index: number, shift: boolean, position: number) => {
+    const item = items[index]
+    if (isCut(cuts, item.start, item.end)) {
+      // ចុចលើអ្វីដែលបានលុប = ស្តារវាវិញ
+      change(restoreRange(clips, [item.start, item.end], duration))
+      setSelection(null)
+      return
+    }
+    setSelection(shift && selection ? [selection[0], index] : [index, index])
+    seek(item.start, partOfPosition(items, display, parts, position)) // ច្បាប់ដែលចុច មិនមែនច្បាប់ទីមួយជានិច្ច
+  }
+  const deleteSelection = () => {
+    if (!picked) return
+    change(cutRanges(clips, picked.map((index): Cut => [items[index].start, items[index].end])))
+    setSelection(null)
+    setBlockSel(null)
+  }
+
+  // ---- timeline: Split / ជ្រើសផ្នែក / លុប-ស្តារ / Trim ----
+  const spoken = useMemo(() => items.filter((item) => 'word' in item), [items])
+  // clip ដែលជ្រើសលើ timeline: [ទីមួយ, ចុងក្រោយ] តាមលំដាប់ក្នុងបញ្ជី (ចុច = មួយ; ចតុកោណអូស = ច្រើន)
+  const [blockSel, setBlockSel] = useState<[number, number] | null>(null)
+  const selected = blockSel && blockSel[1] < clips.length ? blockSel : null
+  const linkable = selected !== null && canLink(clips, selected)
+  // Link: clip ដែលបន្តពីគ្នាក្នុងការជ្រើសក្លាយជាមួយ (undo មួយជំហាន)
+  const linkParts = () => {
+    if (!selected || !linkable) return
+    change(linkClips(clips, selected))
+    setBlockSel([selected[0], selected[0]])
+  }
+  // Snap (ប៊ូតុងមេដែកលើ timeline): បើក = Split / trim ‖ / handles ក្នុង Extend ជាប់គែមពាក្យ (snapToWords),
+  // បិទ = ចំណុចពិត. Alt ធ្វើផ្ទុយពី Snap សម្រាប់សកម្មភាពមួយ. ចងចាំលើកុំព្យូទ័រនេះ.
+  const [snap, setSnap] = useState<boolean>(loadSnap)
+  const snapped = (at: number, alt: boolean) => (snap !== alt ? snapToWords(at, spoken) : at)
+  // Speaker: កម្រិតសំឡេង preview 0-100 ប៉ុណ្ណោះ — វីដេអូដែល Export មិនប្តូរទេ. មិនមែន state: ផ្ទាំង 🔊
+  // កំណត់ video.volume ផ្ទាល់ (អូស slider មិន render editor ទាំងមូល); ចងចាំលើកុំព្យូទ័រនេះ
+  const [initialVolume] = useState(loadVolume)
+  const setVolume = (volume: number) => {
+    applyVolume(player.current, volume)
+    saveVolume(volume)
+  }
+  useEffect(() => applyVolume(player.current, initialVolume), [initialVolume])
+  // Split នៅ playhead (Snap = ចេញពីកណ្តាលពាក្យ; Alt = ផ្ទុយ)
+  const splitAt = (alt: boolean) => splitClip(clips, snapped(time, alt), outPart)
+  const splitHere = (alt: boolean) => {
+    const done = duration ? splitAt(alt) : null
+    if (!done) return
+    change(done.clips)
+    setBlockSel([done.index + 1, done.index + 1])
+  }
+  // លុប clip ដែលជ្រើស — វីដេអូត្រូវមានអ្វីមួយនៅសល់
+  const deletable = selected !== null && selected[1] - selected[0] + 1 < clips.length
+  const togglePart = () => {
+    if (!selected || !deletable) return
+    change(clips.filter((_, index) => index < selected[0] || index > selected[1]))
+    setBlockSel(null)
+  }
+
+  // keyboard: Space = ចាក់/ផ្អាក, Delete/Backspace លុប (ពាក្យដែលជ្រើស, បើគ្មាន = ផ្នែក timeline),
+  // S = Split (Alt+S = ចំណុចពិត), Ctrl+Z undo, Ctrl+Y / Ctrl+Shift+Z redo, Escape ដកការជ្រើស
   const togglePlay = () => {
     const node = player.current
     if (!node) return
@@ -623,7 +621,7 @@ export function EditorScreen({
         keys.current.undo()
       } else if (event.key === 'Escape') {
         setSelection(null)
-        setPartSel(null)
+        setBlockSel(null)
       }
     }
     window.addEventListener('keydown', onKey)
@@ -632,15 +630,14 @@ export function EditorScreen({
 
   // preview: ចាក់តាម parts របស់វីដេអូដែល Export (ដូច pipeline `cuts.sequence`) — រំលងការកាត់ ហើយលោតទៅ
   // ផ្នែកដែលបន្ថែម នៅពេល `at` របស់វា, រួចត្រឡប់មកវិញ. រាល់ frame (rAF), មិនមែន timeupdate (~4 ដង/វិនាទី).
-  const [outPart, setOutPart] = useState(-1) // part ដែលកំពុងចាក់ (លំដាប់ចេញ) — zoom punch-in តាមលេខនេះ
   // បើក project ដែលបានប្តូរលំដាប់: ចាប់ផ្តើមពីប្លុកទីមួយលើ timeline (ម្តងប៉ុណ្ណោះ)
   const placedAtStart = useRef(false)
   useEffect(() => {
     if (placedAtStart.current || !cutsLoaded || !length) return
     placedAtStart.current = true
-    if (!order.length || !parts.length || !player.current || player.current.currentTime > 0.05) return
+    if (!edited || !parts.length || !player.current || player.current.currentTime > 0.05) return
     player.current.currentTime = parts[0].start // onTimeUpdate ធ្វើឲ្យ `time` តាម
-  }, [cutsLoaded, length, order, parts])
+  }, [cutsLoaded, length, edited, parts])
   useEffect(() => {
     if (!playing || !edited) return
     let frame = 0
@@ -661,26 +658,28 @@ export function EditorScreen({
           }
           seekTarget = -1
         }
+        if (outRef.current !== current) current = outRef.current // អ្នកប្រើលោតទៅ clip ផ្សេង
         const here = parts[current]
         if (!here || at < here.start - 0.3 || at > here.end + 0.3) {
           // ចាប់ផ្តើមចាក់ ឬអ្នកប្រើលោត: ពីដើមវីដេអូ hook ចាក់មុន; ផ្សេងពីនេះ = ផ្នែករក្សានៅទីនោះ
-          current = at < 0.05 && parts[0].insert !== null ? 0 : keepPartAt(parts, at)
+          current = keepPartAt(parts, at)
+          markPart(current)
           if (current < 0) node.pause()
           else if (at < parts[current].start) {
             seekTarget = parts[current].start
             node.currentTime = seekTarget
           }
-          setOutPart(current)
         } else if (at >= here.end - 0.04) {
           current += 1
           if (current >= parts.length) {
             node.pause()
             current = -1
-          } else {
+          } else if (Math.abs(parts[current].start - here.end) > 0.002) {
+            // clip បន្តពីមុនតាមពេល (Split) = ចាក់បន្ត, គ្មាន seek
             seekTarget = parts[current].start
             node.currentTime = seekTarget
           }
-          setOutPart(current)
+          markPart(current)
         }
       }
       frame = requestAnimationFrame(tick)
@@ -713,8 +712,10 @@ export function EditorScreen({
   }, [motion, scenes, motionCues, playing, time])
   const removed = removedSeconds(cuts, duration)
   // zoom punch-in ក្នុង preview: part លេខសេសតាមលំដាប់ចេញ = 110% (ដូច render `cut_filter`)
-  const shownPart = playing && outPart >= 0 ? outPart : keepPartAt(parts, time)
-  const punched = transition === 'punch' && edited && shownPart % 2 === 1
+  const shownPart = parts[outPart] && time >= parts[outPart].start && time <= parts[outPart].end ? outPart : keepPartAt(parts, time)
+  const punched = transition === 'punch' && edited && shownPart >= 0 && joinNumber(clips, shownPart) % 2 === 1
+  // ពាក្យដែលកំពុងនិយាយ = តែច្បាប់នៅក្នុង part ដែលកំពុងចាក់ (ពាក្យក្នុង HOOK លេចពីរដងក្នុង transcript)
+  const activePos = useMemo(() => displayPosition(items, display, parts, active, shownPart), [items, display, parts, active, shownPart])
 
   // ពាក្យសកម្មនៅក្នុងទិដ្ឋភាព — ពេលចាក់ និងពេលផ្អាកដែរ (ឧ. ចុចលើ timeline ឬ ⏭ = transcript រំកិលទៅពាក្យនោះ).
   // block nearest = មិនលោតបើវាឃើញរួច; ពាក្យសកម្មមិនប្តូរ = មិនរំកិល ទោះអ្នកប្រើកំពុងអានកន្លែងផ្សេង
@@ -722,17 +723,16 @@ export function EditorScreen({
   const showItem = (index: number) =>
     transcriptBox.current?.querySelector(`[data-at="${index}"]`)?.scrollIntoView({ block: 'nearest' })
   useEffect(() => {
-    if (active < 0) return
+    if (activePos < 0) return
     // ស្វែងរកធាតុ ~25 ខាងមុខ (≈4 បន្ទាត់) ហើយ scroll ទៅ block:'end'
     // ដូចនេះ ពាក្យដែលកំពុងនិយាយតែងតែមាន 4 បន្ទាត់បន្ថែមក្រោម
-    const lookahead = display[display.indexOf(active) + 25]
-    const lookEl = lookahead !== undefined ? transcriptBox.current?.querySelector(`[data-at="${lookahead}"]`) : null
+    const lookEl = transcriptBox.current?.querySelector(`[data-pos="${activePos + 25}"]`)
     if (lookEl) {
       lookEl.scrollIntoView({ block: 'end' })
     } else {
-      transcriptBox.current?.querySelector(`[data-at="${active}"]`)?.scrollIntoView({ block: 'nearest' })
+      transcriptBox.current?.querySelector(`[data-pos="${activePos}"]`)?.scrollIntoView({ block: 'nearest' })
     }
-  }, [active, display])
+  }, [activePos])
 
   // ← / → ក្នុង transcript: ជ្រើសពាក្យមុន / បន្ទាប់ (Shift = ពង្រីកការជ្រើស), វីដេអូលោតទៅពាក្យនោះ.
   // រំលងធាតុដែលមិនបង្ហាញ (pause ពេលបិទ, ពាក្យដែលលុបពេល "លាក់ពាក្យដែលលុប").
@@ -748,8 +748,8 @@ export function EditorScreen({
     stepAt.current = next
     const index = display[next]
     setSelection(extend && selection ? [selection[0], index] : [index, index])
-    seek(items[index].start)
-    showItem(index)
+    seek(items[index].start, partOfPosition(items, display, parts, next))
+    transcriptBox.current?.querySelector(`[data-pos="${next}"]`)?.scrollIntoView({ block: 'nearest' })
   }
   // លទ្ធផលស្វែងរកបន្ទាប់ / មុន (វិលជុំ)
   const stepHit = (delta: 1 | -1) => {
@@ -790,7 +790,7 @@ export function EditorScreen({
   // មានការកែមិនទាន់រក្សាទុក: JSON បច្ចុប្បន្នខុសពីអ្វីដែល sidecar មាន (តែ key ដែល load រួច)
   const differs = (key: SaveKey, body: unknown) => savedBodies[key] !== undefined && JSON.stringify(body) !== savedBodies[key]
   const unsaved =
-    differs('cuts', { cuts, transition, splits }) || differs('look', look) || differs('motion', { ...motion, animation: style.animation })
+    differs('cuts', { clips: saved, transition }) || differs('look', look) || differs('motion', { ...motion, animation: style.animation })
   const exportSettings: ReframeSettings = {
     aspect,
     // ទំហំដូចវីដេអូ = frame ទាំងមូល (center គ្មានកាត់); aspect ផ្សេង = AI reframe តាម layout ដែលជ្រើស
@@ -828,7 +828,7 @@ export function EditorScreen({
         <button
           type="button"
           disabled={!words?.ready || busy}
-          onClick={() => onExport(exportSettings, style, cuts, transition, look, { ...motion, animation: style.animation }, inserts, order)}
+          onClick={() => onExport(exportSettings, style, edited ? clips : null, transition, look, { ...motion, animation: style.animation })}
           title={busy ? t('មាន job កំពុងរត់', 'A job is running') : !words?.ready ? t('រង់ចាំ transcript', 'Waiting for the transcript') : `${t('វីដេអូទាំងមូល', 'Whole video')} · ${aspect}${cuts.length ? ` · ${t('កាត់', 'cuts')} ${num(cuts.length)}` : ''}`}
           className={`min-h-10 cursor-pointer rounded-button border-0 bg-white px-5 type-body font-bold text-bg disabled:cursor-default disabled:opacity-40 ${focusRing}`}
         >
@@ -867,7 +867,7 @@ export function EditorScreen({
                 onClick={deleteSelection}
                 className={`inline-flex min-h-10 cursor-pointer items-center gap-1.5 rounded-button border-0 bg-danger/20 px-3 type-label font-semibold text-danger hover:bg-danger/30 ${focusRing}`}
               >
-                🗑 {t('លុប', 'Delete')} ({num(picked[1] - picked[0] + 1)})
+                🗑 {t('លុប', 'Delete')} ({num(picked.length)})
               </button>
             )}
             <span className="ml-auto flex items-center gap-1.5">
@@ -1019,7 +1019,7 @@ export function EditorScreen({
                       <span className="text-danger">{t('កាត់', 'Cuts')} {num(cuts.length)} · {removed.toFixed(1)} s</span>
                       <button
                         type="button"
-                        onClick={() => change([])}
+                        onClick={() => change(cuts.reduce((list, hole) => restoreRange(list, hole, duration), clips))}
                         className={`cursor-pointer rounded-field border-0 bg-transparent px-1.5 text-text-3 underline hover:text-text ${focusRing}`}
                       >
                         {t('ស្តារទាំងអស់', 'Restore all')}
@@ -1027,45 +1027,16 @@ export function EditorScreen({
                     </span>
                   )}
                 </div>
-                {inserts.length > 0 && (
-                  // ផ្នែកដែលបន្ថែម: ចុច = លោតទៅកន្លែងដែលវាចាក់; ✕ = ដកចេញ (undo បាន)
-                  <ul aria-label={t('ផ្នែកដែលបន្ថែម', 'Added sections')} className="m-0 mb-3 flex list-none flex-wrap gap-1.5 p-0">
-                    {inserts.map((item, index) => (
-                      <li key={index} className="flex items-center rounded-full bg-gold-tint type-hint text-gold">
-                        <button
-                          type="button"
-                          onClick={() => seek(item.at)}
-                          title={t('លោតទៅកន្លែងដែលផ្នែកនេះចាក់', 'Go to where this section plays')}
-                          className={`cursor-pointer rounded-full border-0 bg-transparent py-1 pr-1 pl-2.5 font-semibold text-gold tabular-nums ${focusRing}`}
-                        >
-                          ＋ {clockShort(item.start)}–{clockShort(item.end)} →{' '}
-                          {item.at < 0.05 ? t('ដើម (hook)', 'start (hook)') : item.at >= duration - 0.05 ? t('ចុង', 'end') : clockShort(item.at)}
-                        </button>
-                        <button
-                          type="button"
-                          aria-label={t('ដកផ្នែកនេះចេញ', 'Remove this section')}
-                          onClick={() => change(cuts, splits, inserts.filter((_, at) => at !== index))}
-                          className={`cursor-pointer rounded-full border-0 bg-transparent px-2 py-1 text-gold hover:text-text ${focusRing}`}
-                        >
-                          ✕
-                        </button>
-                      </li>
-                    ))}
-                    <li className="flex items-center type-hint text-text-4">
-                      {t('វីដេអូ Export', 'Exported video')} {clockShort(outputSeconds(parts))}
-                    </li>
-                  </ul>
-                )}
                 <p className="m-0 text-[17px] leading-[2.1]">
                   {chunks.map((chunk, at) => {
                     const first = at * CHUNK
-                    const local = chunk.indices.indexOf(active)
+                    const local = activePos >= first && activePos < first + CHUNK ? activePos - first : -1
                     // ខ្សែអក្សរមួយតួក្នុងមួយធាតុ: c = លុប, s = ជ្រើស, . = ធម្មតា — memo ប្រៀបធៀបខ្សែនេះ
                     const flags = chunk.items
                       .map((item, at) =>
                         isCut(cuts, item.start, item.end)
                           ? 'c'
-                          : picked && chunk.indices[at] >= picked[0] && chunk.indices[at] <= picked[1]
+                          : picked?.includes(chunk.indices[at])
                             ? 's'
                             : '.',
                       )
@@ -1075,6 +1046,7 @@ export function EditorScreen({
                         key={first}
                         items={chunk.items}
                         indices={chunk.indices}
+                        first={first}
                         active={local}
                         flags={flags}
                         marks={chunk.indices.map((index) => keywordMarks[index] ?? '-').join('')}
@@ -1236,7 +1208,18 @@ export function EditorScreen({
               onChange={(patch) => setMotion((current) => ({ ...current, ...patch }))}
               transition={transition}
               onTransition={setTransition}
-              cutCount={cuts.length}
+              joinCount={joinNumber(clips, clips.length - 1)}
+            />
+          </aside>
+        )}
+        {panel === 'transition' && (
+          <aside aria-label="Transition" className="flex w-[300px] shrink-0 flex-col overflow-y-auto border-l border-line p-4">
+            <TransitionPanel
+              transition={transition}
+              onTransition={setTransition}
+              joinCount={joinNumber(clips, clips.length - 1)}
+              continuous={continues(clips, transitionAt)}
+              onClose={() => setPanel(null)}
             />
           </aside>
         )}
@@ -1246,7 +1229,7 @@ export function EditorScreen({
               project={project}
               onSeek={seek}
               onApply={(found) => {
-                change(normalize([...cuts, ...found.map((item): Cut => [item.start, item.end])]))
+                change(cutRanges(clips, found.map((item): Cut => [item.start, item.end])))
                 setPanel(null)
               }}
             />
@@ -1261,16 +1244,31 @@ export function EditorScreen({
             />
           </aside>
         )}
-        <nav ref={toolsNav} aria-label={t('ឧបករណ៍', 'Tools')} className="flex w-[92px] shrink-0 flex-col items-center gap-2 border-l border-line py-4">
+        <nav ref={toolsNav} aria-label={t('ឧបករណ៍', 'Tools')} className="flex min-h-0 w-[92px] shrink-0 flex-col items-center gap-2 overflow-y-auto border-l border-line py-4">
           <ToolButton label="Captions" on={panel === 'captions'} onClick={() => setPanel((value) => (value === 'captions' ? null : 'captions'))}>
             <SubtitlesIcon size={20} weight={1.75} />
           </ToolButton>
           <ToolButton label="Motion" on={panel === 'motion'} onClick={() => setPanel((value) => (value === 'motion' ? null : 'motion'))}>
             <MotionIcon />
           </ToolButton>
-          <ToolButton label="AI enhance" note="Phase 3">✦</ToolButton>
-          <ToolButton label="Brand template" note="Phase 3">◧</ToolButton>
-          <ToolButton label="B-roll" note="Phase 3">▣</ToolButton>
+          <ToolButton
+            label="Transitions"
+            on={panel === 'transition'}
+            onClick={() => {
+              setTransitionAt(0) // មិនមែនចុចពីកន្លែងភ្ជាប់ណាមួយ: គ្មានការព្រមានអំពីកន្លែងចាស់
+              setPanel((value) => (value === 'transition' ? null : 'transition'))
+            }}
+          >
+            <PanelIcon d="M3 4.500v11L10 10 3 4.500ZM17 4.500v11L10 10l7-5.500Z" />
+          </ToolButton>
+          {/* មិនទាន់មាន pipeline នៅពីក្រោយ: គូរបិទ + ហេតុផល មិនមែនប៊ូតុងដែលចុចហើយគ្មានអ្វីកើតឡើង */}
+          <ToolButton label="AI enhance" note="Phase 3"><PanelIcon d="M9 3l1.6 4.4L15 9l-4.4 1.6L9 15l-1.6-4.4L3 9l4.4-1.6L9 3ZM15.5 13l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7.7-1.8Z" /></ToolButton>
+          <ToolButton label="Brand template" note="Phase 3"><PanelIcon d="M3 4.5A1.5 1.5 0 0 1 4.5 3h3A1.5 1.5 0 0 1 9 4.5v11a2.5 2.5 0 0 1-5 0L3 4.5ZM9 7l2.6-2.6a1.5 1.5 0 0 1 2.1 0l1.9 1.9a1.5 1.5 0 0 1 0 2.1L9 15M6.5 15.5h.01" /></ToolButton>
+          <ToolButton label="B-roll" note="Phase 3"><PanelIcon d="M7 3.5h7A2.5 2.5 0 0 1 16.5 6v7M6 6h6.5A2.5 2.5 0 0 1 15 8.500V14a2.500 2.500 0 0 1-2.500 2.500H6A2.500 2.500 0 0 1 3.500 14V8.500A2.500 2.500 0 0 1 6 6ZM8 9v5h2a1.250 1.250 0 0 0 0-2.500H8h1.700a1.250 1.250 0 0 0 0-2.500H8Z" /></ToolButton>
+          <ToolButton label="Text" note={t('មិនទាន់មាន', 'Not built yet')}><PanelIcon d="M4 5.500V3.500h12v2M10 3.500v13M7.500 16.500h5" /></ToolButton>
+          <ToolButton label="Graphics" note={t('មិនទាន់មាន', 'Not built yet')}><PanelIcon d="M3 7.500a4 4 0 0 1 4-4h6a4 4 0 0 1 0 8H7a4 4 0 0 1-4-4ZM6 11.500a4 4 0 1 0 8 0M7 3.500a3 3 0 0 0 6 8" /></ToolButton>
+          <ToolButton label="Audio" note={t('មិនទាន់មាន', 'Not built yet')}><PanelIcon d="M8 15V5l8-1.500V13M8 15a2.500 2.500 0 1 1-5 0 2.500 2.500 0 0 1 5 0ZM16 13a2.500 2.500 0 1 1-5 0 2.500 2.500 0 0 1 5 0Z" /></ToolButton>
+          <ToolButton label="Voiceover hook" note={t('មិនទាន់មាន', 'Not built yet')}><PanelIcon d="M5.500 3h9A2.500 2.500 0 0 1 17 5.500v6a2.500 2.500 0 0 1-2.500 2.500H12l-2 2.500L8 14H5.500A2.500 2.500 0 0 1 3 11.500v-6A2.500 2.500 0 0 1 5.500 3ZM7 7v3M10 6v5M13 7v3" /></ToolButton>
         </nav>
       </div>
 
@@ -1306,10 +1304,9 @@ export function EditorScreen({
           snapTo={(at, alt) => snapped(at, alt)}
           onAdd={(range, at) => {
             // at = null: ស្តារ (ចេញពី cut list); ផ្សេងពីនេះ = ចម្លងជា insert. change() = undo មួយជំហាន
-            if (at === null) change(subtract(cuts, range))
-            else change(cuts, splits, [...inserts, { start: round3(range[0]), end: round3(range[1]), at: round3(at) }])
+            change(at === null ? restoreRange(clips, range, duration) : insertCopy(clips, range, at, duration))
             setExtendOpen(false)
-            seek(at ?? range[0])
+            seek(range[0])
           }}
           onClose={() => setExtendOpen(false)}
         />
@@ -1329,21 +1326,16 @@ export function EditorScreen({
         project={project}
         videoPath={video.path}
         duration={duration}
-        cuts={cuts}
-        inserts={inserts}
-        order={order}
-        playingPart={playing ? outPart : -1}
-        splits={splits}
-        part={part}
-        picked={partSel !== null}
-        partCut={partCut}
-        onPick={(at) => setPartSel([at, at])}
-        onPickRange={(a, b) => setPartSel([a, b])}
+        clips={clips}
+        playingPart={outPart}
+        selected={selected}
+        onSelect={setBlockSel}
         linkable={linkable}
         onLink={linkParts}
+        canSplit={Boolean(duration && splitAt(false))}
         onSplit={splitHere}
+        deletable={deletable}
         onTogglePart={togglePart}
-        onTrim={trim}
         snap={snap}
         onSnap={() => {
           setSnap(!snap)
@@ -1351,18 +1343,26 @@ export function EditorScreen({
         }}
         initialVolume={initialVolume}
         onVolume={setVolume}
-        onMoveInsert={(insertIdx, newAt) => {
-          const next = inserts.map((ins, i) => (i === insertIdx ? { ...ins, at: newAt } : ins))
-          change(cuts, splits, next)
+        onMoveBlock={(from, gap) => {
+          const moved = moveClip(clips, from, gap)
+          change(moved.clips)
+          setBlockSel([moved.index, moved.index])
         }}
-        onMoveBlock={(next) => change(cuts, splits, inserts, next)}
-        onTrimBlock={(block, side, at, alt) => {
-          const edge = snapped(at, alt)
-          change(trimBlock(cuts, block, side, edge))
-          seek(edge)
-          // ការជ្រើសនៅលើអ្វីដែលនៅសល់ (ចំណុចចាស់អាចធ្លាក់ក្នុងការកាត់)
-          const mid = side === 'start' ? (edge + block[1]) / 2 : (block[0] + edge) / 2
-          setPartSel([mid, mid])
+        onTrimBlock={(index, side, at, alt) => {
+          // Snap មិនអាចធ្វើឲ្យប្លុកខ្លីជាង 0.5 s ឬហួសដែនអូសចេញ: បើដូច្នោះ ប្រើពេលពិតដែលអូសដល់
+          const near = snapped(at, alt)
+          const left = side === 'start' ? clips[index][1] - near : near - clips[index][0]
+          const limit = edgeLimit(clips, index, side, duration)
+          const inLimit = side === 'start' ? near >= limit : near <= limit
+          const edge = left >= 0.5 && inLimit ? near : at
+          change(trimClip(clips, index, side, edge))
+          seek(edge, index)
+          setBlockSel([index, index])
+        }}
+        onAddTransition={(index) => {
+          seek(clips[index][0], index)
+          setTransitionAt(index)
+          setPanel('transition')
         }}
         noTrack={look.tracking ? look.no_track : []}
         subjects={look.subjects.map((item): [number, number] => [item.start, item.end])}
@@ -1433,9 +1433,7 @@ function SaveStatus({
 }
 
 /** ជំហានមួយក្នុង undo/redo: ការកាត់ និងចំណុច split ជាមួយគ្នា. */
-type Snapshot = { cuts: Cut[]; splits: number[]; inserts: Insert[]; order: Cut[] }
 
-const round3 = (value: number) => Math.round(value * 1000) / 1000
 
 /* កម្រិតសំឡេង preview (0-100) ក្នុង localStorage, លំនាំដើម 100; 0 = muted */
 const VOLUME_KEY = 'kcs.previewVolume'
@@ -1479,16 +1477,11 @@ function saveSnap(on: boolean) {
   }
 }
 
-/** 40.04 -> "0:40.0" (ស្លាកផ្នែកដែលបន្ថែម). */
-function clockShort(seconds: number): string {
-  const minutes = Math.floor(seconds / 60)
-  return `${minutes}:${(seconds - minutes * 60).toFixed(1).padStart(4, '0')}`
-}
-
 /** ផ្នែកមួយនៃ transcript — `memo`: គូរឡើងវិញតែពេលពាក្យសកម្មចូល/ចេញពីផ្នែកនេះ ឬការស្វែងរកប្តូរ. */
 const Chunk = memo(function Chunk({
   items,
   indices,
+  first,
   active,
   flags,
   marks,
@@ -1502,6 +1495,7 @@ const Chunk = memo(function Chunk({
 }: {
   items: EditorItem[]
   indices: number[] // index ក្នុង items ទាំងមូល របស់ធាតុនីមួយៗ (លំដាប់តាម timeline)
+  first: number // ទីតាំងក្នុង `display` របស់ធាតុទីមួយ (ពាក្យក្នុង HOOK មាន data-at ដូចគ្នា តែ data-pos ផ្សេង)
   active: number // index ក្នុងផ្នែកនេះ, -1 = គ្មាន
   flags: string // មួយតួក្នុងមួយធាតុ: c = លុប, s = ជ្រើស
   marks: string // មួយតួក្នុងមួយធាតុ: 1 / 2 = ពាក្យសំខាន់ (ពណ៌ទី ១ / ២), - ឬទទេ = ធម្មតា
@@ -1511,7 +1505,7 @@ const Chunk = memo(function Chunk({
   hideCut: boolean // Filter: លាក់ពាក្យ និង pause ដែលលុប
   needle: string
   current: number // លទ្ធផលស្វែងរកបច្ចុប្បន្នក្នុងផ្នែកនេះ (index ក្នុងផ្នែក), -1 = គ្មាន
-  onItem: (index: number, shift: boolean) => void
+  onItem: (index: number, shift: boolean, position: number) => void
 }) {
   const t = useT()
   return (
@@ -1530,7 +1524,8 @@ const Chunk = memo(function Chunk({
               type="button"
               tabIndex={-1} // Tab ឈប់លើ transcript ម្តង, ← → ដើរតាមពាក្យ និង pause
               data-at={indices[at]}
-              onClick={(event) => onItem(indices[at], event.shiftKey)}
+              data-pos={first + at}
+              onClick={(event) => onItem(indices[at], event.shiftKey, first + at)}
               title={gone ? t('បានលុប — ចុចដើម្បីស្តារ', 'Removed — click to restore') : t(`ស្ងាត់ ${item.pause.toFixed(2)} វិនាទី`, `Silence ${item.pause.toFixed(2)} s`)}
               className={`mx-1 inline-block cursor-pointer rounded-[6px] border-0 px-1.5 align-middle text-[13px] leading-[1.6] tabular-nums ${
                 gone
@@ -1558,8 +1553,9 @@ const Chunk = memo(function Chunk({
               role="button"
               tabIndex={-1}
               data-at={indices[at]}
+              data-pos={first + at}
               data-keyword={keyword ? mark : undefined}
-              onClick={(event) => onItem(indices[at], event.shiftKey)}
+              onClick={(event) => onItem(indices[at], event.shiftKey, first + at)}
               title={gone ? t('បានលុប — ចុចដើម្បីស្តារ', 'Removed — click to restore') : keyword ? t('ពាក្យសំខាន់ (AI keywords highlighter)', 'Keyword (AI keywords highlighter)') : undefined}
               // ពណ៌តែប៉ុណ្ណោះ: fontWeight ធ្វើឲ្យពាក្យធំជាង -> បន្ទាត់រុំខុសគ្នា -> transcript ញាក់ពេលបើក/បិទ
               style={keyword ? { color: keyword } : undefined}
@@ -1702,6 +1698,14 @@ function MotionIcon() {
   )
 }
 
+function PanelIcon({ d }: { d: string }) {
+  return (
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d={d} />
+    </svg>
+  )
+}
+
 /** look ពី sidecar ដោយគ្មាន field ផ្សេង (ឧ. `name`) — ដូច្នេះ PUT ផ្ញើតែ look ប៉ុណ្ណោះ. */
 function lookOf(answer: Partial<Look>): Look {
   const { background, blur, color, image, radius, spacing, tracking, no_track, subjects, transform } = { ...DEFAULT_LOOK, ...answer }
@@ -1796,7 +1800,7 @@ function ToolButton({
       disabled={!onClick}
       onClick={onClick}
       title={note ? `${label} — ${note}` : label}
-      className={`flex w-[78px] cursor-pointer flex-col items-center gap-1 rounded-button border-0 px-1 py-2.5 text-[12px] font-semibold disabled:cursor-default disabled:opacity-40 ${
+      className={`flex w-[78px] shrink-0 cursor-pointer flex-col items-center gap-1 rounded-button border-0 px-1 py-2.5 text-[12px] font-semibold disabled:cursor-default disabled:opacity-40 ${
         on ? 'bg-gold-tint text-gold' : 'bg-transparent text-text-2 hover:bg-field'
       } ${focusRing}`}
     >

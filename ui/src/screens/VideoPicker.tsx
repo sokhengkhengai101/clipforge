@@ -1,9 +1,9 @@
-import { useRef, useState, type DragEvent } from 'react'
+import { useRef, useState, type DragEvent, type ReactNode } from 'react'
 import { sourceFrameUrl, type Video } from '../api'
 import { Button } from '../kit/controls'
 import { ArrowRightIcon, UploadIcon } from '../kit/icons'
 import { focusRing } from '../kit/styles'
-import { khmerNumber } from './khmer'
+import { useNum, useT } from '../i18n'
 import { pickVideo } from './pickFile'
 
 /* ជំហាន ១ "ជ្រើសវីដេអូ" ដែល dialog Long to Short, Auto Subtitles និង Auto Reframe ប្រើរួមគ្នា
@@ -69,12 +69,16 @@ export function Source({
   dropOver,
   onChoose,
   onChoosePath,
+  stage,
 }: {
   videos: Video[]
   dropOver: boolean
   onChoose: (video: Video) => void
   onChoosePath: (path: string) => void
+  stage?: ReactNode // មាន = ប្រអប់ drop ធំពេញកន្លែង (ផ្ទាំង Long to Short) ដែលមានរូប + ចំណងជើងនេះនៅលើ
 }) {
+  const t = useT()
+  const num = useNum()
   const [typed, setTyped] = useState('')
   const [note, setNote] = useState('')
   const [over, setOver] = useState(false)
@@ -86,14 +90,14 @@ export function Source({
     try {
       const picked = await pickVideo()
       if (picked === 'browser') {
-        setNote('Browser មិនអាចអានផ្លូវពេញរបស់ file បានទេ — បិទភ្ជាប់ path ខាងលើ។')
+        setNote(t('Browser មិនអាចអានផ្លូវពេញរបស់ file បានទេ — បិទភ្ជាប់ path ក្នុងប្រអប់។', 'A browser cannot read the full path of a file. Paste the path into the box.'))
         pathInput.current?.focus()
       } else if (picked) {
         setNote('')
         onChoosePath(picked)
       }
     } catch (e) {
-      setNote(`បើកផ្ទាំងជ្រើស file មិនបាន: ${(e as Error).message}`)
+      setNote(`${t('បើកផ្ទាំងជ្រើស file មិនបាន', 'Could not open the file picker')}: ${(e as Error).message}`)
     }
   }
 
@@ -109,7 +113,7 @@ export function Source({
       onChoose(match)
     } else {
       setTyped(file.name)
-      setNote(`${file.name} មិននៅក្នុង samples/ ទេ — browser មិនអាចអានផ្លូវពេញបាន ដូច្នេះបិទភ្ជាប់ path ខាងលើ។`)
+      setNote(t(`${file.name} មិននៅក្នុង samples/ ទេ — browser មិនអាចអានផ្លូវពេញបាន ដូច្នេះបិទភ្ជាប់ path ក្នុងប្រអប់។`, `${file.name} is not in samples/. A browser cannot read its full path, so paste the path into the box.`))
       pathInput.current?.focus()
     }
   }
@@ -130,9 +134,14 @@ export function Source({
       onDragLeave={() => setOver(false)}
       onDrop={drop}
       className={`flex flex-col gap-4 rounded-card border-2 px-7 py-7 ${
-        over || dropOver ? 'border-dashed border-gold bg-gold-tint' : 'border-transparent bg-raised'
+        stage
+          ? `size-full justify-center overflow-y-auto border-dashed ${over || dropOver ? 'border-gold bg-gold-tint' : 'border-raised-4'}`
+          : over || dropOver
+            ? 'border-dashed border-gold bg-gold-tint'
+            : 'border-transparent bg-raised'
       }`}
     >
+      {stage}
       <label className="flex min-h-12 items-center gap-3 rounded-button border border-line bg-bg px-4 text-text-3 focus-within:outline-2 focus-within:outline-solid focus-within:outline-gold">
         <LinkGlyph />
         <input
@@ -141,29 +150,29 @@ export function Source({
           value={typed}
           onChange={(event) => setTyped(event.target.value)}
           onKeyDown={(event) => event.key === 'Enter' && applyPath()}
-          placeholder={over || dropOver ? 'ទម្លាក់វីដេអូនៅទីនេះ' : 'ទម្លាក់វីដេអូ ឬបិទភ្ជាប់ផ្លូវ file (D:\\videos\\podcast.mp4)'}
-          aria-label="ផ្លូវឯកសារវីដេអូ (path)"
+          placeholder={over || dropOver ? t('ទម្លាក់វីដេអូនៅទីនេះ', 'Drop the video here') : t('ទម្លាក់វីដេអូ ឬបិទភ្ជាប់ផ្លូវ file (D:\\videos\\podcast.mp4)', 'Drop a video or paste a file path (D:\\videos\\podcast.mp4)')}
+          aria-label={t('ផ្លូវឯកសារវីដេអូ (path)', 'Video file path')}
           spellCheck={false}
           className="min-w-0 flex-1 border-0 bg-transparent type-body-lg text-text outline-none placeholder:text-text-4"
         />
         {typed.trim() && (
           <Button size="sm" variant="primary" onClick={applyPath}>
-            ប្រើ
+            {t('ប្រើ', 'Use')}
           </Button>
         )}
       </label>
-      <div className="flex flex-wrap items-center gap-4">
+      <div className={`flex flex-wrap items-center gap-4 ${stage ? 'justify-center' : ''}`}>
         <button type="button" onClick={pick} className={link}>
-          <UploadIcon size={18} /> ជ្រើសឯកសារ
+          <UploadIcon size={18} /> {t('ជ្រើសឯកសារ', 'Choose a file')}
         </button>
         {videos.length > 0 && (
           <button type="button" aria-expanded={showSamples} onClick={() => setShowSamples((value) => !value)} className={link}>
-            <FilmGlyph /> វីដេអូគំរូ ({khmerNumber(videos.length)})
+            <FilmGlyph /> {t('វីដេអូគំរូ', 'Sample videos')} ({num(videos.length)})
           </button>
         )}
       </div>
       {showSamples && (
-        <div className="flex flex-wrap gap-1.5">
+        <div className={`flex flex-wrap gap-1.5 ${stage ? 'justify-center' : ''}`}>
           {videos.map((video) => (
             <button
               key={video.path}

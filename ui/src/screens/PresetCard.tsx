@@ -9,7 +9,17 @@ import { useT } from '../i18n'
 
 /** គំរូតូចនៃ preset នីមួយៗ — preset ដែល render បាន គូរ "TO GET STARTED" ដោយ style ពិតរបស់វា
  *  (font, ពណ៌, stroke, italic) ដូចរូប OpusClip; Box និង Neon (មិនទាន់ render បាន) នៅជារូបគំរូ. */
-export function PresetCard({ preset, on, onPick }: { preset: StylePreset; on: boolean; onPick: () => void }) {
+export function PresetCard({
+  preset,
+  on,
+  onPick,
+  surface = 'bg-raised',
+}: {
+  preset: StylePreset
+  on: boolean
+  onPick: () => void
+  surface?: string // ពណ៌ប្រអប់គំរូ: លើផ្ទាំង bg-raised ត្រូវស្រាលជាងផ្ទាំង
+}) {
   const t = useT()
   const real = preset.style && !preset.style.off ? { ...DEFAULT_STYLE, ...preset.style } : null
   const sample: Record<string, ReactNode> = {
@@ -40,7 +50,7 @@ export function PresetCard({ preset, on, onPick }: { preset: StylePreset; on: bo
       } ${focusRing}`}
     >
       <span
-        className={`flex h-21 items-center justify-center rounded-button border-2 bg-raised text-text-4 ${
+        className={`flex h-21 items-center justify-center rounded-button border-2 ${surface} text-text-4 ${
           on ? 'border-white' : 'border-transparent'
         }`}
       >

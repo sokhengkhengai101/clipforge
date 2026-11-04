@@ -1,24 +1,65 @@
-import { api, clipFileUrl, clipThumbUrl, reframeFileUrl, reframeThumbUrl, type Clip, type ExportResult, type ReframeResult } from '../api'
+import { api, clipFileUrl, clipThumbUrl, reframeFileUrl, reframeThumbUrl, sourceFrameUrl, sourceUrl, type Clip, type ExportResult, type ReframeResult, type Video } from '../api'
+import type { Cue } from '../vtt'
+import type { Aspect } from './aspects'
+
+/** បើក editor ពី Review: ទំហំដែលជ្រើសពីម៉ឺនុយ ឬផ្ទាំង Motion (Auto zoom). */
+export type EditorStart = { aspect?: Aspect; panel?: 'motion' }
 
 /** Review រក file និង export យ៉ាងដូចម្តេច — clips (Long to Short) ឬ **វីដេអូទាំងមូល** (Auto Subtitles,
  *  Auto Reframe). ទំព័រតែមួយ ដូច្នេះលទ្ធផលពីឧបករណ៍ទាំងបីបើកដូចគ្នា (អ្នកអភិវឌ្ឍស្នើ 2026-10-25).
  *  វីដេអូទាំងមូលគ្មានពិន្ទុ គ្មាន ♡/👎 គ្មាន "ហេតុអ្វី AI ជ្រើស" ហើយ "កែ Subtitles" ក្លាយជា "មើល shots". */
 export type ReviewMedia = {
   whole: boolean
-  fileUrl: (index: number, kind: string) => string
-  thumbUrl: (index: number) => string
-  exportItems: (indexes: number[], destination: string | undefined) => Promise<ExportResult>
+  fileUrl: (index: number, kind: string, aspect?: string) => string // aspect: ទំហំក្រៅពី 9:16
+  thumbUrl: (index: number, aspect?: string) => string
+  exportItems: (indexes: number[], destination: string | undefined, aspect?: string) => Promise<ExportResult>
   onShots?: (index: number) => void // whole: timeline shot និង layout (ទំព័រលទ្ធផល Reframe ចាស់)
+  cues?: () => Promise<Cue[]> // វីដេអូដើម: transcript មកពី /words ព្រោះគ្មាន `.vtt`
+  onEditClip?: (start?: EditorStart) => void // មាន render ហើយ: ប៊ូតុង Edit clip ក្រោយ Export (បើក editor)
+  onEdit?: (start?: EditorStart) => void // វីដេអូដើម: មិនទាន់ render អ្វី -> ប៊ូតុង Edit clip ជំនួស Export
+}
+
+/** Project ដែលបើកក្នុង Edit Video តែមិនទាន់ Export: Review បង្ហាញ**វីដេអូដើម** + transcript. */
+export function sourceMedia(project: string, video: Video, onEdit: (start?: EditorStart) => void): ReviewMedia {
+  return {
+    whole: true,
+    fileUrl: () => sourceUrl(video.path),
+    thumbUrl: () => sourceFrameUrl(video.path, 10),
+    exportItems: () => Promise.reject(new Error('មិនទាន់មានវីដេអូ render')),
+    cues: () =>
+      api.words(project).then((answer) =>
+        answer.items.flatMap((item) => ('word' in item ? [{ start: item.start, end: item.end, text: item.word.trim() }] : [])),
+      ),
+    onEdit,
+  }
+}
+
+export function sourceClip(seconds: number, title: string): Clip {
+  return {
+    index: 1,
+    start: 0,
+    end: seconds,
+    duration: seconds,
+    title,
+    hook: '',
+    type: 'source',
+    total: 0,
+    letter: '',
+    grades: null,
+    reason: '',
+    files: { mp4: 'source' },
+    rating: null,
+  }
 }
 
 /** clips ធម្មតារបស់ project មួយ (clips.json). */
 export function clipMedia(project: string): ReviewMedia {
   return {
     whole: false,
-    fileUrl: (index, kind) => clipFileUrl(project, index, kind),
-    thumbUrl: (index) => clipThumbUrl(project, index),
-    exportItems: (indexes, destination) =>
-      api.exportClips(project, { destination, clips: indexes, kinds: ['mp4', 'srt'] }),
+    fileUrl: (index, kind, aspect) => clipFileUrl(project, index, kind, aspect),
+    thumbUrl: (index, aspect) => clipThumbUrl(project, index, aspect),
+    exportItems: (indexes, destination, aspect) =>
+      api.exportClips(project, { destination, clips: indexes, kinds: ['mp4', 'srt'], aspect }),
   }
 }
 

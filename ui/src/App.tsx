@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { api, type Clip, type Env, type ExportResult, type Health, type JobOptions, type Project, type ReframeResult, type Video } from './api'
 import { PRESETS, type Preset } from './presets'
 import { PACKS, bestFit } from './packs'
@@ -10,7 +10,8 @@ import { HomeScreen } from './screens/HomeScreen'
 import { AppShell } from './screens/AppShell'
 import { loadRecentTools, rememberTool } from './screens/recentTools'
 import type { CatalogTab } from './screens/tools'
-import { ClipSettingsDialog } from './screens/ClipSettingsDialog'
+import { ClipPickDialog } from './screens/ClipPickDialog'
+import { ClipSettingsPage } from './screens/ClipSettingsPage'
 import { SettingsDialog } from './screens/SettingsDialog'
 import { useT } from './i18n'
 import { pickVideo } from './screens/pickFile'
@@ -19,9 +20,10 @@ import { useRunProgress, type Run, type RunTool } from './useRunProgress'
 import { ProcessingScreen } from './screens/ProcessingScreen'
 import { ReviewScreen } from './screens/ReviewScreen'
 import { EditorScreen } from './screens/EditorScreen'
-import { Illustration, Source } from './screens/VideoPicker'
-import { Dialog } from './kit/Dialog'
-import { wholeClips, wholeMedia } from './screens/reviewMedia'
+import { EditorStartDialog } from './screens/EditorStartDialog'
+import type { AspectRender } from './screens/ReviewScreen'
+import type { Aspect } from './screens/aspects'
+import { sourceClip, sourceMedia, wholeClips, wholeMedia, type EditorStart } from './screens/reviewMedia'
 import { reframeThumbUrl } from './api'
 import { NO_CHOICES, type ReviewChoices } from './screens/reviewChoices'
 import { SubtitlesScreen } from './screens/SubtitlesScreen'
@@ -59,6 +61,7 @@ export default function App() {
     // library = ទំព័រ Projects របស់ខ្ញុំ (កាត project); projects = Import (drop zone + Start)
     | 'home' | 'library' | 'job' | 'review' | 'subtitles' | 'exported' | 'reframing' | 'reframed' | 'models'
     | 'whole' // លទ្ធផលវីដេអូទាំងមូល (Auto Subtitles / Auto Reframe) លើទំព័រ Review
+    | 'source' // វីដេអូដើម + transcript លើទំព័រ Review (បើកក្នុង Edit Video តែមិនទាន់ Export)
     | 'editor' // Edit Video: transcript + preview + timeline
   >('home')
   const [homePage, setHomePage] = useState<'home' | 'tools'>('home')
@@ -73,6 +76,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   // dialog Settings (ប៊ូតុងស្តាំខាងលើ) — ខុសពី settingsOpen ដែលជា dialog Long to Short
   const [prefsOpen, setPrefsOpen] = useState(false)
+  const [prefsOnDefaults, setPrefsOnDefaults] = useState(false) // បើកលើ tab Default project (My templates → Edit)
   // Start ក្នុង dialog: ទៅទំព័រដើម ហើយ scroll ទៅ "Projects ថ្មីៗ" **ម្តង** (true = កំពុងរង់ចាំ scroll)
   const [focusRecent, setFocusRecent] = useState(false)
   const recentRef = useRef<HTMLElement>(null)
@@ -112,6 +116,8 @@ export default function App() {
   const [previewFor, setPreviewFor] = useState('')
   // AI Reframe (1F ជំហាន ៧): dialog លើ Home -> job --full -> លទ្ធផល
   const [reframeOpen, setReframeOpen] = useState(false)
+  // បើក Reframe ពី tab "មិនកាត់": ប្រើ preset caption និងចន្លោះពេលរបស់ទំព័រនោះ (ជាប់នឹងវីដេអូនោះ មិនឆ្លងទៅវីដេអូផ្សេង)
+  const [reframeFrom, setReframeFrom] = useState<{ video: string; timeframe?: string; seconds?: number } | null>(null)
   // Auto Subtitles: dialog លើទំព័រនេះ -> job --full ដូច Reframe (វីដេអូទាំងមូល + captions)
   const [subtitlesOpen, setSubtitlesOpen] = useState(false)
   // Edit Video: dialog ជ្រើសវីដេអូ (ជំហាន ១ ដូច Long to Short) មុនបើក editor
@@ -123,6 +129,7 @@ export default function App() {
   // លទ្ធផលវីដេអូទាំងមូលទាំងអស់របស់ project (full, full_16x9 ...) — បើកលើទំព័រ Review ដូច Long to Short
   const [wholeResults, setWholeResults] = useState<ReframeResult[]>([])
   const [wholeChoices, setWholeChoices] = useState<ReviewChoices>(NO_CHOICES)
+  const [sourceSeconds, setSourceSeconds] = useState(0) // Review វីដេអូដើម (មិនទាន់ Export)
   const [exportFrom, setExportFrom] = useState<'clips' | 'whole'>('clips')
   // export ចុងក្រោយ — screen Export រួចរាល់ បង្ហាញវា
   const [exportResult, setExportResult] = useState<ExportResult | null>(null)
@@ -148,6 +155,7 @@ export default function App() {
         const [h, v] = await Promise.all([api.health(), api.videos()])
         setHealth(h)
         setVideos(v)
+        setError('') // ភ្ជាប់បានហើយ: "waiting for the sidecar" មិនត្រូវនៅលើអេក្រង់ទៀតទេ
         loadProjects()
         // VRAM សម្រាប់ AI model "Auto" — មិនរង់ចាំវាទេ (90-140 ms, nvidia-smi)
         api.env().then(setEnv).catch(() => {})
@@ -170,6 +178,20 @@ export default function App() {
 
   // clip របស់ project ដែលជ្រើស — ទាញឡើងវិញពេល job ដល់ render ឬចប់
   const projectName = chosen ? stemOf(chosen.name) : ''
+  // useMemo: App render រាល់សារ job — media ថ្មីនឹងធ្វើឲ្យ Review សួរ transcript ម្តងទៀតរាល់ដង
+  const [editorStart, setEditorStart] = useState<EditorStart>({}) // ទំហំ / ផ្ទាំងដំបូងរបស់ editor (ពី Review)
+  const sourceReview = useMemo(() => (chosen ? sourceMedia(stemOf(chosen.name), chosen, (start) => {
+    setEditorStart(start ?? {})
+    setView('editor')
+  }) : null), [chosen])
+  // Edit clip លើ Review: editor ត្រូវការផ្លូវវីដេអូដើម (project ពី CLI ខ្លះគ្មាន)
+  const editClip = useCallback((start?: EditorStart) => {
+    setEditorStart(start ?? {})
+    setView('editor')
+  }, [])
+  const canEditClip = chosen?.path ? editClip : undefined
+  // ប៊ូតុងទំហំលើ Review: render តែ clip នោះ (វាស់: clip 42 s = 33 s), ប្រអប់ខ្មៅរាប់ថយក្រោយ
+  const [aspectJob, setAspectJob] = useState<AspectRender | null>(null)
   const previewAsked = previewFor !== '' && previewFor === projectName
   const rendered = job.status?.progress.done.includes('render') ?? false
   const state = job.status?.state
@@ -238,6 +260,7 @@ export default function App() {
    *  ហើយ drop លើ Review ឬ Models ត្រូវបោះចោលដោយគ្មានសញ្ញាអ្វីទាំងអស់. */
   const dropOver = useFileDrop((path) => {
     choosePath(path)
+    if (editorPick) return // dialog Edit Video បើក: វីដេអូនេះចូលទៅក្នុងវា មិនមែនបើក dialog ផ្សេងលើវាទេ
     // dialog បង្ហាញលើទំព័រដែលមាន sidebar; ពី Review/Processing ត្រឡប់ទៅទំព័រដើម
     setView((current) => (current === 'home' || current === 'library' || current === 'models' ? current : 'home'))
     setSettingsOpen(true)
@@ -246,6 +269,7 @@ export default function App() {
   /** sidebar: ទំព័រដើម/ឧបករណ៍ = Home; Projects = វិចិត្រសាល project; Settings = Settings.html
    *  (ទំព័រ Models ចាស់បើកពី Settings → "Models ដែលមានលើកុំព្យូទ័រនេះ"). */
   const navigate = useCallback((page: AppPage) => {
+    setSettingsOpen(false) // ទំព័រ Long to Short ជំនួសមាតិកា: ចុច sidebar ត្រូវចេញពីវា
     if (page === 'home' || page === 'tools') {
       setHomePage(page)
       setView('home')
@@ -294,6 +318,13 @@ export default function App() {
     if (picked !== 'browser') choosePath(picked) // ... ហើយមានវីដេអូរួច = ជំហាន ២
   }, [openTool, choosePath])
 
+  /** "Change video" បើកផ្ទាំងជ្រើស file ភ្លាម. បោះបង់ = នៅវីដេអូចាស់; browser គ្មានផ្ទាំង = dialog ជ្រើសវីដេអូ. */
+  const changeVideo = useCallback(async () => {
+    const picked = await pickVideo().catch(() => 'browser' as const)
+    if (picked === 'browser') setChosen(null)
+    else if (picked) choosePath(picked)
+  }, [choosePath])
+
   // reframe ដែលធ្លាប់ធ្វើលើវីដេអូដែលជ្រើស — dialog បង្ហាញវា ("ធ្លាប់ reframe: 9:16 · ថ្ងៃនេះ")
   useEffect(() => {
     if (!reframeOpen || !projectName) return
@@ -307,7 +338,7 @@ export default function App() {
   /** កាតវឌ្ឍនភាពក្នុង Projects ថ្មីៗ (% + ETA) — ឧបករណ៍ទាំងបីប្រើរួមគ្នា. ប្រវែងវីដេអូមកពី /probe
    *  ក្រោយ Start (មិនទាន់ដឹង = ប៉ាន់ ១០ នាទី). */
   const beginRun = useCallback(
-    (tool: RunTool, full: boolean, clipCount: number) => {
+    (tool: RunTool, full: boolean, clipCount: number, aiSeconds?: number) => {
       if (!chosen) return
       setToast(null)
       const video = chosen.path
@@ -323,6 +354,7 @@ export default function App() {
           llm: String(pack.options.model ?? ''),
           clips: clipCount,
           full,
+          aiSeconds,
         },
       })
       api
@@ -340,14 +372,14 @@ export default function App() {
   /** ចាប់ផ្តើម reframe: `--full` + aspect + layout (+ `--no-captions`) — គ្មាន preset / max_clips. */
   const startReframe = useCallback(
     // `extra`: flag បន្ថែមពី Auto Subtitles (style caption, --language)
-    (settings: ReframeSettings, extra: Omit<JobOptions, 'video'> = {}, tool: RunTool = 'reframe') => {
+    (settings: ReframeSettings, extra: Omit<JobOptions, 'video'> = {}, tool: RunTool = 'reframe', rangeSeconds?: number) => {
       if (!chosen?.path) return
       setReframeSettings(settings)
       setReframeOpen(false)
       setSubtitlesOpen(false)
       setSilenceOpen(false)
       // ដូច Long to Short: នៅលើទំព័រដើម ហើយកាត Projects ថ្មីៗ បង្ហាញ % + ETA (មិនទៅ screen ដំណើរការ)
-      beginRun(tool, true, 1)
+      beginRun(tool, true, 1, rangeSeconds)
       navigate('home')
       setFocusRecent(true)
       job.start({
@@ -395,6 +427,12 @@ export default function App() {
         setView(run.tool === 'clips' ? 'job' : 'reframing')
       else if (project.clips > 0) setView('review')
       else if (project.reframes > 0) void showReframeResult(undefined, project.name)
+      // បើកក្នុង Edit Video តែមិនទាន់ Export: job transcribe ចប់ ហើយមាន transcript (`seconds`) -> Review
+      // បង្ហាញវីដេអូដើម + transcript. job clips ដែលឈប់កណ្តាលទី នៅតែទៅ dialog ដើម្បីចាប់ផ្តើមឡើងវិញ
+      else if (project.video && project.seconds != null && project.last_state === 'done') {
+        setSourceSeconds(project.seconds)
+        setView('source')
+      }
       else setSettingsOpen(true) // មិនទាន់មានអ្វី -> dialog ជំហាន ២ ជាមួយវីដេអូនោះ
     },
     [showReframeResult, run, job.running, job.starting],
@@ -416,6 +454,10 @@ export default function App() {
       setChosen(chosenOf(project))
       if (action === 'review') setView('review')
       else if (action === 'reframe-result') void showReframeResult(undefined, project.name)
+      else if (action === 'edit') {
+        setEditorStart({})
+        setView('editor')
+      }
       else if (action === 'new-clips') setSettingsOpen(true)
       else setReframeOpen(true) // dialog Reframe លើទំព័រនេះ ជាមួយវីដេអូនោះជ្រើសរួច
     },
@@ -436,30 +478,57 @@ export default function App() {
       onChoose={setChosen}
       onChoosePath={choosePath}
       onShowPrevious={(result) => void showReframeResult(result.folder)}
-      onStart={startReframe}
-      onClose={() => setReframeOpen(false)}
+      onStart={(settings) => {
+        const from = reframeFrom?.video === chosen?.path ? reframeFrom : null
+        setReframeFrom(null)
+        startReframe(
+          settings,
+          {
+            ...(from?.timeframe ? { timeframe: from.timeframe } : {}),
+            ...(from && settings.captions ? styleOptions(captionStyle) : {}),
+          },
+          'reframe',
+          from?.seconds,
+        )
+      }}
+      onClose={() => {
+        setReframeOpen(false)
+        setReframeFrom(null)
+      }}
     />
   )
 
   /** Auto Subtitles -> `--full`: ទំហំដូចវីដេអូ = `--layout center` (frame ទាំងមូល គ្មានកាត់),
    *  aspect ផ្សេង = layout ទាំងអស់ (AI reframe), + style caption + `--language`. */
-  /** Edit Video ជំហាន ១: ជ្រើសវីដេអូ (path, ជ្រើសឯកសារ, វីដេអូគំរូ, drop) -> editor ពេញ window. */
-  const openEditor = (video: Video) => {
-    setChosen(video)
-    setEditorPick(false)
-    setView('editor')
-  }
+  /** Edit Video: dialog ជ្រើសវីដេអូ -> transcribe -> editor ពេញ window. */
+  const startEditorTranscribe = useCallback(() => {
+    if (chosen) void job.start({ video: chosen.path, ...pack.options, transcribe_only: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- job ថ្មីរាល់ render; job.start មិនប្រែ
+  }, [chosen, pack, job.start])
   const editorDialog = editorPick && (
-    <Dialog width={640} onClose={() => setEditorPick(false)} title="Edit Video">
-      <p className="-mt-2.5 type-body-lg text-text-3">កែវីដេអូតាម transcript: មើលពាក្យ និង pause, ចុចពាក្យដើម្បីលោតទៅពេលនោះ។</p>
-      <Illustration variant="subtitles" video={[...videos].sort((a, b) => b.mb - a.mb)[0] ?? null} />
-      <Source
-        videos={videos}
-        dropOver={dropOver}
-        onChoose={openEditor}
-        onChoosePath={(path) => openEditor({ name: path.split(/[\\/]/).pop() ?? path, path, mb: 0 })}
-      />
-    </Dialog>
+    <EditorStartDialog
+      video={chosen}
+      videos={videos}
+      dropOver={dropOver}
+      job={job.status}
+      starting={job.starting}
+      jobError={job.error}
+      device={health?.device ?? 'cuda'}
+      whisperModel={String(pack.options.whisper_model ?? 'medium')}
+      onPick={setChosen}
+      onStart={startEditorTranscribe}
+      onStop={() => {
+        void job.cancel()
+        setChosen(null)
+        setEditorPick(false)
+      }}
+      onOpen={() => {
+        setEditorPick(false)
+        setEditorStart({})
+        setView('editor')
+      }}
+      onClose={() => setEditorPick(false)}
+    />
   )
 
   // job --transcribe-only របស់វីដេអូដែលជ្រើស (dialog លុបភាពស្ងាត់ បង្ហាញវឌ្ឍនភាពរបស់វា)
@@ -534,6 +603,22 @@ export default function App() {
     loadProjects()
   }
 
+  const startAspect = (index: number, aspect: Aspect) => {
+    if (!chosen) return
+    const clip = clips.find((item) => item.index === index)
+    setRun(null) // job នេះមិនមែនកាត Projects ថ្មីៗ ហើយមិនមែន toast "Clips រួចរាល់"
+    setAspectJob({ index, aspect, startedAt: Date.now(), seconds: Math.round(14 + 0.45 * (clip?.duration ?? 30)) })
+    void job.start({ video: chosen.path, aspect, only_clip: index, ...pack.options, ...styleOptions(captionStyle) })
+  }
+  // job ចប់ (clips ថ្មីមកពី effect ខាងលើ): បរាជ័យ = toast
+  // done: រង់ចាំ clips ថ្មីសិន បើមិនដូច្នេះ ប្រអប់លោតទៅ 9:16 មួយភ្លែត មុនប្តូរទៅទំហំថ្មី
+  const aspectDone = job.status?.state === 'done'
+  const aspectArrived = clips.find((clip) => clip.index === aspectJob?.index)?.aspects?.[aspectJob?.aspect ?? '9:16']
+  if (aspectJob && !job.starting && !job.running && (!aspectDone || aspectArrived)) {
+    setAspectJob(null)
+    if (!aspectDone) setToast({ kind: 'error', name: projectName, text: job.status?.error || job.error || undefined })
+  }
+
   // % + ETA ប៉ាន់ស្មាន (eta.ts) របស់ job ដែលចាប់ផ្តើមពី dialog
   const estimate = useRunProgress(run, job.status)
   const runActive = Boolean(run && (job.starting || (job.running && job.status?.video === run.video)))
@@ -595,6 +680,7 @@ export default function App() {
         <button
           type="button"
           onClick={() => {
+            setSettingsOpen(false)
             // Subtitles / Reframe -> ទំព័រលទ្ធផល (folder របស់ job នេះ); Long to Short -> Review
             if (toast.tool && toast.tool !== 'clips') {
               const project = projects.find((item) => item.name === toast.name)
@@ -664,6 +750,7 @@ export default function App() {
 
   const prefsDialog = prefsOpen && (
     <SettingsDialog
+      initialTab={prefsOnDefaults ? 'defaults' : 'general'}
       health={health}
       env={env}
       pack={pack}
@@ -684,13 +771,33 @@ export default function App() {
         if (at) setSavedAt(at)
       }}
       onOpenModels={() => setView('models')}
-      onClose={() => setPrefsOpen(false)}
+      onClose={() => {
+        setPrefsOpen(false)
+        setPrefsOnDefaults(false)
+      }}
     />
   )
 
-  const settingsDialog = settingsOpen && (
-    <ClipSettingsDialog
+  // Long to Short: ជំហាន ១ = dialog ជ្រើសវីដេអូ; ជ្រើសរួច = ទំព័រការកំណត់ក្នុងផ្ទៃមាតិកា
+  const pickDialog = settingsOpen && !chosen && (
+    <ClipPickDialog
       videos={videos}
+      dropOver={dropOver}
+      error={error || job.error}
+      connected={health !== null}
+      onChoose={setChosen}
+      onChoosePath={choosePath}
+      onRetry={() => {
+        setError('')
+        void connect()
+      }}
+      onClose={() => setSettingsOpen(false)}
+    />
+  )
+
+  const settingsPage = settingsOpen && chosen && (
+    <ClipSettingsPage
+      key={chosen.path} // វីដេអូថ្មី = ចាប់ផ្តើមថ្មី: timeframe និងប្រវែងរបស់វីដេអូចាស់មិននៅជាប់
       chosen={chosen}
       preset={preset}
       pack={pack}
@@ -711,24 +818,37 @@ export default function App() {
       connected={health !== null}
       busy={job.running}
       clips={clips.filter((clip) => clip.files.mp4).length}
-      dropOver={dropOver}
       maxClips={maxClips}
       onMaxClips={setMaxClips}
-      onChoose={setChosen}
-      onChoosePath={choosePath}
-      onClear={() => setChosen(null)}
+      onClear={() => void changeVideo()}
       // style caption ពី Quick presets ដុតចូល clips ពេល render (flag ដូច Subtitles)
-      onStart={() => {
+      onStart={(timeframe, aiSeconds, language, aspect) => {
         if (!chosen) return
         setSettingsOpen(false)
-        beginRun('clips', false, maxClips)
+        changeReview({ sizes: {}, defaultSize: aspect === '9:16' ? undefined : aspect }) // Review បើកលើទំហំនេះ
+        beginRun('clips', false, maxClips, aiSeconds)
         // stay = true: មិនទៅ Processing — អ្នកនៅលើទំព័រនេះ ហើយកាតបង្ហាញ % + ETA
-        startWith({ max_clips: maxClips, ...styleOptions(captionStyle) }, `${khmerNumber(maxClips)} clips · ${preset.title}`, true)
+        startWith(
+          {
+            max_clips: maxClips,
+            ...(timeframe ? { timeframe } : {}),
+            ...(language === 'auto' ? {} : { language }),
+            ...(aspect === '9:16' ? {} : { also_aspect: aspect }),
+            ...styleOptions(captionStyle),
+          },
+          `${khmerNumber(maxClips)} clips · ${preset.title}`,
+          true,
+        )
         // project ថ្មីលេចក្នុង Projects ថ្មីៗ លើទំព័រដើម — នាំអ្នកទៅទីនោះ (ទោះចាប់ផ្តើមពី My projects)
         navigate('home')
         setFocusRecent(true)
       }}
-      onReframe={() => {
+      onEditTemplate={() => {
+        setPrefsOnDefaults(true)
+        setPrefsOpen(true)
+      }}
+      onReframe={(range) => {
+        setReframeFrom(chosen ? { video: chosen.path, ...range } : null)
         setSettingsOpen(false) // dialog តែមួយម្តង: Reframe ជំនួស
         setReframeOpen(true)
       }}
@@ -763,13 +883,14 @@ export default function App() {
           navigate('tools')
         }}
       >
-        {content}
+        {/* Long to Short ជាទំព័រក្នុងផ្ទៃមាតិកា: sidebar នៅដដែល ប្តូរតែមាតិកា */}
+        {settingsPage || content}
       </AppShell>
       {reframeDialog}
       {subtitlesDialog}
       {editorDialog}
       {silenceDialog}
-      {settingsDialog}
+      {pickDialog}
       {prefsDialog}
       {toastView}
     </div>
@@ -821,20 +942,22 @@ export default function App() {
       <div className="flex h-screen bg-bg">
         <EditorScreen
           key={chosen.path}
+          initialAspect={editorStart.aspect}
+          initialPanel={editorStart.panel}
           project={projectName}
           video={chosen}
           initialStyle={captionStyle}
           job={mine}
           busy={(job.running || job.starting) && !mine}
           onTranscribe={() => job.start({ video: chosen.path, ...pack.options, transcribe_only: true })}
-          onExport={(settings, style, cuts, transition, look, motion, inserts, order) =>
+          onExport={(settings, style, clips, transition, look, motion) =>
             startReframe(
               settings,
               {
                 ...styleOptions(style),
                 ...(style.off ? { no_captions: true } : {}),
                 // គ្មានការកាត់ និងគ្មានផ្នែកបន្ថែម = render វីដេអូទាំងមូលធម្មតា (folder full*); មាន = full_edit*
-                ...(cuts.length || inserts.length || order.length ? { cuts, transition, inserts, order } : {}),
+                ...(clips ? { timeline: clips, transition } : {}),
                 look, // Background / Tracker -> --fit-* / --no-tracking (លំនាំដើមមិនផ្ញើ flag)
                 motion, // Motion -> --motion-* / --caption-animation
               },
@@ -846,17 +969,39 @@ export default function App() {
       </div>
     )
   }
+  if (view === 'source' && sourceReview) {
+    return shell(
+      'projects',
+      <ReviewScreen
+        key={`${projectName}:source`}
+        project={projectName}
+        fileName={chosen?.name}
+        clips={[sourceClip(sourceSeconds, projectName)]}
+        media={sourceReview}
+        busy={job.running}
+        choices={wholeChoices}
+        onChoices={(change) => setWholeChoices((current) => ({ ...current, ...change }))}
+        onSubtitles={() => {}}
+        onExported={() => {}}
+        onMore={() => {}}
+        onRate={async () => {}}
+        onHome={() => navigate('projects')}
+      />,
+    )
+  }
   if (view === 'whole' && wholeResults.length > 0) {
     return shell(
       'projects',
       <ReviewScreen
         key={`${projectName}:whole`}
         project={projectName}
+        fileName={chosen?.name}
         clips={wholeClips(wholeResults)}
         media={wholeMedia(projectName, wholeResults, (result) => {
           setReframeResult(result) // "មើល shots": timeline shot និង layout
           setView('reframed')
         })}
+        onEditClip={canEditClip}
         busy={job.running}
         choices={wholeChoices}
         onChoices={(change) => setWholeChoices((current) => ({ ...current, ...change }))}
@@ -991,7 +1136,11 @@ export default function App() {
         <ReviewScreen
           key={projectName}
           project={projectName}
+          fileName={chosen?.name}
           clips={clips}
+          onEditClip={canEditClip}
+          aspectJob={aspectJob}
+          onRenderAspect={chosen?.path ? startAspect : undefined}
           busy={job.running}
           choices={reviewChoices}
           onChoices={changeReview}
@@ -1009,6 +1158,11 @@ export default function App() {
             startWith({ max_clips: count }, `${khmerNumber(count)} clips · ${preset.title}`)
           }}
           // ♡ / 👎: sidecar រក្សាទុក រួចទាញ clips ម្តងទៀត (rating មកជាមួយ clip នីមួយៗ)
+          onDuplicate={async (index) => {
+            const copy = await api.duplicateClip(projectName, index)
+            setClips(await api.clips(projectName))
+            return copy.index
+          }}
           onRate={async (index, rating) => {
             await api.rateClip(projectName, index, rating)
             setClips(await api.clips(projectName))

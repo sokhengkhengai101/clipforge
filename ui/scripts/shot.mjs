@@ -78,14 +78,14 @@ await page.waitForTimeout(800)
 await noJobStarted('clicking a tool card')
 const settingsState = () =>
   page.evaluate(() => {
-    const dialog = document.querySelector('[role="dialog"]')
+    const dialog = document.querySelector('[data-settings-page]')
     if (!dialog) return { dialog: false }
     const select = (label) =>
       [...dialog.querySelectorAll('label')].find((l) => l.innerText.startsWith(label))?.querySelector('select')
     const start = [...dialog.querySelectorAll('button')].find((b) => b.innerText.includes('ចាប់ផ្ដើមបង្កើត Clips'))
     return {
       dialog: true,
-      tool: dialog.querySelector('h2')?.innerText.replace(/\s+/g, ' ') ?? null,
+      tool: dialog.querySelector('h1')?.innerText.replace(/\s+/g, ' ') ?? null,
       step: dialog.querySelector('#video-path') ? 1 : 2, // ជំហាន ១ = ប្រអប់ path
       clips: select('ចំនួន clips')?.value ?? null,
       model: select('AI model')?.selectedOptions[0]?.text ?? null,
@@ -97,8 +97,8 @@ await page.screenshot({ path: `${outDir}/settings-step1.png` })
 console.log('settings (nothing chosen):', JSON.stringify(await settingsState()))
 // វីដេអូគំរូ -> ជំហាន ២, Start អាចចុចបាន (យើងមិនចុចវាទេ)
 // វីដេអូគំរូនៅពីក្រោយតំណ "វីដេអូគំរូ" (ជំហាន ១ ដូច OpusClip)
-await page.getByRole('dialog').getByRole('button', { name: /^វីដេអូគំរូ/ }).click()
-await page.getByRole('dialog').getByRole('button', { name: 'Taylor_Tomlinson.mp4' }).click()
+await page.locator('[data-settings-page]').getByRole('button', { name: /^វីដេអូគំរូ/ }).click()
+await page.locator('[data-settings-page]').getByRole('button', { name: 'Taylor_Tomlinson.mp4' }).click()
 await page.waitForTimeout(1200)
 await noJobStarted('choosing a sample')
 console.log('settings (sample chosen):', JSON.stringify(await settingsState()))

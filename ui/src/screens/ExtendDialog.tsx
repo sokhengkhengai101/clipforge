@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { sourceUrl, type EditorItem } from '../api'
-import { isCut, removedSeconds, subtract, type Cut } from '../cutList'
+import { isCut, type Cut } from '../cutList'
 import { Dialog } from '../kit/Dialog'
 import { focusRing } from '../kit/styles'
 import { useT } from '../i18n'
@@ -75,7 +75,7 @@ export function ExtendDialog({
   }
 
   // វិនាទីដែលកាត់ឥឡូវក្នុងផ្នែកនេះ = អ្វីដែលកាត់សរុប − អ្វីដែលនៅកាត់ក្រោយ Add
-  const comesBack = range ? removedSeconds(cuts, duration) - removedSeconds(subtract(cuts, range), duration) : 0
+  const comesBack = range ? cuts.reduce((sum, [a, b]) => sum + Math.max(0, Math.min(b, range[1]) - Math.max(a, range[0])), 0) : 0
   const length = range ? range[1] - range[0] : 0
   // ដាក់នៅណា: null = ស្វ័យប្រវត្តិ (កាត់ = កន្លែងដើម, មិនកាត់ = hook នៅដើម); "កន្លែងដើម" លើផ្នែកមិនកាត់ = hook
   const [position, setPosition] = useState<Position | null>(null)

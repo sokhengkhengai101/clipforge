@@ -11,6 +11,7 @@ export function MenuButton({
   wide = false,
   width,
   up = false,
+  flipBelow,
   children,
 }: {
   label: string
@@ -19,9 +20,11 @@ export function MenuButton({
   wide?: boolean
   width?: number // px — ផ្ទាំងធំ (Background) ដែលមានរបាររំកិល
   up?: boolean // បើកឡើងលើប៊ូតុង (drop-up) ជំនួសចុះក្រោម
+  flipBelow?: number // px ត្រូវការក្រោមប៊ូតុង: មិនគ្រប់ពេលបើក -> បើកឡើងលើ (footer មិនបាំងបញ្ជី)
   children: (close: () => void) => ReactNode
 }) {
   const [open, setOpen] = useState(false)
+  const [flipped, setFlipped] = useState(false)
   const box = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (!open) return
@@ -47,7 +50,13 @@ export function MenuButton({
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
+        onClick={(event) => {
+          if (flipBelow) {
+            const rect = event.currentTarget.getBoundingClientRect()
+            setFlipped(window.innerHeight - rect.bottom < flipBelow && rect.top >= flipBelow)
+          }
+          setOpen((value) => !value)
+        }}
         className={`inline-flex min-h-9 cursor-pointer items-center gap-1.5 rounded-field border-0 bg-transparent px-2 type-body font-bold text-text hover:bg-raised ${focusRing}`}
       >
         {icon}
@@ -60,7 +69,7 @@ export function MenuButton({
         <div
           role="menu"
           aria-label={menuLabel}
-          className={`absolute left-0 z-20 ${up ? 'bottom-full mb-1' : 'top-full mt-1'} rounded-card border border-line bg-chrome p-2 shadow-[0_16px_40px_rgba(0,0,0,0.5)] ${
+          className={`absolute left-0 z-20 ${up || flipped ? 'bottom-full mb-1' : 'top-full mt-1'} rounded-card border border-line bg-chrome p-2 shadow-[0_16px_40px_rgba(0,0,0,0.5)] ${
             width ? '' : wide ? 'w-[400px]' : 'w-[170px]'
           }`}
           style={width ? { width } : undefined}
@@ -75,12 +84,14 @@ export function MenuButton({
 export function MenuItem({
   checked,
   disabled = false,
+  plainTick = false,
   title,
   onClick,
   children,
 }: {
   checked: boolean
   disabled?: boolean
+  plainTick?: boolean // ✓ ពណ៌អក្សរ ជំនួសពណ៌មាស
   title?: string
   onClick?: () => void
   children: ReactNode
@@ -95,7 +106,7 @@ export function MenuItem({
       onClick={onClick}
       className={`flex min-h-9 w-full cursor-pointer items-center gap-2 rounded-field border-0 bg-transparent px-3 text-left type-body font-semibold text-text hover:bg-raised disabled:cursor-default disabled:text-text-4 disabled:hover:bg-transparent ${focusRing}`}
     >
-      <span className="w-4 shrink-0 text-gold">{checked ? '✓' : ''}</span>
+      <span className={`w-4 shrink-0 ${plainTick ? 'text-text' : 'text-gold'}`}>{checked ? '✓' : ''}</span>
       {children}
     </button>
   )

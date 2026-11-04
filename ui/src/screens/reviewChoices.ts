@@ -1,3 +1,5 @@
+import type { Aspect } from './aspects'
+
 /** តម្រៀបបញ្ជី clip លើ Review: លំដាប់ AI / ពិន្ទុ / ពេលវេលា. */
 export type Order = 'rank' | 'score' | 'time'
 
@@ -13,6 +15,8 @@ export type ReviewChoices = {
   selected: number // clip ដែលកំពុងមើល (លេខ rank)
   unpicked: number[] // clip ដែលអ្នកដក checkbox
   destination: string // '' = កន្លែងលំនាំដើមពី sidecar
+  sizes: Record<number, Aspect> // ទំហំដែលបង្ហាញរបស់ clip នីមួយៗ (គ្មាន = defaultSize)
+  defaultSize?: Aspect // ទំហំដែលជ្រើសលើ Long to Short (គ្មាន = 9:16)
 }
 
-export const NO_CHOICES: ReviewChoices = { order: 'rank', filter: 'all', selected: 1, unpicked: [], destination: '' }
+export const NO_CHOICES: ReviewChoices = { order: 'rank', filter: 'all', selected: 1, unpicked: [], destination: '', sizes: {} }
