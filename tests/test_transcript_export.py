@@ -74,3 +74,9 @@ def test_transcript_follows_the_block_order(tmp_path):
     # ប្លុកទីពីរ ("That's the difference.") មកមុន
     text = editor.transcript_text(tmp_path, "txt", [], [], [[4.0, 10.0], [0.0, 4.0]])
     assert text.index("That's") < text.index("Coming")
+
+
+def test_transcript_follows_a_clip_list(tmp_path):
+    write_transcript(tmp_path)
+    text = editor.transcript_text(tmp_path, "txt", clips=[[4.0, 8.0], [0.0, 1.0]])
+    assert text.index("That's") < text.index("Coming") and "here" not in text

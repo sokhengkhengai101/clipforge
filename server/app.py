@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 
 import config
 from server import db, editor, env, export, fonts, manage, media, quiet
-from server.clips import (REFRAME_FOLDER, REFRAME_KINDS, clips_of_project, preview_cues, project_facts,
+from server.clips import (REFRAME_FOLDER, REFRAME_KINDS, clips_of_project, duplicate_clip, preview_cues, project_facts,
                           reframe_outputs, transcript_preview, whole_cues)
 from server.jobs import PROJECT_ROOT, JobRunner
 
@@ -58,8 +58,11 @@ class JobRequest(BaseModel):
 
     video: str
     max_clips: int | None = None
+    only_clip: int | None = None        # render តែ clip នេះ (ប៊ូតុងទំហំលើ Review)
+    timeframe: str | None = None        # "start,end" ឬ "all": ចន្លោះដែល AI រក clip
     layout: str | None = None
     aspect: str | None = None
+    also_aspect: str | None = None      # Long to Short: render 9:16 រួចទំហំនេះទៀត
     caption_words: int | None = None
     caption_color: str | None = None
     caption_size: int | None = None     # % (70-120) — screen Subtitles
@@ -77,6 +80,7 @@ class JobRequest(BaseModel):
     cuts: list[list[float]] | None = None  # Edit Video: ចន្លោះដែលត្រូវកាត់ [[start, end], ...]
     transition: str | None = None       # punch / hard (នៅកន្លែងកាត់)
     inserts: list[dict] | None = Field(default=None, max_length=200)  # "+ Extend a clip": [{start, end, at}]
+    timeline: list[list[float]] | None = Field(default=None, max_length=2001)  # បញ្ជី clip [[in, out], ...] (ជំនួស cuts / order / inserts)
     order: list[list[float]] | None = Field(default=None, max_length=2001)  # ប្លុកតាមលំដាប់ដែលអូសលើ timeline
     look: dict | None = None            # Edit Video: Background / Tracker (manage.clean_look)
     motion: dict | None = None          # Edit Video: Motion (manage.clean_motion)
@@ -146,9 +150,22 @@ def videos() -> list[dict]:
 @app.post("/jobs")
 def start_job(request: JobRequest) -> dict:
     options = request.model_dump(exclude={"video"}, exclude_none=True)
+    timeline = options.pop("timeline", None)  # មិនមែន flag: បញ្ជី clip -> cuts.json
+    if timeline is not None:
+        folder = PROJECT_ROOT / "output" / Path(request.video).stem
+        if not options.get("full") or not timeline:
+            raise HTTPException(status_code=400, detail="timeline ត្រូវការ full និងយ៉ាងតិច ១ clip")
+        cut_file = folder / "edit" / "cuts.json"
+        cut_file.parent.mkdir(parents=True, exist_ok=True)      # មុន project.json (folder អាចមិនទាន់មាន)
+        try:
+            saved = manage.write_timeline(folder, timeline, options.get("transition") or "punch")
+        except (ValueError, TypeError) as error:
+            raise HTTPException(status_code=400, detail=str(error))
+        cut_file.write_text(json.dumps({"clips": saved["clips"]}), encoding="utf-8")
+        options["cuts"] = str(cut_file)   # output_folder() មើល `cuts` -> full_edit*
     inserts = options.pop("inserts", None)   # មិនមែន flag: ចូល cuts.json ជាមួយ cuts
     order = options.pop("order", None)       # ដូចគ្នា
-    if "cuts" in options or inserts or order:
+    if timeline is None and ("cuts" in options or inserts or order):
         # cut list + inserts + order ជា JSON file សម្រាប់ `--cuts` (ក្នុង output/<name>/edit/) + រក្សាទុកសម្រាប់ editor
         folder = PROJECT_ROOT / "output" / Path(request.video).stem
         cuts = options.get("cuts") or []
@@ -384,12 +401,12 @@ def clip_cues(name: str, index: int, words: int = 5, size: int = 100,
 
 
 @app.get("/projects/{name}/clips/{index}/file")
-def clip_file(name: str, index: int, kind: str = "mp4") -> FileResponse:
+def clip_file(name: str, index: int, kind: str = "mp4", aspect: str | None = None) -> FileResponse:
     """បម្រើ `.mp4` (ឬ subtitle) របស់ clip មួយ ឲ្យ `<video>` ក្នុង browser ចាក់បាន.
 
     `FileResponse` គាំទ្រ HTTP Range ដូច្នេះការរំកិល (seek) ដំណើរការ.
     """
-    found = media.clip_file(_clips_of(name), index, kind)
+    found = media.clip_file(_clips_of(name), index, kind, aspect)
     if found is None:
         raise HTTPException(status_code=404, detail=f"គ្មាន {kind} សម្រាប់ clip {index}")
     path, media_type = found
@@ -397,9 +414,9 @@ def clip_file(name: str, index: int, kind: str = "mp4") -> FileResponse:
 
 
 @app.get("/projects/{name}/clips/{index}/thumb")
-def clip_thumb(name: str, index: int) -> FileResponse:
+def clip_thumb(name: str, index: int, aspect: str | None = None) -> FileResponse:
     """រូបតូចមួយពី clip — FFmpeg ដកវាលើកដំបូង រួចរក្សាទុកជា .jpg."""
-    found = media.clip_file(_clips_of(name), index, "mp4")
+    found = media.clip_file(_clips_of(name), index, "mp4", aspect)
     if found is None:
         raise HTTPException(status_code=404, detail=f"គ្មាន clip {index}")
     image = media.thumbnail(found[0])
@@ -451,12 +468,24 @@ def rate_clip(name: str, index: int, request: RatingRequest) -> dict:
     return {"index": index, "rating": request.rating}
 
 
+@app.post("/projects/{name}/clips/{index}/duplicate")
+def duplicate_project_clip(name: str, index: int) -> dict:
+    """ប៊ូតុង Duplicate លើ Review. មិនរត់ពេល job រត់ ព្រោះ job កំពុងអាន clips.json និង file ទាំងនេះ."""
+    if runner.active() is not None:
+        raise HTTPException(status_code=409, detail="មាន job កំពុងរត់ — រង់ចាំវាចប់")
+    try:
+        return {"index": duplicate_clip(_project_folder(name), index)}
+    except (ValueError, KeyError, OSError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
 class ExportRequest(BaseModel):
     """អ្វីដែល UI ផ្ញើពេលចុច Export."""
 
     destination: str | None = None      # None = កន្លែងលំនាំដើម
     clips: list[int] | None = None      # None = clip ទាំងអស់
     kinds: list[str] = ["mp4"]          # mp4 និង/ឬ srt, vtt, ass
+    aspect: str | None = None           # ទំហំក្រៅពី 9:16 ដែលកំពុងបង្ហាញលើ Review
 
 
 class RevealRequest(BaseModel):
@@ -521,6 +550,7 @@ class TranscriptExportRequest(BaseModel):
     format: str = "txt"  # txt | srt
     cuts: list[list[float]] = Field(default_factory=list, max_length=20000)  # ការលុបរបស់ editor (ឥឡូវ)
     inserts: list[dict] = Field(default_factory=list, max_length=200)  # ផ្នែកដែលបន្ថែម (ដូច Export)
+    clips: list[list[float]] | None = Field(default=None, max_length=2001)  # បញ្ជី clip (ជំនួស cuts / inserts / order)
     order: list[list[float]] = Field(default_factory=list, max_length=2001)  # លំដាប់ប្លុក (ដូច Export)
 
 
@@ -535,7 +565,8 @@ def export_transcript(name: str, request: TranscriptExportRequest) -> dict:
         raise HTTPException(status_code=400, detail="ចន្លោះនីមួយៗត្រូវជា [start, end]")
     try:
         text = editor.transcript_text(folder, request.format, request.cuts, manage.clean_inserts(request.inserts),
-                                      manage.clean_order(request.order))
+                                      manage.clean_order(request.order),
+                                      None if request.clips is None else manage.clean_clips(request.clips))
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error))
     if text is None:
@@ -554,6 +585,32 @@ class CutsRequest(BaseModel):
     splits: list[float] | None = None  # ចំណុច Split លើ timeline; None = ទុកដែលមានស្រាប់
     inserts: list[dict] | None = Field(default=None, max_length=200)  # ផ្នែកដែលបន្ថែម; None = ទុកដែលមាន
     order: list[list[float]] | None = Field(default=None, max_length=2001)  # លំដាប់ប្លុក; None = ទុកដែលមាន
+
+
+class TimelineRequest(BaseModel):
+    clips: list[list[float]] = Field(default_factory=list, max_length=2001)
+    transition: str = "punch"
+
+
+@app.get("/projects/{name}/timeline")
+def project_timeline(name: str) -> dict:
+    """បញ្ជី clip របស់ editor; project ចាស់បម្លែងពេលអាន (មិនសរសេរ file ទេ)."""
+    from pipeline.transcribe import load_transcript
+    folder = _project_folder(name)
+    transcript = load_transcript(folder / "transcript.json")
+    return {"name": name, **manage.read_timeline(folder, transcript.duration if transcript else None)}
+
+
+@app.put("/projects/{name}/timeline")
+def save_project_timeline(name: str, request: TimelineRequest) -> dict:
+    """រក្សាទុកបញ្ជី clip ក្នុង project.json (មិនកាត់វីដេអូទេ — Export ទើបកាត់)."""
+    folder = _project_folder(name)
+    if not folder.is_dir():
+        raise HTTPException(status_code=404, detail="រកមិនឃើញ project")
+    try:
+        return {"name": name, **manage.write_timeline(folder, request.clips, request.transition)}
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
 
 
 @app.get("/projects/{name}/cuts")
@@ -850,7 +907,11 @@ def export_preview(name: str, kinds: str = "mp4") -> dict:
 def export_project(name: str, request: ExportRequest) -> dict:
     """ចម្លង clip ដែលជ្រើសទៅ folder — ឈ្មោះអានបាន, មិនសរសេរពីលើអ្វីទាំងអស់."""
     chosen = _export_kinds(request.kinds)
-    items = _export_plan(name, chosen, request.clips)
+    if request.aspect:
+        clips = [{**clip, "files": clip.get("aspects", {}).get(request.aspect, {})} for clip in _clips_of(name)]
+        items = export.plan(clips, request.clips, chosen)
+    else:
+        items = _export_plan(name, chosen, request.clips)
     if not any(item["files"] for item in items):
         raise HTTPException(status_code=400,
                             detail="គ្មាន file ឲ្យ export (clip មិនទាន់ render?)")

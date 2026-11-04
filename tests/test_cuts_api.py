@@ -206,3 +206,65 @@ def test_job_with_only_an_order_reaches_the_pipeline(client, tmp_path, monkeypat
     assert captured["folder"] == "full_edit_4x5"
     from pipeline.cuts import read_order
     assert read_order(args[args.index("--cuts") + 1]) == [(10.0, 30.0), (0.0, 10.0)]
+
+
+# ---- timeline: បញ្ជី clip តែមួយ ជំនួស cuts / splits / order / inserts ----
+
+def test_old_projects_convert_when_read_and_the_file_stays_untouched(tmp_path):
+    manage.write_cuts(tmp_path, [[0, 1]], "hard", splits=[20], order=[[10, 30], [1, 10]])
+    before = (tmp_path / "project.json").read_bytes()
+    assert manage.read_timeline(tmp_path, 30.0) == {"clips": [[10.0, 20.0], [20.0, 30.0], [1.0, 10.0]], "transition": "hard"}
+    assert (tmp_path / "project.json").read_bytes() == before
+    assert manage.read_timeline(tmp_path)["clips"] == []                     # គ្មាន duration = បម្លែងមិនបាន
+
+
+def test_a_converted_project_plays_like_the_old_one(tmp_path):
+    from pipeline import cuts as C
+    manage.write_cuts(tmp_path, [[5, 8]], "punch", splits=[20], inserts=[{"start": 40, "end": 44, "at": 0}])
+    parts = C.sequence(C.keep_ranges(60.0, [(5.0, 8.0)]), [(40.0, 44.0, 0.0)], 60.0)
+    assert C.clip_parts([tuple(p) for p in manage.read_timeline(tmp_path, 60.0)["clips"]], 60.0) == parts
+
+
+def test_write_timeline_replaces_the_old_keys_and_empty_means_the_whole_video(tmp_path):
+    manage.write_title(tmp_path, "My talk")
+    manage.write_cuts(tmp_path, [[1, 2]], "hard", splits=[10])
+    assert manage.write_timeline(tmp_path, [[10, 20], [0, 5]], "hard")["clips"] == [[10.0, 20.0], [0.0, 5.0]]
+    saved = json.loads((tmp_path / "project.json").read_text(encoding="utf-8"))
+    assert saved["edit"] == {"clips": [[10.0, 20.0], [0.0, 5.0]], "transition": "hard"} and saved["title"] == "My talk"
+    assert manage.read_timeline(tmp_path)["clips"] == [[10.0, 20.0], [0.0, 5.0]]
+    # បន្ទាប់ពីនេះ ការសរសេរទម្រង់ចាស់ (app ដែលមិនទាន់ restart) ជំនួសវា មិនមែនបញ្ចូលគ្នាទេ
+    manage.write_cuts(tmp_path, [[3, 4]], "punch")
+    assert "clips" not in json.loads((tmp_path / "project.json").read_text(encoding="utf-8"))["edit"]
+    manage.write_timeline(tmp_path, [], "punch")
+    assert manage.read_timeline(tmp_path) == {"clips": [], "transition": "punch"}
+    for bad in ([[1]], [[5, 5]], [[-1, 3]], "x"):
+        with pytest.raises(ValueError):
+            manage.write_timeline(tmp_path, bad)
+
+
+def test_timeline_api_reads_writes_and_refuses(client, tmp_path):
+    folder = tmp_path / "output" / "p"
+    write_transcript(folder, [Word(" a", 1.0, 2.0)])
+    assert client.get("/projects/p/timeline").json()["clips"] == []
+    assert client.put("/projects/p/timeline", json={"clips": [[5, 9], [0, 5]], "transition": "hard"}).json()["clips"] == [[5.0, 9.0], [0.0, 5.0]]
+    assert client.get("/projects/p/timeline").json() == {"name": "p", "clips": [[5.0, 9.0], [0.0, 5.0]], "transition": "hard"}
+    assert client.put("/projects/p/timeline", json={"clips": [[1, 1]]}).status_code == 400
+    assert client.put("/projects/p/timeline", json={"clips": [[0, 2]], "transition": "wipe"}).status_code == 400
+    assert client.put("/projects/none/timeline", json={"clips": []}).status_code == 404
+
+
+def test_job_with_a_timeline_reaches_the_pipeline(client, tmp_path, monkeypatch):
+    video = tmp_path / "talk.mp4"
+    video.write_bytes(b"x")
+    captured = {}
+    monkeypatch.setattr(J.JobRunner, "_run", lambda self, job: captured.update(args=job.args, folder=job.folder))
+    assert client.post("/jobs", json={"video": str(video), "timeline": [[1, 2]]}).status_code == 400             # គ្មាន full
+    assert client.post("/jobs", json={"video": str(video), "full": True, "timeline": []}).status_code == 400
+    assert client.post("/jobs", json={"video": str(video), "full": True, "timeline": [[2, 2]]}).status_code == 400
+    answer = client.post("/jobs", json={"video": str(video), "full": True, "aspect": "4:5", "timeline": [[10, 30], [0, 10]]})
+    assert answer.status_code == 200
+    time.sleep(0.2)
+    args = captured["args"]
+    assert "--timeline" not in args and captured["folder"] == "full_edit_4x5"
+    from pipeline.cuts import read_clips
+    assert read_clips(args[args.index("--cuts") + 1]) == [(10.0, 30.0), (0.0, 10.0)]

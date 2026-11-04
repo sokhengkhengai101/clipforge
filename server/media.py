@@ -25,14 +25,15 @@ KINDS = {
 EXPORTABLE = ("mp4", "ass", "srt", "vtt")
 
 
-def clip_file(clips: list[dict], index: int, kind: str) -> tuple[Path, str] | None:
-    """រក file របស់ clip លេខ `index`. `None` បើគ្មាន."""
+def clip_file(clips: list[dict], index: int, kind: str, aspect: str | None = None) -> tuple[Path, str] | None:
+    """រក file របស់ clip លេខ `index` (`aspect`: ទំហំក្រៅពី 9:16). `None` បើគ្មាន."""
     if kind not in KINDS:
         return None
     key, media_type = KINDS[kind]
     for clip in clips:
         if clip["index"] == index:
-            path = clip.get("files", {}).get(key)
+            files = clip.get("aspects", {}).get(aspect, {}) if aspect else clip.get("files", {})
+            path = files.get(key)
             if path and Path(path).is_file():
                 return Path(path), media_type
             return None

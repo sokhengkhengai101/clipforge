@@ -393,6 +393,76 @@ def write_cuts(folder: Path, cuts: list[list[float]], transition: str = "punch",
     return {"cuts": clean, "transition": transition, "splits": points, "inserts": added, "order": blocks}
 
 
+def clean_clips(items) -> list[list[float]]:
+    """បញ្ជី clip: `[[in, out], ...]` ពេលក្នុងវីដេអូដើម, លំដាប់ = លំដាប់ចេញ, ស្ទួនបាន. ទម្រង់ខុស = ValueError (400)."""
+    if not isinstance(items, list):
+        raise ValueError("clips ត្រូវជាបញ្ជី")
+    if len(items) > MAX_SPLITS + 1:
+        raise ValueError(f"clips ច្រើនពេក (អតិបរមា {MAX_SPLITS + 1})")
+    out: list[list[float]] = []
+    for item in items:
+        try:
+            start, end = (round(float(value), 3) for value in item)
+        except (TypeError, ValueError):
+            raise ValueError("clip នីមួយៗត្រូវជា [in, out]") from None
+        if start < 0 or end - start < INSERT_MIN_SEC:
+            raise ValueError(f"clip ខុស: in {start}, out {end}")
+        out.append([start, end])
+    return out
+
+
+def clips_from_old(old: dict, duration: float) -> list[list[float]]:
+    """project ចាស់ (`cuts` + `order` + `inserts` + `splits`) -> បញ្ជី clip ដែលចាក់ដូចគ្នា.
+
+    ឧ. duration 30, cuts [[0, 1]], order [[10, 30], [1, 10]], splits [20] -> [[10, 20], [20, 30], [1, 10]].
+    """
+    from pipeline import cuts as cut_tools
+    removed = cut_tools.normalize([tuple(pair) for pair in old["cuts"]], duration)
+    arranged = cut_tools.rearrange(cut_tools.keep_ranges(duration, removed), [tuple(pair) for pair in old["order"]])
+    added = [(item["start"], item["end"], item["at"]) for item in old["inserts"]]
+    out: list[list[float]] = []
+    for start, end in cut_tools.sequence(arranged, added, duration):
+        # Split ចែក clip ជាពីរ (មិនកាត់អ្វីទេ); ចំណុចជិតគែមពេក មិនបង្កើតបំណែកតូច
+        inside = [at for at in old["splits"] if start + INSERT_MIN_SEC <= at <= end - INSERT_MIN_SEC]
+        edges = [start, *inside, end]
+        out.extend([round(a, 3), round(b, 3)] for a, b in zip(edges, edges[1:]))
+    return out
+
+
+def read_timeline(folder: Path, duration: float | None = None) -> dict:
+    """timeline របស់ editor: `{"clips": [[in, out], ...], "transition": "punch"}`. `clips` ទទេ = វីដេអូទាំងមូល.
+
+    project ចាស់ត្រូវបម្លែងពេលអាន ប៉ុន្តែ**មិនសរសេរ** — file ប្តូរតែពេល `write_timeline`. គ្មាន `duration`
+    (គ្មាន transcript) = បម្លែងមិនបាន ហើយ `clips` ទទេ.
+    """
+    data = _read(folder).get("edit")
+    if not isinstance(data, dict):
+        return {"clips": [], "transition": "punch"}
+    transition = data.get("transition") or "punch"
+    if "clips" in data:
+        try:
+            return {"clips": clean_clips(data["clips"]), "transition": transition}
+        except ValueError:
+            return {"clips": [], "transition": transition}   # file ដែលកែដោយដៃខុស — មិនឲ្យ editor បើកមិនបាន
+    old = read_cuts(folder)
+    if duration is None or not (old["cuts"] or old["splits"] or old["inserts"] or old["order"]):
+        return {"clips": [], "transition": transition}
+    return {"clips": clips_from_old(old, duration), "transition": transition}
+
+
+@_locked
+def write_timeline(folder: Path, clips: list[list[float]], transition: str = "punch") -> dict:
+    """រក្សាទុកបញ្ជី clip ជំនួស `cuts` / `splits` / `order` / `inserts` ចាស់. ទទេ = វីដេអូទាំងមូល (លុប `edit`)."""
+    from pipeline.cuts import TRANSITIONS
+    if transition not in TRANSITIONS:
+        raise ValueError(f"transition ត្រូវជា {', '.join(TRANSITIONS)}: {transition}")
+    clean = clean_clips(clips)
+    data = _read(folder)
+    data["edit"] = {"clips": clean, "transition": transition} if clean else None
+    _write(folder, data)
+    return {"clips": clean, "transition": transition}
+
+
 def read_ratings(folder: Path) -> dict[str, str]:
     """{"125.3-141.0": "like", ...} — ♡ / 👎 លើទំព័រ Review."""
     ratings = _read(folder).get("ratings")

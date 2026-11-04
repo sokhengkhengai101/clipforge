@@ -18,6 +18,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from pipeline.highlights import cached_timeframe, parse_timeframe
 from server import db
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -78,6 +79,16 @@ def language_changes(out_dir: Path, language: str | None) -> bool:
     except OSError:
         return False
     return bool(found) and found.group(1) != language
+
+
+def timeframe_changes(out_dir: Path, timeframe: str | None) -> bool:
+    """`--timeframe` ខុសពីចន្លោះដែល highlights.json រកពី -> AI ជ្រើសម្តងទៀត (មិនមែន cache)."""
+    if not timeframe:
+        return False
+    try:
+        return parse_timeframe(timeframe) != cached_timeframe(Path(out_dir) / "highlights.json")
+    except ValueError:
+        return False
 
 
 # នាឡិកា file របស់ Windows អាចយឺតជាង time.time() បន្តិច: file ដែលសរសេរភ្លាមក្រោយ
@@ -153,6 +164,9 @@ class Job:
     skipped: tuple[str, ...] = ()
     # ចំណែកដែលចប់ក្នុងជំហាន (0..1) ពីបន្ទាត់ "progress ..." — transcribe, highlights, render
     fractions: dict[str, float] = field(default_factory=dict)
+    # Long to Short ជ្រើសទំហំក្រៅពី 9:16: render 9:16 សិន (Review, Subtitles ត្រូវការ `clips/`)
+    # រួច render ទំហំនោះទៀត ពីជម្រើស AI ដដែល. command ទី ២ នេះ; None = គ្មាន
+    also_args: list[str] | None = None
 
     def progress(self) -> dict:
         """ជំហានណាចប់ហើយ — អានពី file ដែលមានលើ disk.
@@ -205,6 +219,7 @@ class JobRunner:
             if self.active() is not None:
                 raise RuntimeError("មាន job កំពុងរត់រួចហើយ (GPU មានតែមួយ)")
 
+            also_aspect = options.pop("also_aspect", None)
             args = [str(PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"), "-u",
                     str(PROJECT_ROOT / "make_clips.py"), str(video)]
             for key, value in options.items():
@@ -217,6 +232,7 @@ class JobRunner:
             job = Job(id=uuid.uuid4().hex[:8], video=video,
                       out_dir=PROJECT_ROOT / "output" / video.stem, args=args,
                       folder=output_folder(options),
+                      also_args=args + ["--aspect", also_aspect] if also_aspect else None,
                       skipped=(("highlights", "boundaries", "captions", "render")
                                if options.get("transcribe_only")
                                else ("highlights", "boundaries") if options.get("full") else ()))
@@ -224,6 +240,8 @@ class JobRunner:
             # ភាសាដែលសុំខុសពី transcript ចាស់ = make_clips transcribe ម្តងទៀត (មិនមែន cache)
             if language_changes(job.out_dir, options.get("language")):
                 redone |= {"transcribe", *REDO_TOUCHES["highlights"]}
+            if timeframe_changes(job.out_dir, options.get("timeframe")):
+                redone |= set(REDO_TOUCHES["highlights"])
             on_disk = steps_on_disk(job.out_dir, folder=job.folder)
             job.cached = tuple(name for name, _ in STEPS
                                if name in on_disk and name not in redone and name not in job.skipped)
@@ -235,33 +253,40 @@ class JobRunner:
         return job
 
     def _run(self, job: Job) -> None:
-        """រត់ process រួចប្រមូល output មួយបន្ទាត់ម្តង."""
+        """រត់ process (មួយ ឬពីរ: `also_args`) រួចប្រមូល output មួយបន្ទាត់ម្តង."""
         try:
-            job.process = subprocess.Popen(
-                job.args, cwd=str(PROJECT_ROOT), stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT, text=True, encoding="utf-8",
-                errors="replace", bufsize=1,
-            )
+            code = self._run_one(job, job.args, render_share=(0.0, 0.5) if job.also_args else (0.0, 1.0))
+            if code == 0 and job.also_args and job.state != "cancelled":
+                code = self._run_one(job, job.also_args, render_share=(0.5, 0.5))
         except OSError as e:
             job.state, job.error, job.finished = "failed", str(e), time.time()
             self._record(job)
             return
-
-        for line in job.process.stdout:
-            text = line.rstrip()
-            progress = parse_progress(text)
-            if progress:
-                # មិនដាក់ក្នុង log ទេ — ម្តងក្នុង 3 s លើ job 50 នាទី = បន្ទាត់រាប់ពាន់
-                job.fractions[progress[0]] = progress[1]
-            elif text:
-                job.log.append(text)
-        code = job.process.wait()
         job.finished = time.time()
         if job.state != "cancelled":
             job.state = "done" if code == 0 else "failed"
             if code != 0:
                 job.error = f"make_clips.py ចេញដោយ code {code}"
         self._record(job)
+
+    def _run_one(self, job: Job, args: list[str], render_share: tuple[float, float]) -> int:
+        """`render_share` = (ចាប់ពី, ចំណែក): render ពីរដង ជាបន្ទាត់ % តែមួយ ដែលមិនថយក្រោយ."""
+        job.process = subprocess.Popen(
+            args, cwd=str(PROJECT_ROOT), stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, text=True, encoding="utf-8",
+            errors="replace", bufsize=1,
+        )
+        begin, share = render_share
+        for line in job.process.stdout:
+            text = line.rstrip()
+            progress = parse_progress(text)
+            if progress:
+                # មិនដាក់ក្នុង log ទេ — ម្តងក្នុង 3 s លើ job 50 នាទី = បន្ទាត់រាប់ពាន់
+                step, fraction = progress
+                job.fractions[step] = begin + fraction * share if step == "render" else fraction
+            elif text:
+                job.log.append(text)
+        return job.process.wait()
 
     def _record(self, job: Job) -> None:
         """សរសេរលទ្ធផលចូល database — រួមទាំង clip បើ pipeline សរសេរវារួច."""

@@ -1,7 +1,9 @@
 """អាន clip ពី `clips.json` + file ជុំវិញវា (ប្រើទាំង API ទាំង database)."""
 
 import json
+import os
 import re
+import shutil
 import threading
 from pathlib import Path
 
@@ -14,6 +16,8 @@ from pipeline.highlights import load_clips
 from pipeline.transcribe import load_transcript
 
 SIDECAR_SUFFIXES = ("mp4", "ass", "srt", "vtt")
+# ទំហំក្រៅពី 9:16 នៅ folder ផ្សេង (make_clips `clips_dir`): ប៊ូតុងទំហំលើ Review
+OTHER_ASPECTS = {"1:1": "clips_1x1", "16:9": "clips_16x9", "4:5": "clips_4x5"}
 
 
 def clean_file(stem: Path, ranked: Path) -> dict:
@@ -27,6 +31,50 @@ def clean_file(stem: Path, ranked: Path) -> dict:
     if clean.is_file() and (not ranked.is_file() or clean.stat().st_mtime >= ranked.stat().st_mtime):
         return {"clean": str(clean)}
     return {}
+
+
+def clip_aspects(out_dir: Path, index: int) -> dict[str, dict[str, str]]:
+    """file ទំហំផ្សេងរបស់ clip លេខ `index`. file ចាស់ជាង clips.json មិនរាប់ទេ: AI ជ្រើសថ្មី
+    ហើយ clip លេខនេះអាចជា clip ផ្សេង (ច្បាប់ដូច `clean_file`)."""
+    ranked = out_dir / "clips.json"
+    found = {}
+    for aspect, name in OTHER_ASPECTS.items():
+        stem = out_dir / name / f"clip_{index:02d}"
+        mp4 = stem.with_suffix(".mp4")
+        if mp4.is_file() and (not ranked.is_file() or mp4.stat().st_mtime >= ranked.stat().st_mtime):
+            found[aspect] = {suffix: str(stem.with_suffix(f".{suffix}")) for suffix in SIDECAR_SUFFIXES
+                             if stem.with_suffix(f".{suffix}").is_file()}
+    return found
+
+
+def duplicate_clip(out_dir: Path, index: int) -> int:
+    """ចម្លង clip លេខ `index` ជា clip ថ្មី រួចឲ្យលេខថ្មីមកវិញ. ទំហំទាំងអស់ និង file ទាំងអស់ត្រូវចម្លង.
+
+    លេខថ្មី = ក្រោយ clip ចុងក្រោយដែល render រួច: clip មិនទាន់ render ក្រោយ `--max-clips` គ្មាន file
+    ដូច្នេះរុញវាបានដោយមិនប្តូរឈ្មោះអ្វីទេ. mtime របស់ clips.json ត្រូវរក្សា: file ចាស់ជាងវា
+    ត្រូវបានចាត់ទុកថាជារបស់ AI pick មុន (`clean_file`, `clip_aspects`).
+    """
+    out_dir = Path(out_dir)
+    ranked = out_dir / "clips.json"
+    data = json.loads(ranked.read_text(encoding="utf-8"))
+    clips = data["clips"]
+    folders = [out_dir / "clips", *(out_dir / name for name in OTHER_ASPECTS.values())]
+    if not 1 <= index <= len(clips) or not (folders[0] / f"clip_{index:02d}.mp4").is_file():
+        raise ValueError(f"clip {index} មិនទាន់ render")
+    last = max(number for number in range(1, len(clips) + 1)
+               if (folders[0] / f"clip_{number:02d}.mp4").is_file())
+    new = last + 1
+    for folder in folders:
+        for path in folder.glob(f"clip_{index:02d}[._]*"):
+            shutil.copy2(path, folder / f"clip_{new:02d}{path.name[len(f'clip_{index:02d}'):]}")
+    copy = {**clips[index - 1], "title": f"{clips[index - 1]['title']} (Copy)"}
+    clips.insert(new - 1, copy)
+    stat = ranked.stat()
+    temp = ranked.with_suffix(".json.tmp")
+    temp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(temp, ranked)
+    os.utime(ranked, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    return new
 
 
 def clips_of_project(out_dir: Path) -> list[dict]:
@@ -58,6 +106,7 @@ def clips_of_project(out_dir: Path) -> list[dict]:
                       for suffix in SIDECAR_SUFFIXES
                       if stem.with_suffix(f".{suffix}").is_file()}
                      | clean_file(stem, out_dir / "clips.json"),
+            "aspects": clip_aspects(out_dir, index),
         })
     return items
 

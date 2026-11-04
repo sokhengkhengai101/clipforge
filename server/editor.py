@@ -156,7 +156,8 @@ PARAGRAPH_PAUSE_SEC = 1.0      # TXT: កថាខណ្ឌថ្មី ក្�
 
 
 def transcript_text(folder: Path, fmt: str, cuts: list[list[float]] | None = None,
-                    inserts: list[dict] | None = None, order: list[list[float]] | None = None) -> str | None:
+                    inserts: list[dict] | None = None, order: list[list[float]] | None = None,
+                    clips: list[list[float]] | None = None) -> str | None:
     """Transcript ជាអត្ថបទ **ដូចវីដេអូដែល Export នឹងចេញ**: ពាក្យដែលកាត់ត្រូវដក ហើយពេលរំកិល.
 
     `txt` = អត្ថបទធម្មតា (វណ្ណយុត្តិដើម), កថាខណ្ឌថ្មីក្រោយ pause > 1 s.
@@ -175,7 +176,9 @@ def transcript_text(folder: Path, fmt: str, cuts: list[list[float]] | None = Non
     clean = cut_tools.normalize([tuple(pair) for pair in cuts], transcript.duration) if cuts else []
     added = [(item["start"], item["end"], item["at"]) for item in inserts or []]
     blocks = [(start, end) for start, end in order or []]
-    if clean or added or blocks:
+    if clips:   # បញ្ជី clip: វាជំនួស cuts / inserts / order
+        transcript = cut_tools.shift_transcript(transcript, cut_tools.clip_parts([tuple(pair) for pair in clips], transcript.duration))
+    elif clean or added or blocks:
         arranged = cut_tools.rearrange(cut_tools.keep_ranges(transcript.duration, clean), blocks)
         parts = cut_tools.sequence(arranged, added, transcript.duration)
         transcript = cut_tools.shift_transcript(transcript, parts)
