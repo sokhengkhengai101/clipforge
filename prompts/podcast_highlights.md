@@ -1,4 +1,4 @@
-# Podcast highlights prompt — v5
+# Podcast highlights prompt — v6
 
 Prompt នេះមាន version ដើម្បីដឹងថា clip ល្អ/អាក្រក់មកពី prompt ណា។
 កែវា -> ដំឡើងលេខ version ហើយកត់ចំណាំនៅខាងក្រោម។
@@ -10,10 +10,11 @@ question only: would a stranger scrolling past stop, watch to the end, and send 
 
 ## User
 
-Below is part of a podcast transcript. Each line is `[start - end] text` where start and end are
+Below is part of a video transcript. Each line is `[start - end] text` where start and end are
 seconds from the beginning of the FULL video.
 
 Find the moments in THIS part that work as standalone vertical clips.
+{{GENRE_HINT}}
 
 ### What makes a clip work
 
@@ -136,3 +137,5 @@ Return ONLY valid JSON in exactly this shape:
   * ក្រោយសាក v4 លើ chunk ពិត៖ model កាត់ clip ខ្លីទៅ ១៤ វិនាទី (ក្រោមអប្បបរមា) ដើម្បី
     ទៅដល់ចំណុចបញ្ចប់លឿន ហើយដកស្រង់តែពាក្យ ("classy") -> បន្ថែមច្បាប់ថា punchline
     ត្រូវមានការសាងសង់មុន និងតម្រូវឲ្យដកស្រង់**ប្រយោគពេញ**
+- v6 (2026-11-02): AI ស្គាល់ genre មុន (`detect_genre.md`) ហើយ `{{GENRE_HINT}}` ប្រាប់ថា clip
+  ល្អក្នុង genre នោះមានរូបរាងបែបណា; "podcast transcript" -> "video transcript"។

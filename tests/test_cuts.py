@@ -202,3 +202,29 @@ def test_read_inserts_accepts_both_shapes_and_cut_lists_without_them(tmp_path):
     b = tmp_path / "b.json"
     b.write_text(json.dumps({"cuts": [[1, 2]]}))
     assert C.read_inserts(b) == []
+
+
+# ---- clips: បញ្ជីតែមួយ (in, out) តាមលំដាប់ចេញ ----
+
+def test_read_clips_is_none_for_the_old_format(tmp_path):
+    a = tmp_path / "a.json"
+    a.write_text(json.dumps({"clips": [[10, 30], [0, 10]]}))
+    assert C.read_clips(a) == [(10.0, 30.0), (0.0, 10.0)]
+    b = tmp_path / "b.json"
+    b.write_text(json.dumps({"cuts": [[1, 2]], "order": []}))
+    assert C.read_clips(b) is None
+
+
+def test_clip_parts_joins_a_split_keeps_order_and_repeats():
+    assert C.clip_parts([(10.0, 20.0), (20.0, 30.0), (0.0, 5.0)], 60.0) == [(10.0, 30.0), (0.0, 5.0)]
+    # ផ្នែកដូចគ្នាពីរដង (hook) នៅទាំងពីរ; ជាប់តែតាមលំដាប់ពេល មិនមែនពេលត្រឡប់ក្រោយ
+    assert C.clip_parts([(40.0, 44.0), (0.0, 60.0)], 60.0) == [(40.0, 44.0), (0.0, 60.0)]
+    # កាត់ឲ្យនៅក្នុងវីដេអូ, ផ្នែកខ្លីពេកដក
+    assert C.clip_parts([(-1.0, 3.0), (5.0, 5.05), (50.0, 90.0)], 60.0) == [(0.0, 3.0), (50.0, 60.0)]
+    assert C.clip_parts([], 60.0) == []
+
+
+def test_clips_give_the_same_parts_as_cuts_and_order():
+    in_time = C.keep_ranges(55.0, C.normalize([(0.0, 1.0)], 55.0))
+    old = C.rearrange(in_time, [(23.0, 37.0), (0.0, 23.0), (37.0, 55.0)])
+    assert C.clip_parts([(23.0, 37.0), (1.0, 23.0), (37.0, 55.0)], 55.0) == old

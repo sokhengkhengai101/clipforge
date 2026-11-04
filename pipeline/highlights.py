@@ -10,7 +10,7 @@
 
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable
 
@@ -164,14 +164,16 @@ class Clip(BaseModel):
         return letter_for(self.total)
 
 
-def full_video_clip(duration: float, title: str = "full") -> Clip:
-    """Clip តែមួយដែលគ្របលើ video ទាំងមូល (សម្រាប់ `--full`).
+def full_video_clip(duration: float, title: str = "full",
+                    window: tuple[float, float] | None = None) -> Clip:
+    """Clip តែមួយដែលគ្របលើ video ទាំងមូល ឬតែ `window` (សម្រាប់ `--full`).
 
     យើងប្រើ `model_construct` ដែល**រំលង validator** ដោយចេតនា៖ `Clip` កំណត់ប្រវែង
     អតិបរមា 300 វិនាទី ដើម្បីច្រោះចម្លើយ LLM ដែលឆ្គង។ ការ render ពេញ video មិនមែន
     មកពី LLM ទេ ដូច្នេះដែននោះមិនអនុវត្ត។
     """
-    return Clip.model_construct(start=0.0, end=duration, title=title, hook="",
+    start, end = window or (0.0, duration)
+    return Clip.model_construct(start=start, end=end, title=title, hook="",
                                 type="insight", score=10.0, reason="full video")
 
 
@@ -196,6 +198,7 @@ def chunk_transcript(
     transcript: Transcript,
     chunk_sec: float | None = None,
     overlap_sec: float | None = None,
+    start: float = 0.0,
 ) -> list[Chunk]:
     """ចែក transcript ជាផ្នែកៗដែលត្រួតគ្នាបន្តិច.
 
@@ -215,7 +218,6 @@ def chunk_transcript(
     step = chunk_sec - overlap_sec
 
     chunks: list[Chunk] = []
-    start = 0.0
     while start < total:
         end = min(start + chunk_sec, total)
         # segment ណាដែលប៉ះ window នេះ (ទោះត្រួតតែបន្តិច) ត្រូវយកចូល
@@ -227,6 +229,138 @@ def chunk_transcript(
         start += step
 
     return chunks
+
+
+# ---------- ចន្លោះពេលដែល AI រក (--timeframe) ----------
+
+def parse_timeframe(text: str, duration: float | None = None,
+                    minimum: float | None = None) -> tuple[float, float] | None:
+    """"60,300" -> (60.0, 300.0); "all" ឬចន្លោះស្ទើរពេញវីដេអូ -> None (វីដេអូទាំងមូល).
+
+    ឧ. វីដេអូ 300 s: "0,299.6" = None. ValueError បើខុសទម្រង់ ឬខ្លីជាង `minimum`
+    (លំនាំដើម TIMEFRAME_MIN_SEC ព្រោះការកាត់ clips ត្រូវការវា; `--full` ទទួលខ្លីជាងនេះ).
+    """
+    minimum = config.TIMEFRAME_MIN_SEC if minimum is None else minimum
+    if text.strip().lower() == "all":
+        return None
+    try:
+        start, end = (float(part) for part in text.split(","))
+    except ValueError as e:
+        raise ValueError(f"--timeframe ត្រូវជា all ឬ start,end (វិនាទី): {text!r}") from e
+    start = max(0.0, start)
+    if duration is not None:
+        end = min(end, duration)
+        if start <= 1 and end >= duration - 1:
+            return None
+    if end - start < minimum:
+        raise ValueError(f"--timeframe ត្រូវវែងយ៉ាងតិច {minimum} s")
+    return start, end
+
+
+def window_transcript(transcript: Transcript, timeframe: tuple[float, float] | None) -> Transcript:
+    """transcript ដែលមានតែពាក្យក្នុងចន្លោះ — ពាក្យនៅកន្លែងពេលដើម, ដូច្នេះ clip នៅតែជាពេលក្នុងវីដេអូដើម.
+
+    ពាក្យរាប់តាមពាក់កណ្តាលរបស់វា ហើយ segment ដែលកាត់ចុងត្រូវសង់អក្សរឡើងវិញពីពាក្យដែលនៅសល់.
+    """
+    if timeframe is None:
+        return transcript
+    start, end = timeframe
+    segments: list[Segment] = []
+    for segment in transcript.segments:
+        if segment.end <= start or segment.start >= end:
+            continue
+        words = [w for w in segment.words if start <= (w.start + w.end) / 2 < end]
+        if segment.words and len(words) < len(segment.words):
+            if not words:
+                continue
+            segment = replace(segment, start=words[0].start, end=words[-1].end, words=words,
+                              text="".join(w.word for w in words).strip())
+        segments.append(segment)
+    return replace(transcript, duration=end, segments=segments)
+
+
+def cached_timeframe(path: Path) -> tuple[float, float] | None:
+    """ចន្លោះដែល cache នេះរកពី; គ្មាន (cache ចាស់ ឬវីដេអូទាំងមូល) = None."""
+    try:
+        saved = json.loads(Path(path).read_text(encoding="utf-8")).get("timeframe")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return (float(saved[0]), float(saved[1])) if saved else None
+
+
+# ---------- genre ----------
+
+# បន្ទាត់ដែលបន្ថែមក្នុង prompt រក clip. `other` គ្មានបន្ទាត់ ដូច្នេះ prompt ដូចមុនមាន genre.
+GENRE_OTHER = "other"
+GENRE_HINTS = {
+    "qa": "In a Q&A part, the best clip opens on a clear question and ends when it is fully answered.",
+    "commentary": "In a commentary part, the best clip states one opinion and gives the reason behind it.",
+    "marketing": "In a marketing part, the best clip shows one concrete benefit or proof, not slogans. "
+                 "There a product is the subject, so talking about it is allowed.",
+    "webinar": "In a webinar part, the best clip is one practical tip or framework that makes sense "
+               "without seeing the slides.",
+    "motivational": "In a motivational part, the best clip is a short story with its lesson, "
+                    "or a line that moves someone to act.",
+    "podcast": "In a podcast part, the best clip is one story or one disagreement with a clear ending.",
+    "academic": "In a lesson part, the best clip explains one idea in plain words, with its example.",
+}
+GENRE_MAX = 2   # វីដេអូមួយអាចមានច្រើន genre; ច្រើនជាង 2 ធ្វើឲ្យ hint ទូលាយពេក
+
+
+def genre_sample(transcript: Transcript) -> str:
+    """អក្សរពីដើម កណ្តាល និងចុងវីដេអូ — មួយផ្នែកអាចជា intro ឬ sponsor ដែលបោកឲ្យទាយខុស.
+
+    ដើមចាប់ពី 10% (រំលង intro). វីដេអូខ្លីជាង 3 ផ្នែក = អានទាំងអស់. ឧ. 300 s: 30-120, 135-225, 240-300.
+    """
+    if not transcript.segments:
+        return ""
+    first, last = transcript.segments[0].start, transcript.segments[-1].end
+    span, size = last - first, config.GENRE_SAMPLE_SEC
+    starts = [first + span * ratio for ratio in (0.1, 0.45, 0.8)] if span > size * 3 else [first]
+    size = size if span > size * 3 else span
+    parts = [" ".join(s.text.strip() for s in transcript.segments
+                      if s.end > start and s.start < start + size) for start in starts]
+    return "\n\n[...]\n\n".join(parts)
+
+
+def detect_genre(
+    transcript: Transcript,
+    *,
+    model: str | None = None,
+    on_warning: Callable[[str], None] | None = None,
+) -> tuple[list[str], str]:
+    """AI ស្គាល់ genre 1-2 ពី transcript -> ([genre, ...], មូលហេតុ), ឧ. (["qa", "podcast"], "...").
+
+    បរាជ័យ ឬឆ្លើយក្រៅបញ្ជី = ["other"] មិនដាច់: genre គ្រាន់តែជួយ prompt, មិនគួរឲ្យ job បរាជ័យឡើយ.
+    """
+    system, user_template = load_prompt(config.GENRE_PROMPT)
+    prompt = user_template.replace("{{TRANSCRIPT}}", genre_sample(transcript))
+    try:
+        data = complete_json(prompt, system=system, model=model or config.OLLAMA_MODEL, max_tokens=100)
+    except LLMError as e:
+        if on_warning:
+            on_warning(f"ស្គាល់ genre មិនបាន: {e}")
+        return [GENRE_OTHER], ""
+    if not isinstance(data, dict):
+        return [GENRE_OTHER], ""
+    raw = data.get("genres")
+    raw = raw if isinstance(raw, list) else [raw]   # model ខ្លះឆ្លើយ string តែមួយ
+    genres: list[str] = []
+    for value in raw:
+        genre = str(value).strip().lower()
+        if genre in GENRE_HINTS and genre not in genres:
+            genres.append(genre)
+    reason = " ".join(str(data.get("reason") or "").split())
+    return genres[:GENRE_MAX] or [GENRE_OTHER], reason
+
+
+def cached_genres(path: Path) -> tuple[list[str], str] | None:
+    """Genre ដែល AI រកឃើញពេលជ្រើស clips នេះ; cache ចាស់គ្មាន = None."""
+    try:
+        saved = json.loads(Path(path).read_text(encoding="utf-8"))
+        return (saved["genres"], saved.get("genre_reason", "")) if saved.get("genres") else None
+    except (OSError, ValueError, AttributeError):
+        return None
 
 
 # ---------- prompt ----------
@@ -258,7 +392,8 @@ def load_prompt(name: str | None = None,
     return sections["System"], "\n\n".join(parts)
 
 
-def build_prompt(chunk: Chunk, user_template: str, clips_per_chunk: int) -> str:
+def build_prompt(chunk: Chunk, user_template: str, clips_per_chunk: int,
+                 genres: tuple[str, ...] | list[str] = ()) -> str:
     """ដាក់តម្លៃពិតជំនួស placeholder `{{...}}` ក្នុង template.
 
     យើងប្រើ `{{NAME}}` + `.replace()` មិនមែន `.format()` ព្រោះ prompt មាន JSON example
@@ -269,6 +404,7 @@ def build_prompt(chunk: Chunk, user_template: str, clips_per_chunk: int) -> str:
         .replace("{{MIN_SEC}}", str(int(config.MIN_CLIP_SEC)))
         .replace("{{MAX_SEC}}", str(int(config.MAX_CLIP_SEC)))
         .replace("{{MAX_CLIPS}}", str(clips_per_chunk))
+        .replace("{{GENRE_HINT}}", " ".join(GENRE_HINTS[g] for g in genres if g in GENRE_HINTS))
         .replace("{{TRANSCRIPT}}", chunk.as_prompt_text())
     )
 
@@ -353,7 +489,9 @@ def dedupe_overlaps(clips: list[Clip], max_overlap_ratio: float = 0.3) -> list[C
 
 # ---------- cache ----------
 
-def save_clips(clips: list[Clip], path: Path, *, model: str, prompt: str) -> Path:
+def save_clips(clips: list[Clip], path: Path, *, model: str, prompt: str,
+               timeframe: tuple[float, float] | None = None,
+               genres: tuple[list[str], str] | None = None) -> Path:
     """សរសេរ clips ទៅ JSON (មាន model + prompt ដើម្បីដឹងថាវាមកពីណា)."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -361,6 +499,9 @@ def save_clips(clips: list[Clip], path: Path, *, model: str, prompt: str) -> Pat
         "cache_version": CACHE_VERSION,
         "model": model,
         "prompt": prompt,
+        "timeframe": list(timeframe) if timeframe else None,
+        "genres": genres[0] if genres else [],
+        "genre_reason": genres[1] if genres else "",
         "clips": [c.model_dump() for c in clips],
     }
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -473,10 +614,11 @@ def find_highlights(
     model: str | None = None,
     cache_path: Path | None = None,
     force: bool = False,
+    timeframe: tuple[float, float] | None = None,
     on_progress: Callable[[int, int], None] | None = None,
     on_warning: Callable[[str], None] | None = None,
 ) -> list[Clip]:
-    """រក clip ល្អបំផុតពី transcript មួយ.
+    """រក clip ល្អបំផុតពី transcript មួយ (`timeframe`: ចន្លោះដែល transcript ត្រូវបាន window រួច).
 
     ត្រឡប់ clip ដែល validate រួច, dedupe រួច, តម្រៀបតាម score (ខ្ពស់មុន), យកត្រឹម max_clips។
 
@@ -491,10 +633,11 @@ def find_highlights(
         if cached is not None:
             return cached
 
-    chunks = chunk_transcript(transcript)
+    chunks = chunk_transcript(transcript, start=timeframe[0] if timeframe else 0.0)
     if not chunks:
         raise HighlightsError("transcript គ្មាន segment — គ្មានអ្វីវិភាគ")
 
+    genres = detect_genre(transcript, model=model, on_warning=on_warning)
     system, user_template = load_prompt()
     # សុំតិចក្នុងមួយ chunk រួចជ្រើសសកលពេលក្រោយ -> output tokens តិច = លឿនជាង
     clips_per_chunk = max(1, min(3, max_clips))
@@ -504,7 +647,7 @@ def find_highlights(
     for chunk in chunks:
         if on_progress:
             on_progress(chunk.index, len(chunks))
-        prompt = build_prompt(chunk, user_template, clips_per_chunk)
+        prompt = build_prompt(chunk, user_template, clips_per_chunk, genres[0])
         try:
             data = complete_json(prompt, system=system, model=model)
         except LLMError as e:
@@ -525,6 +668,7 @@ def find_highlights(
     best = best[:max_clips]
 
     if cache_path is not None:
-        save_clips(best, cache_path, model=model, prompt=config.HIGHLIGHT_PROMPT)
+        save_clips(best, cache_path, model=model, prompt=config.HIGHLIGHT_PROMPT, timeframe=timeframe,
+                   genres=genres)
 
     return best

@@ -376,6 +376,33 @@ def read_inserts(path: Path) -> list[Insert]:
     return out
 
 
+def read_clips(path: Path) -> list[Range] | None:
+    """`{"clips": [[in, out], ...]}` -> ផ្នែកតាមលំដាប់ចេញ; `None` = file ទម្រង់ចាស់ (cuts / order / inserts)."""
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or "clips" not in data:
+        return None
+    return [(float(item[0]), float(item[1])) for item in data["clips"]]
+
+
+def clip_parts(clips: list[Range], duration: float) -> list[Range]:
+    """បញ្ជី clip -> parts ដែល render: កាត់ឲ្យនៅក្នុង 0..duration, ដកផ្នែកខ្លីពេក, ភ្ជាប់ផ្នែកដែលបន្តគ្នាតាមពេល.
+
+    **clip** = ផ្នែកមួយនៃវីដេអូដើម `(in, out)`; លំដាប់ក្នុងបញ្ជី = លំដាប់ចេញ. អ្វីដែលមិននៅក្នុងបញ្ជី = កាត់ចេញ,
+    ផ្នែកដែលនៅពីរដង = ចាក់ពីរដង. Split គ្រាន់តែបំបែក clip ដូច្នេះត្រូវភ្ជាប់វិញ: គ្មានកន្លែងភ្ជាប់ថ្មី, គ្មាន punch-in ថ្មី.
+    ឧ. [(10, 20), (20, 30), (0, 5)] -> [(10, 30), (0, 5)].
+    """
+    out: list[Range] = []
+    for start, end in clips:
+        start, end = max(0.0, start), min(duration, end)
+        if end - start < MIN_KEEP_SEC:
+            continue
+        if out and abs(out[-1][1] - start) < 0.001:
+            out[-1] = (out[-1][0], round(end, 3))
+        else:
+            out.append((round(start, 3), round(end, 3)))
+    return out
+
+
 def read_order(path: Path) -> list[Range]:
     """`{"order": [[start, end], ...]}` -> ប្លុកតាមលំដាប់ចេញ; គ្មាន = លំដាប់ពេលធម្មតា."""
     data = json.loads(Path(path).read_text(encoding="utf-8"))

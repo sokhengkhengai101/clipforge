@@ -16,6 +16,7 @@ PROMPTS_DIR = PROJECT_ROOT / "prompts"
 # ---------- Clips ----------
 MAX_CLIPS = 5              # ចំនួន clip ចេញក្នុងមួយ video
 MIN_CLIP_SEC = 15.0        # clip ខ្លីជាងនេះ = មិនយក
+TIMEFRAME_MIN_SEC = 60     # --timeframe ខ្លីជាងនេះ = មិនកាត់ clips (ដូច MIN_CLIP_RANGE ក្នុង UI)
 MAX_CLIP_SEC = 90.0        # clip វែងជាងនេះ = មិនយក
 # clip គួរចប់ត្រង់គំនិតចប់។ បើមានចុងប្រយោគពិត (`.?!`) ក្នុងចម្ងាយនេះ
 # យើងយកវា — រួមទាំងពេលពន្លាត clip ខ្លីផង។ បើគ្មាន យើងទទួលចុងដែលមាន។
@@ -95,6 +96,8 @@ LLM_MAX_TOKENS = 2048                   # output tokens អតិបរមាក
 OLLAMA_NUM_CTX = 8192
 HIGHLIGHT_PROMPT = "podcast_highlights.md"   # file ក្នុង prompts/
 RANK_PROMPT = "rank_clips.md"
+GENRE_PROMPT = "detect_genre.md"
+GENRE_SAMPLE_SEC = 90.0     # AI អាន 3 ផ្នែក ប៉ុណ្ណេះវិនាទី ដើម្បីស្គាល់ genre
 # ជំហានទី ២: សុំ model ដាក់លំដាប់ candidate ធៀបគ្នា ព្រោះពិន្ទុដាច់ដោយឡែករបស់វា
 # ជាប់គាំងនៅ 9 (វាស់ឃើញ: 9,9,9,9,9)។ ថ្លៃបន្ថែម ~១ នាទីក្នុងមួយ video។
 RANK_CANDIDATES = True
@@ -288,6 +291,11 @@ PANEL_BACKGROUND = "white"
 # កាំជ្រុងមូលរបស់ផ្ទាំង (0 = ជ្រុងស្រួច)។ លាបដោយ mask PNG ដែលគណនាម្តង។
 PANEL_CORNER_RADIUS = 28
 SPLIT_TOP = "auto"                  # "auto" (អ្នកនិយាយលើ), "left", ឬ "right"
+# --speaker-top: ផ្ទាំងលើរបស់ Split តាមអ្នកកំពុងនិយាយ (pipeline/speakers.py).
+# 2 s មកពីឧទាហរណ៍ពីរ: លុបការលោត 1 s ដែលខុស, រក្សាការប្តូរ 2 s ដែលត្រូវ — 3 s លុបទាំងពីរ។
+SPEAKER_TOP = False
+SPEAKER_MIN_SEC = 2
+SPEAKER_SNAP_SEC = 0.5              # រំកិលការកាត់ទៅចន្លោះពាក្យ ក្នុងចម្ងាយនេះ
 
 # ---------- Captions ----------
 CAPTION_FONT = "Montserrat ExtraBold"

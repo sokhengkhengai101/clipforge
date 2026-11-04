@@ -4,6 +4,8 @@ Phase 0: ជំហាន 1 (audio) + 2 (transcribe) + 3 (highlights) រួច�
 Usage: python make_clips.py video.mp4 --max-clips 5
 """
 
+import os
+import shutil
 import json
 import time
 from pathlib import Path
@@ -18,8 +20,8 @@ from pipeline.audio import FFmpegError, extract_audio, probe_duration
 from pipeline.boundaries import clip_text, snap_boundaries
 from pipeline.captions import (CaptionError, build_all_captions, check_cues, resolve_font,
                                wrap_into_cues)
-from pipeline.highlights import (HighlightsError, find_highlights, full_video_clip,
-                                 load_clips, rank_clips, save_clips)
+from pipeline.highlights import (HighlightsError, cached_genres, cached_timeframe, find_highlights, full_video_clip,
+                                 load_clips, parse_timeframe, rank_clips, save_clips, window_transcript)
 from pipeline.llm import LLMError
 from pipeline.reframe import (ReframeError, describe, find_seats, parse_layouts, plan_clip,
                              save_layout_summary)
@@ -115,6 +117,9 @@ def main(
     video: Path = typer.Argument(..., exists=True, dir_okay=False, readable=True,
                                  help="path ទៅ video ដើម (មិនត្រូវកែវាទេ)"),
     max_clips: int = typer.Option(config.MAX_CLIPS, "--max-clips", help="ចំនួន clip ចេញ"),
+    only_clip: int = typer.Option(0, "--only-clip", help="render តែ clip លេខនេះពី clips.json (ប៊ូតុងទំហំលើ Review)"),
+    timeframe: str = typer.Option(None, "--timeframe",
+                                  help="ចន្លោះពេលដែល AI រក clip: start,end (វិនាទី) ឬ all"),
     model: str = typer.Option(config.OLLAMA_MODEL, "--model", help="Ollama model សម្រាប់ highlights"),
     whisper_model: str = typer.Option(None, "--whisper-model",
                                       help="override Whisper model (tiny/base/small/medium/large-v3)"),
@@ -167,6 +172,8 @@ def main(
                                   help="Transform ដោយដៃ x,y,scale (ប្រភាគ: កណ្តាល x/y, ទទឹង/ទទឹង output) — ជំនួស AI layout"),
     transform_crop: str = typer.Option(None, "--transform-crop",
                                        help="crop វីដេអូដើមមុន transform x,y,w,h (ប្រភាគ 0-1)"),
+    speaker_top: bool = typer.Option(False, "--speaker-top",
+                                     help="Split: អ្នកកំពុងនិយាយឡើងផ្ទាំងលើ តាមចលនាមាត់"),
     no_tracking: bool = typer.Option(False, "--no-tracking",
                                      help="crop មិនតាមមុខក្នុង shot (នៅស្ងៀម)"),
     no_track_ranges: Path = typer.Option(None, "--no-track-ranges", exists=True, dir_okay=False,
@@ -247,6 +254,7 @@ def main(
             console.print(f"[red]{error}[/red]")
             raise typer.Exit(code=2)
     config.TRACKING = not no_tracking
+    config.SPEAKER_TOP = speaker_top
     if no_track_ranges is not None:
         from pipeline.cuts import read_cut_list
         config.NO_TRACK_RANGES = [(float(a), float(b)) for a, b in read_cut_list(no_track_ranges)]
@@ -307,6 +315,17 @@ def main(
         # video ពេញទៅ folder ផ្សេង ដើម្បីកុំឲ្យជាន់លើ clip ខ្លី
         clips_dir = out_dir / ("full" if aspect == "9:16"
                                else f"full_{aspect.replace(':', 'x')}")
+    # --only-clip N: pipeline ដាក់លេខ clip ពី 1 ជានិច្ច, ដូច្នេះ render ក្នុង folder បណ្តោះអាសន្ន
+    # រួចប្តូរឈ្មោះ clip_01.* -> clip_NN.* ពេលចប់ (clip ផ្សេងក្នុង folder នោះមិនត្រូវប៉ះ)
+    final_dir = clips_dir
+    if only_clip:
+        ranked_clips = load_clips(out_dir / "clips.json")
+        if full or not ranked_clips or not 1 <= only_clip <= len(ranked_clips) or not (out_dir / "highlights.json").is_file():
+            console.print(f"[red]--only-clip {only_clip}: ត្រូវការ clip នោះក្នុង clips.json (run ធម្មតាជាមុន)[/red]")
+            raise typer.Exit(code=2)
+        clips_dir = final_dir / f".only_{only_clip:02d}"
+        shutil.rmtree(clips_dir, ignore_errors=True)
+        clips_dir.mkdir(parents=True)
 
     # ---------- Step 0 (Edit Video): cut list -> ច្បាប់ចម្លងដែលគ្មានចន្លោះកាត់ ----------
     # វីដេអូដើមអានតែប៉ុណ្ណោះ. ច្បាប់ចម្លង + audio + transcript ដែលរំកិលពេល នៅ `edit/`;
@@ -314,8 +333,8 @@ def main(
     work_dir = out_dir            # កន្លែង audio.wav / transcript.json / seats.json
     title_stem = video.stem
     if cuts is not None:
-        from pipeline.cuts import (TRANSITIONS, cut_video, edit_folder, frame_rate, keep_ranges,
-                                   normalize, read_cut_list, read_inserts, read_order, rearrange, sequence,
+        from pipeline.cuts import (TRANSITIONS, clip_parts, cut_video, edit_folder, frame_rate, keep_ranges,
+                                   normalize, read_clips, read_cut_list, read_inserts, read_order, rearrange, sequence,
                                    shift_transcript, snap_to_frames, video_seconds, video_start)
         from pipeline.transcribe import save_transcript
         if not full:
@@ -331,15 +350,24 @@ def main(
         # រយៈពេលរូប (មិនមែន file): សំឡេងអាចវែងជាងរូប ហើយផ្នែកចុងក្រោយនឹងគ្មាន frame
         first_frame = video_start(video)
         source_seconds = first_frame + video_seconds(video) if video_seconds(video) else probe_duration(video)
-        removed = normalize(read_cut_list(cuts), source_seconds)
-        inserts = read_inserts(cuts)   # "+ Extend a clip": ផ្នែកដែលចម្លងទៅដាក់កន្លែងផ្សេង (ឧ. hook)
-        # parts តាមលំដាប់ចេញ, គែមនៅលើ frame: រូប និងសំឡេងកាត់ចំពេលដូចគ្នា, transcript រំកិលតាមនោះ
-        in_time = keep_ranges(source_seconds, removed)
-        arranged = rearrange(in_time, read_order(cuts))   # លំដាប់ដែលអូសលើ timeline
-        # គ្មានផ្នែកណាចាប់ផ្តើមមុន frame ទីមួយ: សំឡេងនោះគ្មានរូប ហើយរុញផ្នែកបន្ទាប់ឲ្យលែងត្រូវគ្នា
-        parts = [(max(start, first_frame), end) for start, end in sequence(arranged, inserts, source_seconds)]
+        clips = read_clips(cuts)
+        if clips is not None:
+            # ទម្រង់ថ្មី: បញ្ជី clip តែមួយ = អ្វីដែលនៅ និងលំដាប់របស់វា
+            removed, inserts = [], []
+            parts = clip_parts(clips, source_seconds)
+            edited = not (len(parts) == 1 and parts[0][0] <= first_frame + 0.05 and parts[0][1] >= source_seconds - 0.05)
+            parts = [(max(start, first_frame), end) for start, end in parts]
+        else:
+            removed = normalize(read_cut_list(cuts), source_seconds)
+            inserts = read_inserts(cuts)   # "+ Extend a clip": ផ្នែកដែលចម្លងទៅដាក់កន្លែងផ្សេង (ឧ. hook)
+            # parts តាមលំដាប់ចេញ, គែមនៅលើ frame: រូប និងសំឡេងកាត់ចំពេលដូចគ្នា, transcript រំកិលតាមនោះ
+            in_time = keep_ranges(source_seconds, removed)
+            arranged = rearrange(in_time, read_order(cuts))   # លំដាប់ដែលអូសលើ timeline
+            # គ្មានផ្នែកណាចាប់ផ្តើមមុន frame ទីមួយ: សំឡេងនោះគ្មានរូប ហើយរុញផ្នែកបន្ទាប់ឲ្យលែងត្រូវគ្នា
+            parts = [(max(start, first_frame), end) for start, end in sequence(arranged, inserts, source_seconds)]
+            edited = bool(removed or inserts or arranged != in_time)
         keeps = snap_to_frames(parts, frame_rate(video))
-        if not (removed or inserts or arranged != in_time) or not keeps:
+        if not edited or not keeps:
             console.print("[red]cut list ទទេ ឬលុបវីដេអូទាំងមូល[/red]")
             raise typer.Exit(code=2)
         work_dir = out_dir / "edit"
@@ -442,6 +470,23 @@ def main(
     # `--full` render ទាំង video -> គ្មានអ្វីត្រូវជ្រើស និងគ្មានព្រំដែនត្រូវកែ
     clips = [] if full else None
     clips_cache = out_dir / "highlights.json"
+    # --timeframe: AI អានតែពាក្យក្នុងចន្លោះ; Whisper និង caption នៅប្រើ transcript ពេញ. គ្មាន flag
+    # (render ម្តងទៀត, រក clips បន្ថែម) = រក្សាជម្រើសដែលមានស្រាប់. ចន្លោះប្តូរ = ជម្រើសចាស់លែងត្រូវ.
+    # ជាមួយ --full: render តែចន្លោះនោះ ("មិនកាត់"), គ្មាន AI ដូច្នេះមិនប៉ះ cache ក៏គ្មានដែន 60 s
+    window = None
+    if timeframe:
+        try:
+            window = parse_timeframe(timeframe, duration, minimum=1 if full else None)
+        except ValueError as e:
+            console.print(f"[red]{e}[/red]")
+            raise typer.Exit(code=2)
+        if not full and clips_cache.is_file() and cached_timeframe(clips_cache) != window:
+            console.print("[yellow]ចន្លោះពេលប្តូរ — AI ជ្រើស clip ម្តងទៀត[/yellow]")
+            redo_highlights = True
+    pick_from = window_transcript(transcript, window)
+    if window and not full and not pick_from.segments:
+        console.print("[red]✘ 3/6 highlights បរាជ័យ:[/red] គ្មានការនិយាយក្នុងចន្លោះពេលដែលជ្រើស")
+        raise typer.Exit(code=1)
     was_cached = not redo_highlights and load_clips(clips_cache) is not None
     warnings: list[str] = []
     try:
@@ -452,14 +497,14 @@ def main(
         wanted = (max(max_clips, config.MAX_RANK_CANDIDATES)
                   if config.RANK_CANDIDATES else max_clips)
         if was_cached:
-            clips = find_highlights(transcript, max_clips=wanted, model=model,
+            clips = find_highlights(pick_from, max_clips=wanted, model=model,
                                     cache_path=clips_cache)
         else:
             with Progress(*progress_columns("3/6 highlights"), console=console) as progress:
                 task = progress.add_task("highlights", total=1)
                 clips = find_highlights(
-                    transcript, max_clips=wanted, model=model,
-                    cache_path=clips_cache, force=redo_highlights,
+                    pick_from, max_clips=wanted, model=model,
+                    cache_path=clips_cache, force=redo_highlights, timeframe=window,
                     on_progress=lambda done, total: (progress.update(
                         task, completed=done, total=total,
                         description="តម្រៀប" if done >= total - 1 else "chunk"),
@@ -470,6 +515,9 @@ def main(
         tag = " [dim](cache)[/dim]" if was_cached else ""
         console.print(f"[green]✔ 3/6 highlights[/green]  {short_path(clips_cache)}  "
                       f"({len(clips)} candidates){tag}")
+        genres = cached_genres(clips_cache)
+        if genres:
+            console.print(f"[dim]  genre: {', '.join(genres[0])} — {genres[1]}[/dim]")
         if warnings:
             console.print(f"[dim]  {len(warnings)} warning ត្រូវរំលង (clip ខុស format ឬក្រៅដែន)[/dim]")
             for warning in warnings[:3]:
@@ -489,7 +537,7 @@ def main(
     cached_final = None
     before: dict[str, float] = {}
     if full:
-        final = [full_video_clip(duration, title_stem)]
+        final = [full_video_clip(duration, title_stem, window)]
         console.print(f"[green]✔ 4/6 boundaries[/green]  រំលង ([cyan]--full[/cyan]) — "
                       f"video ពេញ {duration / 60:.1f} នាទី")
     else:
@@ -504,7 +552,7 @@ def main(
             console.print("[dim]  ជម្រើសចុងក្រោយយកពី clips.json (cache) — "
                           "ប្រើ --redo highlights ដើម្បីជ្រើសថ្មី[/dim]")
         else:
-            final = snap_boundaries(clips, transcript, on_warning=snap_warnings.append)
+            final = snap_boundaries(clips, pick_from, on_warning=snap_warnings.append)
 
     # ---------- ជំហានតម្រៀប ----------
     # ឥឡូវ clip មានព្រំដែនត្រឹមត្រូវហើយ (ចាប់ផ្តើមដើមប្រយោគ, >= 15s) ដូច្នេះ LLM
@@ -515,7 +563,7 @@ def main(
                                on_warning=snap_warnings.append)
         console.print(f"[dim]  តម្រៀប {len(final)} candidate -> យក {max_clips} ល្អបំផុត[/dim]")
     ranked = final                 # បញ្ជីពេញតាមលំដាប់ — cache ត្រូវរក្សាវា
-    final = final[:max_clips]
+    final = final[only_clip - 1:only_clip] if only_clip else final[:max_clips]
 
     # `--full` មិនត្រូវសរសេរ clips.json ទេ — មិនមានការជ្រើសអ្វីទាំងអស់
     # ហើយបើសរសេរ នោះ run ធម្មតាបន្ទាប់នឹងអាន cache នោះ រួច render វីដៀអូពេញជា "clip" ។
@@ -562,6 +610,12 @@ def main(
                 for clip in final:
                     plans.append(plan_clip(video, clip, source_size, seats,
                                            allowed=allowed_layouts))
+            if config.SPEAKER_TOP:
+                from pipeline.speakers import place_speakers
+                words = [w for s in transcript.segments for w in s.words]
+                with console.status("[cyan]reframe[/cyan] — រកអ្នកនិយាយ..."):
+                    plans = [place_speakers(video, segments, source_size, words)
+                             for segments in plans]
             for index, (clip, segments) in enumerate(zip(final, plans), start=1):
                 console.print(f"[dim]  #{index} {len(segments):2} shots — "
                               f"{describe(segments)}[/dim]")
@@ -652,6 +706,14 @@ def main(
     except (RenderError, FFmpegError, FileNotFoundError) as e:
         console.print(f"[red]✘ 6/6 render បរាជ័យ:[/red] {e}")
         raise typer.Exit(code=1)
+
+    if only_clip:
+        # .mp4 ចុងក្រោយ ព្រោះ sidecar ដឹងថា clip មានទំហំនេះ តាមរយៈ .mp4
+        moved = sorted(clips_dir.glob("clip_01*"), key=lambda path: path.suffix == ".mp4")
+        for path in moved:
+            os.replace(path, final_dir / f"clip_{only_clip:02d}{path.name[len('clip_01'):]}")
+        shutil.rmtree(clips_dir, ignore_errors=True)
+        clips_dir = final_dir
 
     console.print(f"\n[bold green]រួចរាល់![/bold green] clip {len(rendered)} "
                   f"នៅក្នុង {short_path(clips_dir)}\n")
