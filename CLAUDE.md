@@ -1501,6 +1501,16 @@ that runs behind a webcam tile in the source stays cut at the tile edge. Tests:
 re-rendered. In the browser the Reframe dialog lists ScreenShare on by default and Start sent
 `layout fill,fit,split,three,four,screen` (`POST /jobs` answered 503).
 
+**A wide two-shot planned as screen share -- found by the developer (2026-11-04)** ("Vercel 42:59 why use 3
+layout"). It was `screen2`, not `three`: in the Vercel interview's wide shot (1280x720) both men sit at x
+0.15-0.18 / 0.85-0.86 with faces 12-14 % of the height, and the lamp between them is still (motion 0.9-1.8),
+which passes every screen-share check. Motion cannot separate them (How-AI-agents' screen share reaches 1.62).
+A webcam tile has a straight edge: `tile_edge` takes the longest vertical run of rows with a brightness step
+>= `SCREEN_EDGE_STEP` 25 inside each face's tile area, divided by the face height -- How-AI-agents 2.1-3.2, the
+wide shot 0.2-0.7 -- and `screen_layout` now needs >= `SCREEN_TILE_EDGE` 1.5 for every face, on the frame the
+faces came from. Measured with `plan_shot`: all 19 screen2 shots in 12 of the 15 Vercel clips now plan `split`,
+five How-AI-agents ranges stay `screen2`. Existing clips keep the old layout until re-rendered. 771 pass.
+
 **Auto Subtitles and Auto Reframe follow the Long to Short flow (2026-10-25), planned with the
 developer first.** Decided: done opens the Reframe result screen; both whole-video tools change.
 - **Step 1 = the same picker.** `Illustration` and `Source` moved from `ClipSettingsDialog.tsx` to
@@ -3170,3 +3180,20 @@ Open, none fixed: (1) **`PUT /timeline` with `clips: []` loses `transition`**: i
 **Long to Short: pick in a dialog, settings on the page (2026-11-01) -- asked for by the developer.** The card opens `screens/ClipPickDialog.tsx` (illustration + the shared `Source`); once a video is chosen the dialog closes and `ClipSettingsPage` shows its thumbnail and settings in the main content, with the sidebar kept. The page now always has a video, so step 1 left it. "Change video" clears the video and reopens the dialog over the page behind (Home or My projects), so closing it there returns to that page, not to the settings. A real fix on the way: `connect()` never cleared its "waiting for the sidecar" message after connecting, so it stayed on screen in red (the developer's screenshot); it is cleared on success now. Measured in Edge against the developer's running sidecar and Vite with the first 3 `/health` calls failed and non-GET answered by the test (no real job): the card opens the dialog with no page and no stale message, Escape closes it, a sample or a typed path leads to the page with a real frame, Start sent `max_clips 5` and left the page; dialog 640x608 at 1100x700, no horizontal scroll; no page errors. tsc and oxlint clean. Edge only. `shot.mjs` looks for step 1 inside `[data-settings-page]` and needs updating.
 **Change video opens the file dialog at once (2026-11-03) -- asked for by the developer.** It used to clear the video and reopen the pick dialog. Now `App.changeVideo` calls `pickVideo`: Cancel keeps the current video, a picked file replaces it, and a plain browser, which has no such dialog, still gets the pick dialog. The page is keyed on the video's path, so a timeframe from the old video cannot carry over. Measured in Edge against the developer's running Vite and sidecar with the Tauri dialog mocked (non-GET answered by the test): Cancel left How-AI-agents 35:25 with no pick dialog; a picked Rhino read 0:55; the browser fallback showed the pick dialog. The one page error came from the mock, which lacks Tauri's event internals. tsc and oxlint clean. The real Windows dialog in the desktop window was not driven.
 **Choose aspect ratio on Long to Short works for all four sizes (2026-11-03) -- asked for by the developer; our design.** Review, Subtitles and Duplicate all need the 9:16 file in `clips/`, so a job with another size renders **twice**: `JobRequest.also_aspect` makes `JobRunner` run the same command again with `--aspect <size>`, which reuses the AI's pick and writes `clips_<size>/`. A failed first render stops the second, and the render fraction counts each pass as half. Review opens on that size (`ReviewChoices.defaultSize`), and the footer's Export sends it. Tests: `tests/test_also_aspect.py` (3); 770 pass. One real run from the page in Edge, on a throwaway copy of `Table For Four` through a test sidecar + Vite, with warm caches: all four rows enabled, body `also_aspect 1:1, max_clips 5`, done in 91 s; `clips/` 1080x1920 and `clips_1x1/` 1080x1080 for all 5; Review showed 268x268 thumbnails from the 1:1 files and the video played at 1080x1080; no page errors. Seen, not fixed: the card's % falls by a few points at times, e.g. 30 -> 22 -> 37. "Find more clips" still renders 9:16 only, so the footer's Export would skip those clips at the other size. The page's Estimated time does not count the second render. The size is forgotten when the app restarts. The running sidecar ignores `also_aspect` until restarted. Copy recycled, sources and real clips unchanged. Edge only.
+**A queue: a second video waits and starts by itself (2026-11-04) -- asked for by the developer** ("if one video processing,
+second video add queue, after video one finish start process second"). Two at once is not possible: Whisper `medium` uses
+~2.6 of 3 GB and the 7b LLM more. Sidecar: `POST /jobs {queue: true}` while a job runs (or the queue is not empty) makes a
+`queued` job in `JobRunner.pending` instead of a 409; when a job ends -- done, failed or cancelled -- `_next()` launches the
+oldest one. `cached` is computed at launch, not when queued, since the job before may have written its files. `DELETE` on a
+queued job takes it out of the queue; deleting a project with a queued job is 409; the WebSocket stays open while `queued`.
+Without `queue` nothing changed. Tests: `tests/test_job_queue.py` (4); 775 pass. UI: Long to Short's Start reads
+"បន្ថែមក្នុងជួរ" while a job runs (with "មើលការដំណើរការ" beside it), and Long to Short, AI Reframe, Auto Subtitles and Edit
+Video's Export go through `App.submit`, which queues when busy; a card reads "ក្នុងជួរ · ទី N" / "រង់ចាំ job មុនចប់" and its ⋯
+cancels it; when the running job ends, `useJob.attach` follows the next one and its card shows %, then its own toast. The
+"Added to the queue" toast closes after 4 s, because it covered the Start button (found by the test). Other starts (Subtitles
+Save, find more clips, a size on Review, transcribe) still answer 409 while busy. The queue lives in the sidecar's memory: a
+sidecar restart or closing the app drops it. Also fixed: Processing's title came from the last chosen video, not the running
+job (screenshot: Vercel's name over How-AI-agents' log). Measured in Edge against a test sidecar + Vite with every job call
+mocked (no real run): How-AI-agents started, Vercel and Table For Four queued as 1 and 2, cancelling Table For Four sent
+`DELETE`, finishing How-AI-agents showed its toast and Vercel's card switched to % on its own, then its own toast; no page
+errors. Not run with real jobs or in the desktop window.
