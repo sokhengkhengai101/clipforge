@@ -82,3 +82,17 @@ def test_captions_sit_on_the_slide_seam():
     assert captions.last_seam("screen2") == 864
     assert captions.line_positions(1, "screen2") == [864]
     assert captions.line_positions(2, "screen1")[0] < 864 < captions.line_positions(2, "screen1")[1]
+
+
+def test_screen_layout_needs_a_webcam_tile_edge(monkeypatch):
+    """wide shot: មុខតូចនៅគែម បន្ទប់ស្ងៀម តែគ្មានគែមប្រអប់ -> មិនមែន screen (Vercel 42:59)."""
+    import numpy as np
+    import pipeline.subjects as S
+    monkeypatch.setattr(S, "motion_level", lambda *a, **k: 0.1)
+    room = np.full((360, 640, 3), 90, np.uint8)
+    assert R.screen_layout(None, 0, 10, (640, 360), [LEFT, RIGHT], LEFT, room) is None
+    tiles = room.copy()
+    tiles[60:300, :110] = 200          # ប្រអប់ webcam ឆ្វេង: គែមនៅ x 110, ខ្ពស់ 240 = 5 ដងមុខ
+    tiles[60:300, 545:] = 200          # ស្តាំ: គែមនៅ x 545
+    assert R.screen_layout(None, 0, 10, (640, 360), [LEFT, RIGHT], LEFT, tiles).kind == "screen2"
+    assert R.tile_edge(tiles, LEFT, 640) > config.SCREEN_TILE_EDGE > R.tile_edge(room, LEFT, 640)
