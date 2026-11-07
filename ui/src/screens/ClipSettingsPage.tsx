@@ -43,6 +43,7 @@ export function ClipSettingsPage({
   error,
   connected,
   busy,
+  queueing,
   clips,
   maxClips,
   onMaxClips,
@@ -70,6 +71,7 @@ export function ClipSettingsPage({
   error: string
   connected: boolean
   busy: boolean
+  queueing: boolean // មាន job រត់ ឬជួរមិនទទេ: Start ដាក់វីដេអូនេះក្នុងជួរ
   clips: number // clip ដែលវីដេអូដែលជ្រើសមានរួចហើយ
   maxClips: number
   onMaxClips: (count: number) => void
@@ -121,7 +123,7 @@ export function ClipSettingsPage({
       ? null
       : Math.max(1, Math.round(totalSeconds(pack, health, seconds, maxClips, whole ? undefined : rangeEnd - rangeStart) / 60))
   const estimate = minutes === null ? null : `~${t(khmerNumber(minutes), String(minutes))} ${t('នាទី', 'min')}`
-  const ready =!!chosen.path && connected && !busy && (mode === 'full' || !tooShort)
+  const ready = !!chosen.path && connected && (mode === 'full' || !tooShort)
   const currentPreset = presetOf(captionStyle)
 
   const timeframeBlock = (
@@ -154,12 +156,11 @@ export function ClipSettingsPage({
       </p>
       <div className="flex items-center gap-2.5">
         {clips > 0 && <Button onClick={onReview}>មើល {khmerNumber(clips)} clips</Button>}
+        {busy && <Button onClick={onShowJob}>មើលការដំណើរការ</Button>}
         <button
           type="button"
           onClick={
-            busy
-              ? onShowJob
-              : mode === 'full'
+            mode === 'full'
                 ? () => onReframe(whole ? null : { timeframe: `${rangeStart},${rangeEnd}`, seconds: rangeEnd - rangeStart })
                 : () =>
                     // "all" មិនមែនគ្មាន flag: ជម្រើសពីចន្លោះមុនត្រូវជំនួសដោយវីដេអូទាំងមូល
@@ -170,7 +171,7 @@ export function ClipSettingsPage({
                       aspect,
                     )
           }
-          disabled={!ready && !busy}
+          disabled={!ready}
           title={
             !chosen.path
               ? 'គ្មាន path វីដេអូដើម'
@@ -180,7 +181,7 @@ export function ClipSettingsPage({
           }
           className={`inline-flex min-h-12 cursor-pointer items-center gap-2.5 rounded-[12px] border-0 bg-gold px-6 text-[16px] font-bold text-on-gold disabled:cursor-default disabled:opacity-40 ${focusRing}`}
         >
-          {busy ? 'មើលការដំណើរការ' : mode === 'full' ? 'បើក AI Reframe' : 'ចាប់ផ្ដើមបង្កើត Clips'}
+          {mode === 'full' ? 'បើក AI Reframe' : queueing ? 'បន្ថែមក្នុងជួរ' : 'ចាប់ផ្ដើមបង្កើត Clips'}
           <ArrowRightIcon size={16} />
         </button>
       </div>
