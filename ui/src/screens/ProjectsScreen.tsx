@@ -13,7 +13,8 @@ type Tab = 'all' | 'clips' | 'reframe' | 'unfinished'
 export type ProjectAction = 'review' | 'reframe-result' | 'edit' | 'new-clips' | 'reframe' | 'folder' | 'video' | 'cancel'
 
 /** project ដែល job របស់វាកំពុងរត់ — កាតរបស់វាបង្ហាញ % + ETA (ប៉ាន់ស្មាន, `eta.ts`). */
-export type Running = { name: string; estimate: RunEstimate | null }
+/** កាតដែលមាន job: កំពុងរត់ (`estimate`) ឬក្នុងជួរ (`position` = ទី ១, ២ ...). */
+export type Running = { name: string; estimate: RunEstimate | null; position?: number }
 
 /** ប្តូរឈ្មោះ និងលុប ត្រូវការ dialog ដូច្នេះទំព័រនេះសួរសិន រួចទើប App ធ្វើ (Promise = រង់ចាំ sidecar). */
 type MenuChoice = ProjectAction | 'rename' | 'delete'
@@ -33,7 +34,7 @@ export function ProjectsScreen({
   onAction,
   onRename,
   onDelete,
-  running,
+  runs,
 }: {
   projects: Project[]
   outputDir: string
@@ -42,7 +43,7 @@ export function ProjectsScreen({
   onAction: (project: Project, action: ProjectAction) => void
   onRename: (project: Project, title: string) => Promise<void>
   onDelete: (project: Project) => Promise<void>
-  running: Running | null
+  runs: Running[]
 }) {
   const [tab, setTab] = useState<Tab>('all')
   const [query, setQuery] = useState('')
@@ -140,7 +141,7 @@ export function ProjectsScreen({
           onAction={onAction}
           onRename={onRename}
           onDelete={onDelete}
-          running={running}
+          runs={runs}
         />
 
         {shown.length === 0 && (
@@ -166,7 +167,7 @@ export function ProjectCards({
   onAction,
   onRename,
   onDelete,
-  running,
+  runs,
   columns,
 }: {
   projects: Project[]
@@ -177,7 +178,7 @@ export function ProjectCards({
   onAction: (project: Project, action: ProjectAction) => void
   onRename: (project: Project, title: string) => Promise<void>
   onDelete: (project: Project) => Promise<void>
-  running: Running | null
+  runs: Running[]
   columns?: number
 }) {
   // dialog ដែលកំពុងបើក (ប្តូរឈ្មោះ / លុប) និង project របស់វា
@@ -186,7 +187,8 @@ export function ProjectCards({
     if (choice === 'rename' || choice === 'delete') setAsking({ kind: choice, project })
     else onAction(project, choice)
   }
-  const runOf = (project: Project) => (running && running.name === project.name ? running : null)
+  // កំពុងរត់មុន (runs[0]) — វីដេអូដដែលអាចនៅក្នុងជួរម្តងទៀតផង
+  const runOf = (project: Project) => runs.find((item) => item.name === project.name) ?? null
 
   return (
     <>
@@ -269,7 +271,8 @@ function ProjectCard({
   onOpen: () => void
   onAction: (choice: MenuChoice) => void
 }) {
-  const openable = Boolean(run) || canOpen(project)
+  // ក្នុងជួរ: មិនទាន់មានអ្វីត្រូវមើលទេ — មានតែ ⋯ បោះបង់
+  const openable = run ? !run.position : canOpen(project)
   return (
     // រូប និងឈ្មោះបើក project ទាំងពីរ; "⋯" នៅជួរដដែលនឹងឈ្មោះ (flex) មិនមែន absolute ពីបាតកាត
     // ទេ — ពីមុនវាធ្លាក់នៅចន្លោះឈ្មោះ និងបន្ទាត់ព័ត៌មាន (រកឃើញដោយអ្នកអភិវឌ្ឍ)
@@ -298,7 +301,7 @@ function ProjectCard({
         >
           <span className="block truncate text-[15px] leading-[1.5] font-bold">{project.title}</span>
           <span className="mt-0.5 block truncate text-[12.5px] text-text-3">
-            {run ? 'កំពុងបង្កើត clips…' : metaLine(project)}
+            {run?.position ? 'រង់ចាំ job មុនចប់' : run ? 'កំពុងបង្កើត clips…' : metaLine(project)}
           </span>
         </button>
         <ProjectMenu project={project} running={Boolean(run)} onAction={onAction} />
@@ -335,7 +338,7 @@ function ProjectRow({
     <div className="flex items-center gap-1 rounded-card bg-card pr-2 hover:bg-raised">
       <button
         type="button"
-        disabled={!run && !canOpen(project)}
+        disabled={run ? Boolean(run.position) : !canOpen(project)}
         onClick={onOpen}
         title={run ? 'មើលការដំណើរការ' : openHint(project)}
         className={`flex min-w-0 flex-1 cursor-pointer items-center gap-4 rounded-card border-0 bg-transparent p-2 text-left text-text disabled:cursor-default ${focusRing}`}
@@ -343,7 +346,7 @@ function ProjectRow({
         <Thumb project={project} run={run} small className="h-[54px] w-24 shrink-0 rounded-field" />
         <span className="min-w-0 flex-1 truncate text-[15px] font-bold">{project.title}</span>
         <span className="shrink-0 text-[13px] text-text-3">
-          {run ? runLine(run.estimate) : metaLine(project)}
+          {run?.position ? queueLine(run.position) : run ? runLine(run.estimate) : metaLine(project)}
         </span>
       </button>
       <ProjectMenu project={project} running={Boolean(run)} onAction={onAction} />
@@ -589,7 +592,12 @@ function Thumb({
       : project.video
         ? sourceFrameUrl(project.video, project.seconds ? Math.min(60, project.seconds * 0.1) : 5)
         : null
-  const badge = run ? { text: 'កំពុងដំណើរការ', tone: 'bg-gold text-on-gold' } : stateBadge(project)
+  const badge = run?.position
+    ? { text: queueLine(run.position), tone: 'bg-info text-bg' }
+    : run
+      ? { text: 'កំពុងដំណើរការ', tone: 'bg-gold text-on-gold' }
+      : stateBadge(project)
+  const progress = run && !run.position ? run : null // % តែ job ដែលកំពុងរត់
   return (
     <span className={`relative block overflow-hidden bg-raised-2 ${className}`}>
       {src ? (
@@ -603,7 +611,7 @@ function Thumb({
       ) : (
         <span className="flex size-full items-center justify-center type-hint text-text-4">គ្មានរូប</span>
       )}
-      {run && !small && (
+      {progress && !small && (
         // ស្លាកវឌ្ឍនភាពកណ្តាលរូប (រូប OpusClip: "8% (ETA 3m)") + របារនៅបាត — % ប៉ាន់ស្មាន (eta.ts)
         <>
           <span className="absolute inset-0 bg-black/45" />
@@ -611,16 +619,16 @@ function Thumb({
             className="absolute top-1/2 left-1/2 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-0.5 rounded-[10px] border border-ok/50 bg-black/80 px-3.5 py-2 text-center whitespace-nowrap"
             title="ប៉ាន់ស្មានពីល្បឿនដែលវាស់លើកុំព្យូទ័រនេះ — អាចខុសពីការពិតច្រើននាទី"
           >
-            <span className="text-[14px] font-bold text-ok-text tabular-nums">{runLine(run.estimate)}</span>
+            <span className="text-[14px] font-bold text-ok-text tabular-nums">{runLine(progress.estimate)}</span>
             {/* ពីល្បឿនពិត = pipeline ប្រាប់វឌ្ឍនភាពជំហាននេះ; ប៉ាន់ស្មាន = ពីល្បឿនដែលវាស់ពីមុន */}
-            <span className="text-[11px] text-text-3">{run.estimate?.measured ? 'ពីល្បឿនពិត' : 'ប៉ាន់ស្មាន'}</span>
+            <span className="text-[11px] text-text-3">{progress.estimate?.measured ? 'ពីល្បឿនពិត' : 'ប៉ាន់ស្មាន'}</span>
           </span>
           <span className="absolute inset-x-0 bottom-0 h-1 bg-black/60">
-            <span className="block h-full bg-ok transition-[width] duration-700" style={{ width: `${run.estimate?.percent ?? 0}%` }} />
+            <span className="block h-full bg-ok transition-[width] duration-700" style={{ width: `${progress.estimate?.percent ?? 0}%` }} />
           </span>
         </>
       )}
-      {run && small && <span className="absolute inset-x-0 bottom-0 h-1 bg-ok" style={{ width: `${run.estimate?.percent ?? 0}%` }} />}
+      {progress && small && <span className="absolute inset-x-0 bottom-0 h-1 bg-ok" style={{ width: `${progress.estimate?.percent ?? 0}%` }} />}
       {!run && !small && project.seconds !== null && (
         <span className="absolute right-2 bottom-2 rounded-[6px] bg-black/70 px-1.5 text-[12px] font-semibold text-white tabular-nums">
           {clock(project.seconds)}
@@ -636,6 +644,11 @@ function Thumb({
 }
 
 // ---------- ជំនួយ ----------
+
+/** "ក្នុងជួរ · ទី ១" — ចាប់ផ្តើមដោយខ្លួនឯង ពេល job មុនចប់. */
+function queueLine(position: number): string {
+  return `ក្នុងជួរ · ទី ${khmerNumber(position)}`
+}
 
 /** "38% · ~៩ នាទី" ឬ "កំពុងចាប់ផ្តើម…" មុន status ដំបូងមកដល់. */
 function runLine(estimate: RunEstimate | null): string {

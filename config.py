@@ -228,6 +228,10 @@ SCREEN_MIN_WIDTH = 0.40       # ផ្ទៃ slide យ៉ាងតិច 40% ន
 # slide ស្ងៀម 0.07-0.21; អេក្រង់ដែល scroll/រំកិល (tokenizer, whiteboard) 4.0-5.1; វីដេអូពិត 51-66
 SCREEN_MOTION_MAX = 15.0
 SCREEN_TOP_RATIO = 0.45       # ផ្ទាំង slide = 45% កម្ពស់ (1080x864 លើ 9:16), មនុស្សនៅក្រោម
+# ប្រអប់ webcam មានគែមត្រង់: បន្ទាត់បញ្ឈរវែងបំផុតក្បែរមុខ ÷ កម្ពស់មុខ. វាស់: How-AI-agents
+# 2.1-3.2; wide shot ពីរនាក់អង្គុយ (Vercel 42:59) 0.2-0.7 -- មុខនៅគែម ចលនាតិច ដូច screen ដែរ
+SCREEN_TILE_EDGE = 1.5
+SCREEN_EDGE_STEP = 25         # ពន្លឺលោត >= 25 (0-255) រវាង pixel ជាប់គ្នា = គែម
 
 FACE_MATCH_THRESHOLD = 0.30         # cosine អប្បបរមាទើបរាប់ថាជាមនុស្សតែម្នាក់
 # វាស់លើ footage ពិត: មុខពិត 0.90-0.94, false positive (ចង្កៀង) 0.53-0.57

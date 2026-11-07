@@ -150,7 +150,7 @@ class Job:
     video: Path
     out_dir: Path
     args: list[str]
-    state: str = "running"          # running | done | failed | cancelled
+    state: str = "running"          # queued | running | done | failed | cancelled
     started: float = field(default_factory=time.time)
     finished: float | None = None
     error: str = ""
@@ -167,6 +167,8 @@ class Job:
     # Long to Short ជ្រើសទំហំក្រៅពី 9:16: render 9:16 សិន (Review, Subtitles ត្រូវការ `clips/`)
     # រួច render ទំហំនោះទៀត ពីជម្រើស AI ដដែល. command ទី ២ នេះ; None = គ្មាន
     also_args: list[str] | None = None
+    # option ដែល UI ផ្ញើ — ទុកសម្រាប់គណនា `cached` ពេល job ក្នុងជួរចាប់ផ្តើមពិត
+    options: dict = field(default_factory=dict)
 
     def progress(self) -> dict:
         """ជំហានណាចប់ហើយ — អានពី file ដែលមានលើ disk.
@@ -175,6 +177,11 @@ class Job:
         សរសេរ **ក្រោយ** job នេះចាប់ផ្តើម (mtime): `--redo` និង render សរសេរជាន់លើ
         file ចាស់ ដូច្នេះ "file មាន" តែឯងមិនបានន័យថា run នេះធ្វើវារួចទេ.
         """
+        if self.state == "queued":
+            # មិនទាន់ចាប់ផ្តើម: file ក្នុង folder ជារបស់ job មុនៗ មិនមែនរបស់វាទេ
+            return {"done": [], "cached": [], "fresh": [], "skipped": list(self.skipped),
+                    "planned": False, "folder": self.folder, "total": len(STEPS),
+                    "fraction": {}, "step": "queued"}
         written = steps_on_disk(self.out_dir, since=self.started - MTIME_SLACK, folder=self.folder)
         if self.state == "running":
             # FFmpeg សរសេរ .mp4 នៅកន្លែងតែម្តង ដូច្នេះ file លេចមកតាំងពី render ទើបចាប់ផ្តើម
@@ -201,59 +208,94 @@ class Job:
 
 
 class JobRunner:
-    """ផ្ទុក job ក្នុង memory រួចរត់ម្តងមួយ (GPU មានតែមួយ)."""
+    """ផ្ទុក job ក្នុង memory រួចរត់ម្តងមួយ (GPU មានតែមួយ).
+
+    job ដែលមកពេលមួយទៀតកំពុងរត់ អាចចូល **ជួរ** (`queue=True`): វារង់ជា `queued`
+    ហើយចាប់ផ្តើមដោយខ្លួនឯងពេល job មុនចប់ — មិនរត់ពីរព្រមគ្នាទេ ព្រោះ Whisper
+    និង Ollama ប្រើ GPU 3 GB តែមួយ។
+    """
 
     def __init__(self) -> None:
         self.jobs: dict[str, Job] = {}
+        self.pending: list[Job] = []      # ជួរ: ចាស់មុន
         self._lock = threading.Lock()
 
     def active(self) -> Job | None:
         return next((j for j in self.jobs.values() if j.state == "running"), None)
 
-    def start(self, video: Path, **options) -> Job:
-        """ចាប់ផ្តើម job។ បោះ `RuntimeError` បើមាន job កំពុងរត់."""
+    def start(self, video: Path, queue: bool = False, **options) -> Job:
+        """ចាប់ផ្តើម job។ មាន job កំពុងរត់: `queue` -> ចូលជួរ, បើមិនដូច្នោះ `RuntimeError`."""
         video = Path(video)
         if not video.is_file():
             raise FileNotFoundError(f"រកមិនឃើញ video: {video}")
         with self._lock:
-            if self.active() is not None:
+            busy = self.active() is not None or bool(self.pending)
+            if busy and not queue:
                 raise RuntimeError("មាន job កំពុងរត់រួចហើយ (GPU មានតែមួយ)")
-
-            also_aspect = options.pop("also_aspect", None)
-            args = [str(PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"), "-u",
-                    str(PROJECT_ROOT / "make_clips.py"), str(video)]
-            for key, value in options.items():
-                # False = flag មិនបើក (typer bool flag គ្មានតម្លៃ "False")
-                if value is None or value is False:
-                    continue
-                flag = "--" + key.replace("_", "-")
-                args += [flag] if value is True else [flag, str(value)]
-
-            job = Job(id=uuid.uuid4().hex[:8], video=video,
-                      out_dir=PROJECT_ROOT / "output" / video.stem, args=args,
-                      folder=output_folder(options),
-                      also_args=args + ["--aspect", also_aspect] if also_aspect else None,
-                      skipped=(("highlights", "boundaries", "captions", "render")
-                               if options.get("transcribe_only")
-                               else ("highlights", "boundaries") if options.get("full") else ()))
-            redone = steps_redone(options)
-            # ភាសាដែលសុំខុសពី transcript ចាស់ = make_clips transcribe ម្តងទៀត (មិនមែន cache)
-            if language_changes(job.out_dir, options.get("language")):
-                redone |= {"transcribe", *REDO_TOUCHES["highlights"]}
-            if timeframe_changes(job.out_dir, options.get("timeframe")):
-                redone |= set(REDO_TOUCHES["highlights"])
-            on_disk = steps_on_disk(job.out_dir, folder=job.folder)
-            job.cached = tuple(name for name, _ in STEPS
-                               if name in on_disk and name not in redone and name not in job.skipped)
+            job = self._build(video, dict(options))
             self.jobs[job.id] = job
+            if busy:
+                job.state = "queued"
+                self.pending.append(job)
+            else:
+                self._launch(job)
+        return job
 
-        db.save_job(job.id, video.stem, str(video), job.args, job.started)
+    def _build(self, video: Path, options: dict) -> Job:
+        """បង្កើត Job (command, folder) — មិនទាន់រត់."""
+        also_aspect = options.pop("also_aspect", None)
+        args = [str(PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"), "-u",
+                str(PROJECT_ROOT / "make_clips.py"), str(video)]
+        for key, value in options.items():
+            # False = flag មិនបើក (typer bool flag គ្មានតម្លៃ "False")
+            if value is None or value is False:
+                continue
+            flag = "--" + key.replace("_", "-")
+            args += [flag] if value is True else [flag, str(value)]
+
+        job = Job(id=uuid.uuid4().hex[:8], video=video,
+                  out_dir=PROJECT_ROOT / "output" / video.stem, args=args,
+                  folder=output_folder(options),
+                  also_args=args + ["--aspect", also_aspect] if also_aspect else None,
+                  skipped=(("highlights", "boundaries", "captions", "render")
+                           if options.get("transcribe_only")
+                           else ("highlights", "boundaries") if options.get("full") else ()),
+                  options=options)
+        return job
+
+    def _launch(self, job: Job) -> None:
+        """រត់ job ឥឡូវ (ហៅក្រោម `_lock`). `cached` គណនានៅពេលនេះ មិនមែនពេលចូលជួរទេ:
+        job មុនអាចបានសរសេរ file ដែល job នេះនឹងប្រើ (transcript ដូចគ្នា ...)."""
+        options = job.options
+        job.state, job.started = "running", time.time()
+        redone = steps_redone(options)
+        # ភាសាដែលសុំខុសពី transcript ចាស់ = make_clips transcribe ម្តងទៀត (មិនមែន cache)
+        if language_changes(job.out_dir, options.get("language")):
+            redone |= {"transcribe", *REDO_TOUCHES["highlights"]}
+        if timeframe_changes(job.out_dir, options.get("timeframe")):
+            redone |= set(REDO_TOUCHES["highlights"])
+        on_disk = steps_on_disk(job.out_dir, folder=job.folder)
+        job.cached = tuple(name for name, _ in STEPS
+                           if name in on_disk and name not in redone and name not in job.skipped)
+
+        db.save_job(job.id, job.video.stem, str(job.video), job.args, job.started)
         thread = threading.Thread(target=self._run, args=(job,), daemon=True)
         thread.start()
-        return job
+
+    def _next(self) -> None:
+        """job មុនចប់ហើយ: ចាប់ផ្តើម job ចាស់ជាងគេក្នុងជួរ."""
+        with self._lock:
+            if self.active() is None and self.pending:
+                self._launch(self.pending.pop(0))
 
     def _run(self, job: Job) -> None:
         """រត់ process (មួយ ឬពីរ: `also_args`) រួចប្រមូល output មួយបន្ទាត់ម្តង."""
+        try:
+            self._run_pipeline(job)
+        finally:
+            self._next()           # ចប់ បរាជ័យ ឬបោះបង់ — job បន្ទាប់ក្នុងជួររត់ដដែល
+
+    def _run_pipeline(self, job: Job) -> None:
         try:
             code = self._run_one(job, job.args, render_share=(0.0, 0.5) if job.also_args else (0.0, 1.0))
             if code == 0 and job.also_args and job.state != "cancelled":
@@ -304,6 +346,12 @@ class JobRunner:
 
     def cancel(self, job_id: str) -> Job:
         job = self.jobs[job_id]
+        with self._lock:
+            if job.state == "queued":
+                # មិនទាន់រត់: ដកចេញពីជួរ (គ្មាន process, មិនទាន់នៅក្នុង database)
+                self.pending.remove(job)
+                job.state, job.finished = "cancelled", time.time()
+                return job
         if job.state == "running" and job.process is not None:
             job.state = "cancelled"
             job.process.terminate()

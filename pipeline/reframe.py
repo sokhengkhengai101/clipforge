@@ -885,6 +885,38 @@ def is_webcam_face(face: Face, frame_w: int, frame_h: int) -> bool:
     return near_edge and face.h <= frame_h * config.SCREEN_FACE_MAX
 
 
+def _longest_run(column, gap: int = 2) -> int:
+    """ជួរ True វែងបំផុត ដោយអត់ឲ្យខ្វះ `gap` pixel (គែមខូចបន្តិចដោយ compression)."""
+    best = run = miss = 0
+    for on in column:
+        if on:
+            run = run + miss + 1 if run else 1
+            miss = 0
+            best = max(best, run)
+        elif run:
+            miss += 1
+            if miss > gap:
+                run = miss = 0
+    return best
+
+
+def tile_edge(frame, face: Face, frame_w: int) -> float:
+    """គែមបញ្ឈរវែងបំផុតក្នុងផ្ទៃប្រអប់ webcam របស់មុខនេះ ÷ កម្ពស់មុខ.
+
+    ប្រអប់ webcam ពិតជាចតុកោណ ដូច្នេះមានជួរឈរមួយដែលពន្លឺលោតពីជួរដេកមួយទៅជួរដេកមួយ
+    ច្រើនដងកម្ពស់មុខ (How-AI-agents: 2.1-3.2). បន្ទប់ធម្មតាគ្មានទេ (0.2-0.7).
+    """
+    import cv2
+    import numpy as np
+
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(np.int16)
+    step = np.abs(np.diff(gray, axis=1)) >= config.SCREEN_EDGE_STEP
+    half = face.w * config.SCREEN_TILE_RATIO / 2
+    x0, x1 = max(0, int(face.cx - half)), min(step.shape[1], int(face.cx + half))
+    longest = max((_longest_run(step[:, x]) for x in range(x0, x1)), default=0)
+    return longest / max(face.h, 1)
+
+
 def screen_region(faces: list[Face], frame_w: int) -> tuple[int, int]:
     """ផ្ទៃ x0..x1 ដែលគ្មានប្រអប់ webcam — ចន្លោះរវាងប្រអប់ (ឬពីប្រអប់ទៅគែមម្ខាងទៀត).
 
@@ -924,7 +956,7 @@ def webcam_box(face: Face, frame_w: int, frame_h: int, aspect: float) -> Box:
 
 
 def screen_layout(video_path: Path, start: float, end: float, size: tuple[int, int],
-                  faces: list[Face], biggest: Face | None) -> Layout | None:
+                  faces: list[Face], biggest: Face | None, frame=None) -> Layout | None:
     """slide ខាងលើ + មនុស្ស webcam ខាងក្រោម, ឬ `None` បើ shot នេះមិនមែនអេក្រង់ចែករំលែក.
 
     លក្ខខណ្ឌទាំងអស់: មុខ ១-២ ជា webcam (តូច នៅគែម; ពីរនាក់ = ម្នាក់ម្ខាង), ផ្ទៃ slide
@@ -943,6 +975,10 @@ def screen_layout(video_path: Path, start: float, end: float, size: tuple[int, i
         return None                  # ពីរនាក់ម្ខាងតែមួយ — មិនមែនទម្រង់នេះទេ
     region = screen_region(people, frame_w)
     if region[1] - region[0] < frame_w * config.SCREEN_MIN_WIDTH:
+        return None
+    # wide shot ពីរនាក់អង្គុយ ក៏មុខតូចនៅគែម ហើយបន្ទប់ស្ងៀមដែរ: ខុសគ្នាត្រង់គ្មានប្រអប់
+    if frame is not None and any(tile_edge(frame, f, frame_w) < config.SCREEN_TILE_EDGE
+                                 for f in people):
         return None
 
     kind = "screen1" if len(people) == 1 else "screen2"
@@ -1027,7 +1063,7 @@ def plan_shot(video_path: Path, start: float, end: float, size: tuple[int, int],
     # អេក្រង់ចែករំលែក + webcam តូចនៅគែម -> slide ខាងលើ, មនុស្សខាងក្រោម។ សាកមុនផ្ទាំង
     # មនុស្ស: split/three បោះ slide ចោល (How-AI-agents មុននេះ: single ១០/១០ clips)
     if "screen" in allowed and best:
-        screen = screen_layout(video_path, start, end, size, best, biggest)
+        screen = screen_layout(video_path, start, end, size, best, biggest, best_frame)
         if screen is not None:
             return screen
 

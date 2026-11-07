@@ -26,7 +26,7 @@ export function useJob() {
         if (message.line) setLog((lines) => [...lines, message.line])
         if (message.status) {
           setStatus(message.status)
-          if (message.status.state !== 'running') ended = true
+          if (message.status.state !== 'running' && message.status.state !== 'queued') ended = true
         }
         if (message.error) {
           setError(message.error)
@@ -78,6 +78,21 @@ export function useJob() {
     [listen],
   )
 
+  /** តាមដាន job ដែល sidecar ចាប់ផ្តើមរួចហើយ (job ក្នុងជួរ ពេល job មុនចប់) — មិន POST ទៀតទេ. */
+  const attach = useCallback(
+    async (jobId: string) => {
+      setError('')
+      setLog([])
+      try {
+        setStatus(await api.job(jobId))
+        listen(jobId)
+      } catch (e) {
+        setError((e as Error).message)
+      }
+    },
+    [listen],
+  )
+
   const cancel = useCallback(async () => {
     if (!status) return
     try {
@@ -90,5 +105,5 @@ export function useJob() {
   // បិទ socket ពេល component រលាយ ដើម្បីកុំទុក connection ចោល
   useEffect(() => () => socket.current?.close(), [])
 
-  return { status, log, error, start, cancel, starting, running: status?.state === 'running' }
+  return { status, log, error, start, attach, cancel, starting, running: status?.state === 'running' }
 }

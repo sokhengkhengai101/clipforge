@@ -10,6 +10,7 @@ import { StepRow } from './StepRow'
 import { clock, khmerNumber } from './khmer'
 
 const HEADLINE: Record<JobStatus['state'], string> = {
+  queued: 'កំពុងរង់ចាំក្នុងជួរ',
   running: 'កំពុង Reframe',
   done: 'Reframe រួចរាល់ហើយ!',
   failed: 'Reframe មិនបាន',

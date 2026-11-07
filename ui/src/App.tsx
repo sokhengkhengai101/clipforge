@@ -82,9 +82,12 @@ export default function App() {
   const recentRef = useRef<HTMLElement>(null)
   // job "វីដេអូវែង → clips" ដែលចាប់ផ្តើមពី dialog: មិនទៅ Processing ទេ — កាតរបស់វាបង្ហាញ % + ETA
   const [run, setRun] = useState<Run | null>(null)
+  // ជួរ: job ដែលចុច Start ពេល job មួយទៀតកំពុងរត់. sidecar រត់វាម្តងមួយ; UI ចាំ Run (កាត % + toast)
+  // របស់នីមួយៗ ហើយប្តូរទៅ job បន្ទាប់ពេល job មុនចប់
+  const [queued, setQueued] = useState<{ id: string; run: Run; label: string }[]>([])
   // សារតូចនៅជ្រុងខាងក្រោម: job ចប់ / បរាជ័យ / ចាប់ផ្តើមមិនបាន
   const [toast, setToast] = useState<{
-    kind: 'done' | 'failed' | 'cancelled' | 'error'
+    kind: 'done' | 'failed' | 'cancelled' | 'error' | 'queued'
     name: string
     text?: string
     tool?: RunTool // subtitles/reframe: មើល = ទំព័រលទ្ធផល Reframe
@@ -93,7 +96,8 @@ export default function App() {
   const [maxClips, setMaxClips] = useState(defaults.maxClips)
   // អ្វីដែល job ចុងក្រោយបានចាប់ផ្តើមជាមួយ ("៥ clips · Podcast Clips") — screen Processing
   // បង្ហាញវា; យកពេលចាប់ផ្តើម ដូច្នេះការប្តូរ preset ពេល job រត់មិនប្តូរអត្ថបទ
-  const [runLabel, setRunLabel] = useState('')
+  // ស្លាក ("៥ clips · Long to Short") ភ្ជាប់នឹងវីដេអូរបស់ job នោះ: ជ្រើសវីដេអូផ្សេងពេល job រត់ មិនប្តូរវាទេ
+  const [runLabel, setRunLabel] = useState({ video: '', label: '' })
   // Model pack = flag ដែល *គ្រប់* job ប្រើ. 'auto' = BEST FIT តាម VRAM ពិត (/env);
   // មុន /env ឆ្លើយ auto = Standard, ជាអ្វីដែលម៉ាស៊ីននេះរត់ពិត (ដូចលំនាំដើមចាស់).
   const [packChoice, setPackChoice] = useState<PackChoice>(defaults.pack)
@@ -219,7 +223,7 @@ export default function App() {
   const startWith = useCallback(
     (extra: Record<string, unknown>, label: string, stay = false) => {
       if (!chosen) return
-      setRunLabel(label)
+      setRunLabel({ video: chosen.path, label })
       if (!stay) setView('job') // stay: នៅលើទំព័របច្ចុប្បន្ន (កាត Projects ថ្មីៗ បង្ហាញវឌ្ឍនភាព)
       job.start({ video: chosen.path, ...pack.options, ...preset.options, ...extra })
       setTimeout(loadProjects, 500)
@@ -337,14 +341,11 @@ export default function App() {
 
   /** កាតវឌ្ឍនភាពក្នុង Projects ថ្មីៗ (% + ETA) — ឧបករណ៍ទាំងបីប្រើរួមគ្នា. ប្រវែងវីដេអូមកពី /probe
    *  ក្រោយ Start (មិនទាន់ដឹង = ប៉ាន់ ១០ នាទី). */
-  const beginRun = useCallback(
-    (tool: RunTool, full: boolean, clipCount: number, aiSeconds?: number) => {
-      if (!chosen) return
-      setToast(null)
-      const video = chosen.path
-      setRun({
+  const makeRun = useCallback(
+    (tool: RunTool, full: boolean, clipCount: number, aiSeconds?: number): Run | null =>
+      chosen && {
         name: stemOf(chosen.name),
-        video,
+        video: chosen.path,
         startedAt: Date.now(),
         tool,
         plan: {
@@ -356,18 +357,66 @@ export default function App() {
           full,
           aiSeconds,
         },
-      })
-      api
-        .probe(video)
-        .then((format) =>
-          setRun((current) =>
-            current && current.video === video ? { ...current, plan: { ...current.plan, seconds: format.seconds ?? null } } : current,
-          ),
-        )
-        .catch(() => {})
-    },
+      },
     [chosen, health, pack],
   )
+
+  /** កាតនេះក្លាយជា job កំពុងរត់: ប្រវែងវីដេអូពី /probe សម្រាប់ % (មិនទាន់ដឹង = ប៉ាន់ ១០ នាទី). */
+  const showRun = useCallback((next: Run) => {
+    setRun(next)
+    api
+      .probe(next.video)
+      .then((format) =>
+        setRun((current) =>
+          current && current.video === next.video ? { ...current, plan: { ...current.plan, seconds: format.seconds ?? null } } : current,
+        ),
+      )
+      .catch(() => {})
+  }, [])
+
+  /** ចាប់ផ្តើម ឬ (មាន job កំពុងរត់ / ជួរមិនទាន់ទទេ) ដាក់ក្នុងជួរ — GPU មានតែមួយ ដូច្នេះម្តងមួយ. */
+  const submit = useCallback(
+    (next: Run | null, options: JobOptions, label: string) => {
+      if (!next) return
+      if (job.running || job.starting || queued.length > 0) {
+        api
+          .startJob({ ...options, queue: true })
+          .then((status) => {
+            setQueued((list) => [...list, { id: status.id, run: next, label }])
+            setToast({ kind: 'queued', name: next.name, tool: next.tool })
+          })
+          .catch((e: Error) => setToast({ kind: 'error', name: next.name, text: e.message }))
+        return
+      }
+      setToast(null)
+      showRun(next)
+      setRunLabel({ video: next.video, label })
+      void job.start(options)
+    },
+    [job, queued.length, showRun],
+  )
+
+  // job មុនចប់ (done / failed / cancelled): sidecar ចាប់ផ្តើម job បន្ទាប់ក្នុងជួររួចហើយ —
+  // UI តាមដានវា (WebSocket) ហើយកាតរបស់វាបង្ហាញ %. `advancedFrom`: ម្តងគត់ក្នុង job ដែលចប់មួយ
+  const advancedFrom = useRef('')
+  useEffect(() => {
+    const status = job.status
+    if (!status || job.starting || queued.length === 0) return
+    if (status.state === 'running' || status.state === 'queued' || advancedFrom.current === status.id) return
+    advancedFrom.current = status.id
+    const [next, ...rest] = queued
+    setQueued(rest)
+    showRun({ ...next.run, startedAt: Date.now() })
+    setRunLabel({ video: next.run.video, label: next.label })
+    void job.attach(next.id)
+  }, [job, queued, showRun])
+
+  // "បានដាក់ក្នុងជួរ" បិទខ្លួនឯង: វានៅជ្រុងខាងក្រោម លើប៊ូតុង Start — វាបាំងការដាក់វីដេអូបន្ទាប់ (វាស់)
+  useEffect(() => {
+    if (toast?.kind !== 'queued') return
+    const timer = window.setTimeout(() => setToast((current) => (current === toast ? null : current)), 4000)
+    return () => window.clearTimeout(timer)
+  }, [toast])
 
   /** ចាប់ផ្តើម reframe: `--full` + aspect + layout (+ `--no-captions`) — គ្មាន preset / max_clips. */
   const startReframe = useCallback(
@@ -379,21 +428,24 @@ export default function App() {
       setSubtitlesOpen(false)
       setSilenceOpen(false)
       // ដូច Long to Short: នៅលើទំព័រដើម ហើយកាត Projects ថ្មីៗ បង្ហាញ % + ETA (មិនទៅ screen ដំណើរការ)
-      beginRun(tool, true, 1, rangeSeconds)
       navigate('home')
       setFocusRecent(true)
-      job.start({
-        video: chosen.path,
-        ...pack.options,
-        full: true,
-        aspect: settings.aspect,
-        layout: settings.layouts.join(',') || 'center',
-        ...(settings.captions ? {} : { no_captions: true }),
-        ...extra,
-      })
+      submit(
+        makeRun(tool, true, 1, rangeSeconds),
+        {
+          video: chosen.path,
+          ...pack.options,
+          full: true,
+          aspect: settings.aspect,
+          layout: settings.layouts.join(',') || 'center',
+          ...(settings.captions ? {} : { no_captions: true }),
+          ...extra,
+        },
+        `${settings.aspect} · ${tool}`,
+      )
       setTimeout(loadProjects, 500)
     },
-    [chosen, pack, job, loadProjects, beginRun, navigate],
+    [chosen, pack, loadProjects, makeRun, submit, navigate],
   )
 
   /** លទ្ធផលរបស់ job reframe ចុងក្រោយ: folder មកពី progress (full / full_1x1 ...). */
@@ -442,7 +494,12 @@ export default function App() {
   const projectAction = useCallback(
     (project: Project, action: ProjectAction) => {
       if (action === 'cancel') {
-        void job.cancel()
+        const waiting = queued.find((item) => item.run.name === project.name)
+        if (waiting && !(run?.name === project.name && job.running)) {
+          // ក្នុងជួរ: ដកចេញ (មិនដែលរត់)
+          setQueued((list) => list.filter((item) => item.id !== waiting.id))
+          void api.cancelJob(waiting.id).catch(() => {})
+        } else void job.cancel()
         return
       }
       if (action === 'folder' || action === 'video') {
@@ -461,7 +518,7 @@ export default function App() {
       else if (action === 'new-clips') setSettingsOpen(true)
       else setReframeOpen(true) // dialog Reframe លើទំព័រនេះ ជាមួយវីដេអូនោះជ្រើសរួច
     },
-    [showReframeResult, job],
+    [showReframeResult, job, queued, run?.name],
   )
 
   // screen 1F យក window ទាំងមូល: sidebar, window controls និងតំបន់អូស window ជារបស់វា
@@ -623,17 +680,25 @@ export default function App() {
   const estimate = useRunProgress(run, job.status)
   const runActive = Boolean(run && (job.starting || (job.running && job.status?.video === run.video)))
   const running: Running | null = run && runActive ? { name: run.name, estimate } : null
+  // កាតដែលកំពុងរត់មុន រួចកាតក្នុងជួរតាមលំដាប់ ("ក្នុងជួរ · ទី ១")
+  const runs: Running[] = [
+    ...(running ? [running] : []),
+    ...queued.map((item, index) => ({ name: item.run.name, estimate: null, position: index + 1 })),
+  ]
   // folder/database របស់ project ថ្មីមិនទាន់មានក្នុង /projects ពេល job ទើបចាប់ផ្តើម -> កាតបណ្តោះអាសន្ន
-  const listed =
-    running && run && !projects.some((item) => item.name === run.name)
-      ? [
-          {
-            id: -1, name: run.name, title: run.name, video: run.video, created: run.startedAt / 1000, clips: 0, jobs: 1,
-            last_state: 'running', seconds: run.plan.seconds, bytes: 0, reframes: 0, folder: '',
-          } satisfies Project,
-          ...projects,
-        ]
-      : projects
+  // job ក្នុងជួរ: វីដេអូដែលមិនធ្លាប់ដំណើរការ ក៏មិនទាន់មានក្នុង /projects ដែរ
+  const waiting = [...(running && run ? [run] : []), ...queued.map((item) => item.run)]
+  const placeholders = waiting
+    .filter((item, index) => !projects.some((project) => project.name === item.name)
+      && waiting.findIndex((other) => other.name === item.name) === index)
+    .map(
+      (item) =>
+        ({
+          id: -1, name: item.name, title: item.name, video: item.video, created: item.startedAt / 1000, clips: 0, jobs: 1,
+          last_state: 'running', seconds: item.plan.seconds, bytes: 0, reframes: 0, folder: '',
+        }) satisfies Project,
+    )
+  const listed = [...placeholders, ...projects]
 
   // job របស់ run ប្តូរពី running -> done/failed/cancelled: បង្ហាញសារ (លំនាំ "ព័ត៌មានពី render មុន")
   const runState = run && job.status?.video === run.video ? job.status.state : null
@@ -668,7 +733,9 @@ export default function App() {
         <p className="type-body font-semibold">
           {toast.kind === 'done'
             ? DONE_TITLE[toast.tool ?? 'clips']
-            : toast.kind === 'cancelled'
+            : toast.kind === 'queued'
+              ? t('បានដាក់ក្នុងជួរ', 'Added to the queue')
+              : toast.kind === 'cancelled'
               ? 'បានបោះបង់'
               : toast.kind === 'failed'
                 ? 'បង្កើត clips មិនបាន'
@@ -728,7 +795,7 @@ export default function App() {
       <ProjectCards
         projects={[...listed].sort((x, y) => y.created - x.created).slice(0, 4)}
         columns={4}
-        running={running}
+        runs={runs}
         onOpen={openProject}
         onAction={projectAction}
         onRename={renameProject}
@@ -817,6 +884,7 @@ export default function App() {
       error={error || job.error}
       connected={health !== null}
       busy={job.running}
+      queueing={job.running || job.starting || queued.length > 0}
       clips={clips.filter((clip) => clip.files.mp4).length}
       maxClips={maxClips}
       onMaxClips={setMaxClips}
@@ -826,10 +894,13 @@ export default function App() {
         if (!chosen) return
         setSettingsOpen(false)
         changeReview({ sizes: {}, defaultSize: aspect === '9:16' ? undefined : aspect }) // Review បើកលើទំហំនេះ
-        beginRun('clips', false, maxClips, aiSeconds)
-        // stay = true: មិនទៅ Processing — អ្នកនៅលើទំព័រនេះ ហើយកាតបង្ហាញ % + ETA
-        startWith(
+        // មិនទៅ Processing — កាត Projects ថ្មីៗ បង្ហាញ % + ETA; មាន job រត់ = ចូលជួរ
+        submit(
+          makeRun('clips', false, maxClips, aiSeconds),
           {
+            video: chosen.path,
+            ...pack.options,
+            ...preset.options,
             max_clips: maxClips,
             ...(timeframe ? { timeframe } : {}),
             ...(language === 'auto' ? {} : { language }),
@@ -837,8 +908,8 @@ export default function App() {
             ...styleOptions(captionStyle),
           },
           `${khmerNumber(maxClips)} clips · ${preset.title}`,
-          true,
         )
+        setTimeout(loadProjects, 500)
         // project ថ្មីលេចក្នុង Projects ថ្មីៗ លើទំព័រដើម — នាំអ្នកទៅទីនោះ (ទោះចាប់ផ្តើមពី My projects)
         navigate('home')
         setFocusRecent(true)
@@ -1037,6 +1108,8 @@ export default function App() {
     )
   }
   if (view === 'job' && job.status) {
+    // ឈ្មោះមកពី job ដែលកំពុងរត់ មិនមែនពីវីដេអូដែលជ្រើសចុងក្រោយទេ (ជ្រើសវីដេអូទី ២ ពេល job ទី ១ រត់)
+    const jobFile = job.status.video.split(/[\\/]/).pop() ?? ''
     return (
       <div className="flex h-screen bg-bg">
         <ProcessingScreen
@@ -1044,9 +1117,9 @@ export default function App() {
           status={job.status}
           log={job.log}
           error={job.error}
-          projectName={projectName}
-          videoName={chosen?.name ?? ''}
-          runLabel={runLabel}
+          projectName={stemOf(jobFile)}
+          videoName={jobFile}
+          runLabel={runLabel.video === job.status.video ? runLabel.label : ''}
           device={health?.device ?? ''}
           onCancel={job.cancel}
           onReview={() => setView('review')}
@@ -1191,7 +1264,7 @@ export default function App() {
         onAction={projectAction}
         onRename={renameProject}
         onDelete={deleteProject}
-        running={running}
+        runs={runs}
       />,
     )
   }

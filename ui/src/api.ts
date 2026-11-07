@@ -34,7 +34,7 @@ export type Progress = {
 export type JobStatus = {
   id: string
   video: string
-  state: 'running' | 'done' | 'failed' | 'cancelled'
+  state: 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
   error: string
   seconds: number
   progress: Progress
@@ -93,6 +93,7 @@ export type Clip = {
 
 export type JobOptions = {
   video: string
+  queue?: boolean // មាន job កំពុងរត់: ចូលជួរ (រត់បន្ទាប់ពីវាចប់) ជំនួសឲ្យ 409
   max_clips?: number
   full?: boolean
   redo?: string

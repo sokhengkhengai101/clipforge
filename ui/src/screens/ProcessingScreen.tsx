@@ -21,6 +21,7 @@ const STEP_TEXT: Record<string, { title: string; active: string }> = {
 }
 
 const HEADLINE: Record<JobStatus['state'], string> = {
+  queued: 'កំពុងរង់ចាំក្នុងជួរ',
   running: 'កំពុងបង្កើត Clips',
   done: 'Clips រួចរាល់ហើយ!',
   failed: 'បង្កើត Clips មិនបាន',

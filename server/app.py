@@ -57,6 +57,7 @@ class JobRequest(BaseModel):
     """អ្វីដែល UI ផ្ញើមកដើម្បីចាប់ផ្តើម — ឈ្មោះដូច flag របស់ CLI."""
 
     video: str
+    queue: bool = False                 # មាន job កំពុងរត់: ចូលជួរ ជំនួសឲ្យ 409
     max_clips: int | None = None
     only_clip: int | None = None        # render តែ clip នេះ (ប៊ូតុងទំហំលើ Review)
     timeframe: str | None = None        # "start,end" ឬ "all": ចន្លោះដែល AI រក clip
@@ -221,8 +222,9 @@ def start_job(request: JobRequest) -> dict:
             tracks = folder / "subject_tracks.json"
             tracks.write_text(json.dumps(look["subjects"]), encoding="utf-8")
             options["subject_tracks"] = str(tracks)
+    queue = options.pop("queue", False)   # មិនមែន flag របស់ make_clips
     try:
-        job = runner.start(Path(request.video), **options)
+        job = runner.start(Path(request.video), queue=queue, **options)
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except RuntimeError as e:
@@ -950,8 +952,7 @@ def delete_project(name: str) -> dict:
     output_root = (PROJECT_ROOT / "output").resolve()
     if folder.exists() and folder.resolve().parent != output_root:
         raise HTTPException(status_code=400, detail="folder នេះមិននៅក្នុង output/")
-    active = runner.active()
-    if active is not None and active.out_dir.name == name:
+    if any(job.out_dir.name == name for job in [runner.active(), *runner.pending] if job):
         raise HTTPException(status_code=409, detail="project នេះកំពុងមាន job រត់ — បោះបង់ job សិន")
     if not folder.is_dir() and not any(item["name"] == name for item in db.list_projects()):
         raise HTTPException(status_code=404, detail="រកមិនឃើញ project")
@@ -1003,7 +1004,7 @@ async def job_events(socket: WebSocket, job_id: str) -> None:
             if job.state != last_state or sent:
                 await socket.send_text(json.dumps({"status": job.as_dict()}))
                 last_state = job.state
-            if job.state != "running":
+            if job.state not in ("running", "queued"):   # queued: រង់វាចាប់ផ្តើម
                 break
             await asyncio.sleep(0.4)
     except WebSocketDisconnect:
